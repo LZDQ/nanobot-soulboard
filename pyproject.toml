@@ -1,0 +1,35 @@
+[project]
+name = "nanobot-soulboard"
+dynamic = ["version"]
+description = "Single-process runtime management for multiple nanobot souls"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "nanobot-ai",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0,<9.0.0",
+]
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.targets.wheel]
+packages = ["nanobot_soulboard"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "README.md",
+    "nanobot_soulboard/",
+    "tests/",
+    "pyproject.toml",
+]
+
+[tool.uv.sources]
+nanobot-ai = { path = "nanobot", editable = true }
