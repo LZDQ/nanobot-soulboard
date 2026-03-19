@@ -5,28 +5,25 @@ import pytest
 
 from nanobot.bus.queue import MessageBus
 from nanobot.config.schema import Config
-from nanobot_soulboard.config import SoulOverrides, SoulboardConfig, discover_soul_ids
+from nanobot_soulboard.config import SoulOverrides, SoulboardConfig
 from nanobot_soulboard.context import SoulboardContextBuilder
-from nanobot_soulboard.runtime import SoulAgentLoop, SoulSpec, build_runtime_config, discover_soul_specs
+from nanobot_soulboard.runtime import SoulAgentLoop, SoulSpec, SoulSupervisor, build_runtime_config, discover_soul_specs
 
 
-def test_discover_soul_ids_merges_config_and_directories(tmp_path: Path) -> None:
-    souls_root = tmp_path / "souls"
-    (souls_root / "alpha").mkdir(parents=True)
-    (souls_root / "beta").mkdir(parents=True)
+def test_discover_soul_specs_uses_config_as_source_of_truth(tmp_path: Path) -> None:
+    config = SoulboardConfig(souls={"alpha": SoulOverrides(), "beta": SoulOverrides()})
+    specs = discover_soul_specs(nano_root=tmp_path, config=config)
 
-    config = SoulboardConfig(souls={"gamma": SoulOverrides()})
-
-    assert discover_soul_ids(root=tmp_path, config=config) == ["alpha", "beta", "gamma"]
+    assert {spec.soul_id for spec in specs} == {"alpha", "beta"}
 
 
 def test_discover_soul_specs_use_directory_as_default_workspace(tmp_path: Path) -> None:
-    (tmp_path / "souls" / "alpha").mkdir(parents=True)
+    config = SoulboardConfig(souls={"alpha": SoulOverrides()})
 
-    specs = discover_soul_specs(root=tmp_path, config=SoulboardConfig())
+    specs = discover_soul_specs(nano_root=tmp_path, config=config)
 
     assert len(specs) == 1
-    assert specs[0].workspace == tmp_path / "souls" / "alpha"
+    assert specs[0].workspace == tmp_path / "soulboard" / "souls" / "alpha"
 
 
 def test_build_runtime_config_applies_workspace_channel_and_mcp_filters(tmp_path: Path) -> None:
@@ -90,3 +87,16 @@ def test_soul_agent_loop_swaps_in_soulboard_context(tmp_path: Path) -> None:
 
     assert isinstance(loop.context, SoulboardContextBuilder)
     assert loop.context.soul_id == "alpha"
+
+
+def test_modify_soul_rejects_running_soul(tmp_path: Path) -> None:
+    supervisor = SoulSupervisor(
+        base_config=Config(),
+        nano_root=tmp_path,
+        soulboard_config=SoulboardConfig(souls={"alpha": SoulOverrides()}),
+        provider_factory=MagicMock(),
+    )
+    supervisor._running_souls["alpha"] = MagicMock()
+
+    with pytest.raises(RuntimeError, match="Cannot modify running soul"):
+        supervisor.modify_soul("alpha", SoulOverrides(model="other-model"))

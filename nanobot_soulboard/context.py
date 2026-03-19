@@ -1,4 +1,7 @@
-"""Soulboard-specific context builder."""
+"""
+Soulboard-specific context builder.
+TODO: This context builder exists to take full control over the prompts, but is not completed yet.
+"""
 
 from __future__ import annotations
 

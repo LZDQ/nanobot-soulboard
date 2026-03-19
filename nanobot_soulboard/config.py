@@ -16,16 +16,34 @@ class SoulOverrides(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    workspace: str | None = None
-    model: str | None = None
-    provider: str | None = None
-    channels: list[str] = Field(default_factory=list)
-    mcp_servers: list[str] = Field(default_factory=list)
-    autostart: bool = False
+    workspace: str | None = Field(
+        default=None,
+        description="Optional workspace override for this soul. Defaults to ~/.nanobot/soulboard/souls/{soul_id}.",
+    )
+    model: str | None = Field(
+        default=None,
+        description="Optional model override layered on top of the base nanobot config.",
+    )
+    provider: str | None = Field(
+        default=None,
+        description="Optional provider override layered on top of the base nanobot config.",
+    )
+    channels: list[str] = Field(
+        default_factory=list,
+        description="List of channel names enabled for this soul runtime.",
+    )
+    mcp_servers: list[str] = Field(
+        default_factory=list,
+        description="List of MCP server names selected from the base nanobot config.",
+    )
+    autostart: bool = Field(
+        default=False,
+        description="Whether soulboard should automatically start this soul runtime.",
+    )
 
 
 class SoulboardConfig(BaseModel):
-    """Root soulboard config file."""
+    """Root soulboard config file, normally stored at ~/.nanobot/soulboard/config.json."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -41,45 +59,29 @@ def validate_soul_id(soul_id: str) -> str:
     return soul_id
 
 
-def get_soulboard_root(root: Path | None = None) -> Path:
+def get_soulboard_root(nano_root: Path) -> Path:
     """Return the soulboard root directory."""
-    return (root or Path.home() / ".nanobot" / "soulboard").expanduser()
+    return nano_root / "soulboard"
 
 
-def get_soulboard_config_path(root: Path | None = None) -> Path:
+def get_soulboard_config_path(nano_root: Path) -> Path:
     """Return the soulboard config path."""
-    return get_soulboard_root(root) / "config.json"
+    return get_soulboard_root(nano_root) / "config.json"
 
 
-def get_souls_root(root: Path | None = None) -> Path:
+def get_souls_root(nano_root: Path) -> Path:
     """Return the souls directory."""
-    return get_soulboard_root(root) / "souls"
+    return get_soulboard_root(nano_root) / "souls"
 
 
-def load_soulboard_config(path: Path | None = None) -> SoulboardConfig:
+def load_soulboard_config(path: Path) -> SoulboardConfig:
     """Load soulboard config or return defaults when missing."""
-    config_path = path or get_soulboard_config_path()
-    if not config_path.exists():
+    if not path.exists():
         return SoulboardConfig()
 
-    with open(config_path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         data = json.load(f)
     config = SoulboardConfig.model_validate(data)
     for soul_id in config.souls:
         validate_soul_id(soul_id)
     return config
-
-
-def discover_soul_ids(root: Path | None = None, config: SoulboardConfig | None = None) -> list[str]:
-    """Discover souls from both config and on-disk directories."""
-    souls_root = get_souls_root(root)
-    discovered = set()
-    if souls_root.exists():
-        for entry in souls_root.iterdir():
-            if entry.is_dir():
-                validate_soul_id(entry.name)
-                discovered.add(entry.name)
-    if config is not None:
-        for soul_id in config.souls:
-            discovered.add(validate_soul_id(soul_id))
-    return sorted(discovered)
