@@ -1,0 +1,25 @@
+:1337 {
+	basic_auth {
+		{$BASIC_AUTH_USER} {$BASIC_AUTH_PASSWORD_HASH}
+	}
+
+	@backend_api path /api*
+	handle @backend_api {
+		reverse_proxy localhost:8000
+	}
+
+	@backend_ws path /ws*
+	handle @backend_ws {
+		reverse_proxy localhost:8000
+	}
+
+	redir /terminal /terminal/
+
+	handle_path /terminal/* {
+		reverse_proxy localhost:7681
+	}
+
+	handle {
+		reverse_proxy localhost:3000
+	}
+}
