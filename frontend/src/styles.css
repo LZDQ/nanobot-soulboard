@@ -153,6 +153,33 @@ pre {
   flex-wrap: wrap;
 }
 
+.hero-side {
+  display: grid;
+  gap: 0.9rem;
+  justify-items: end;
+}
+
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  padding: 0.8rem 1.2rem;
+  text-decoration: none;
+  transition: transform 140ms ease, opacity 140ms ease;
+}
+
+.button-link:hover {
+  transform: translateY(-1px);
+}
+
+.button-link.ghost {
+  background: rgba(255, 255, 255, 0.65);
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+}
+
 .stat-card,
 .panel,
 .banner {
@@ -502,6 +529,10 @@ label span {
   .hero {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .hero-side {
+    justify-items: stretch;
   }
 
   .app-shell {

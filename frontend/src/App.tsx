@@ -138,11 +138,8 @@ function getApiBase(): string {
 }
 
 function getWsBase(): string {
-  const explicit = import.meta.env.VITE_WS_BASE as string | undefined;
-  if (explicit) {
-    return explicit.replace(/\/$/, "");
-  }
-  const url = new URL(window.location.href);
+  const apiBase = getApiBase();
+  const url = new URL(apiBase || window.location.origin, window.location.origin);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.pathname = "";
   url.search = "";
@@ -845,14 +842,19 @@ export default function App() {
           <p className="eyebrow">nanobot soulboard</p>
           <h1>Operator console for soul switching, session review, and streamed chat.</h1>
         </div>
-        <div className="hero-stats">
-          <div className="stat-card">
-            <span>souls</span>
-            <strong>{souls.length}</strong>
-          </div>
-          <div className="stat-card">
-            <span>running</span>
-            <strong>{runningCount}</strong>
+        <div className="hero-side">
+          <a className="button-link ghost" href="/terminal/" target="_blank" rel="noreferrer">
+            Open terminal
+          </a>
+          <div className="hero-stats">
+            <div className="stat-card">
+              <span>souls</span>
+              <strong>{souls.length}</strong>
+            </div>
+            <div className="stat-card">
+              <span>running</span>
+              <strong>{runningCount}</strong>
+            </div>
           </div>
         </div>
       </header>
