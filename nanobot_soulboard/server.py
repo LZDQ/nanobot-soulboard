@@ -9,15 +9,18 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from loguru import logger
 from pydantic import BaseModel, Field
 
 from nanobot.config.loader import load_config
+from nanobot.config.schema import MCPServerConfig
 from nanobot.session.manager import SessionManager
 from nanobot.utils.helpers import sync_workspace_templates
 
 from nanobot_soulboard.config import SoulOverrides, load_soulboard_config
 from nanobot_soulboard.providers import make_provider
-from nanobot_soulboard.runtime import SoulSpec, SoulSupervisor
+from nanobot_soulboard.runtime import SOUL_PROMPT_FILES, SoulSpec, SoulSupervisor
 
 
 class CreateSoulRequest(BaseModel):
@@ -120,13 +123,38 @@ class SessionSummaryResponse(BaseModel):
 class SessionDetailResponse(BaseModel):
     """Expanded session contents."""
 
-    soul_id: str
-    key: str
     created_at: str
     updated_at: str
     metadata: dict[str, Any]
     last_consolidated: int
     messages: list[dict[str, Any]]
+
+
+class SoulPromptFileResponse(BaseModel):
+    """One editable markdown file from a soul workspace."""
+
+    name: str
+    exists: bool
+    content: str
+
+
+class SoulPromptFilesResponse(BaseModel):
+    """Ordered soul markdown prompt pack."""
+
+    files: list[SoulPromptFileResponse]
+
+
+class UpdateSoulPromptFileRequest(BaseModel):
+    """One prompt file replacement."""
+
+    name: str
+    content: str
+
+
+class UpdateSoulPromptFilesRequest(BaseModel):
+    """Replace one or more soul prompt files."""
+
+    files: list[UpdateSoulPromptFileRequest]
 
 
 class PathsResponse(BaseModel):
@@ -135,6 +163,26 @@ class PathsResponse(BaseModel):
     nano_root: str
     base_config_path: str
     soulboard_config_path: str
+
+
+class MCPServerResponse(BaseModel):
+    """Named MCP server definition from base nanobot config."""
+
+    name: str
+    config: MCPServerConfig
+
+
+class CreateMCPServerRequest(BaseModel):
+    """Request body for creating one MCP server definition."""
+
+    name: str = Field(description="Unique MCP server name stored under tools.mcpServers in nanobot config.")
+    config: MCPServerConfig
+
+
+class UpdateMCPServerRequest(BaseModel):
+    """Request body for replacing one MCP server definition."""
+
+    config: MCPServerConfig
 
 
 class ErrorResponse(BaseModel):
@@ -190,6 +238,15 @@ def _error_detail(exc: Exception) -> str:
 
 def _build_session_manager(spec: SoulSpec) -> SessionManager:
     return SessionManager(spec.workspace)
+
+
+def _build_prompt_files_response(files: dict[str, str | None]) -> SoulPromptFilesResponse:
+    return SoulPromptFilesResponse(
+        files=[
+            SoulPromptFileResponse(name=name, exists=files[name] is not None, content=files[name] or "")
+            for name in SOUL_PROMPT_FILES
+        ]
+    )
 
 
 async def _broadcast_json(stream: StreamState, payload: dict[str, Any]) -> None:
@@ -269,6 +326,7 @@ def create_app(
             nano_root=resolved_nano_root,
             soulboard_config=soulboard_config,
             config_path=resolved_soulboard_config_path,
+            base_config_path=resolved_base_config_path,
             provider_factory=make_provider,
         )
         app.state.soulboard = AppState(
@@ -287,6 +345,12 @@ def create_app(
             await supervisor.stop_all()
 
     app = FastAPI(title="nanobot-soulboard", lifespan=lifespan)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @app.get(
         "/health",
@@ -326,6 +390,75 @@ def create_app(
         supervisor = _get_supervisor(request)
         return [_to_soul_response(supervisor, spec) for spec in supervisor.list_specs()]
 
+    @app.get(
+        "/api/mcp-servers",
+        response_model=list[MCPServerResponse],
+        summary="List MCP Servers",
+        description=(
+            "List MCP server definitions from the base nanobot config.json. Souls select from these names "
+            "when enabling MCP servers in their overrides."
+        ),
+    )
+    def list_mcp_servers(request: Request) -> list[MCPServerResponse]:
+        supervisor = _get_supervisor(request)
+        return [
+            MCPServerResponse(name=name, config=config)
+            for name, config in supervisor.list_mcp_servers().items()
+        ]
+
+    @app.post(
+        "/api/mcp-servers",
+        response_model=MCPServerResponse,
+        responses={400: {"model": ErrorResponse}},
+        summary="Create MCP Server",
+        description=(
+            "Create one MCP server definition in the base nanobot config.json. Souls can then enable this "
+            "server by name from their override selection list."
+        ),
+    )
+    def create_mcp_server(request: Request, body: CreateMCPServerRequest) -> MCPServerResponse:
+        supervisor = _get_supervisor(request)
+        try:
+            config = supervisor.create_mcp_server(body.name, body.config)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return MCPServerResponse(name=body.name, config=config)
+
+    @app.patch(
+        "/api/mcp-servers/{name}",
+        response_model=MCPServerResponse,
+        responses={404: {"model": ErrorResponse}},
+        summary="Update MCP Server",
+        description=(
+            "Replace one MCP server definition in the base nanobot config.json. The server name must "
+            "already exist; souls can only select from this persisted definition list."
+        ),
+    )
+    def update_mcp_server(request: Request, name: str, body: UpdateMCPServerRequest) -> MCPServerResponse:
+        supervisor = _get_supervisor(request)
+        try:
+            config = supervisor.update_mcp_server(name, body.config)
+        except KeyError as exc:
+            _raise_not_found(_error_detail(exc))
+        return MCPServerResponse(name=name, config=config)
+
+    @app.delete(
+        "/api/mcp-servers/{name}",
+        status_code=204,
+        responses={404: {"model": ErrorResponse}},
+        summary="Delete MCP Server",
+        description=(
+            "Delete one MCP server definition from the base nanobot config.json. Souls will no longer be "
+            "able to select this server name until it is recreated."
+        ),
+    )
+    def delete_mcp_server(request: Request, name: str) -> None:
+        supervisor = _get_supervisor(request)
+        try:
+            supervisor.delete_mcp_server(name)
+        except KeyError as exc:
+            _raise_not_found(_error_detail(exc))
+
     @app.post(
         "/api/souls",
         response_model=SoulResponse,
@@ -364,6 +497,47 @@ def create_app(
         except KeyError as exc:
             _raise_not_found(_error_detail(exc))
         return _to_soul_response(supervisor, spec)
+
+    @app.get(
+        "/api/souls/{soul_id}/prompt-files",
+        response_model=SoulPromptFilesResponse,
+        responses={404: {"model": ErrorResponse}},
+        summary="Get Soul Prompt Files",
+        description=(
+            "Return the editable markdown prompt pack from a soul workspace: AGENTS.md, SOUL.md, USER.md, "
+            "TOOLS.md, and SYSTEM.md. Missing files are returned with exists=false and empty content."
+        ),
+    )
+    def get_soul_prompt_files(request: Request, soul_id: str) -> SoulPromptFilesResponse:
+        supervisor = _get_supervisor(request)
+        try:
+            files = supervisor.read_soul_prompt_files(soul_id)
+        except KeyError as exc:
+            _raise_not_found(_error_detail(exc))
+        return _build_prompt_files_response(files)
+
+    @app.patch(
+        "/api/souls/{soul_id}/prompt-files",
+        response_model=SoulPromptFilesResponse,
+        responses={404: {"model": ErrorResponse}, 400: {"model": ErrorResponse}},
+        summary="Update Soul Prompt Files",
+        description=(
+            "Write one or more markdown prompt files into the selected soul workspace. This endpoint updates "
+            "workspace files directly and returns the full ordered prompt pack after the write."
+        ),
+    )
+    def update_soul_prompt_files(request: Request, soul_id: str, body: UpdateSoulPromptFilesRequest) -> SoulPromptFilesResponse:
+        supervisor = _get_supervisor(request)
+        try:
+            files = supervisor.write_soul_prompt_files(
+                soul_id,
+                {item.name: item.content for item in body.files},
+            )
+        except KeyError as exc:
+            _raise_not_found(_error_detail(exc))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _build_prompt_files_response(files)
 
     @app.patch(
         "/api/souls/{soul_id}",
@@ -488,8 +662,6 @@ def create_app(
             _raise_not_found(f"Unknown session: {session_key}")
         session = manager.get_or_create(session_key)
         return SessionDetailResponse(
-            soul_id=soul_id,
-            key=session.key,
             created_at=session.created_at.isoformat(),
             updated_at=session.updated_at.isoformat(),
             metadata=session.metadata,
@@ -529,6 +701,7 @@ def create_app(
         session_key = websocket.query_params.get("session_key", "cli:direct")
         channel = websocket.query_params.get("channel", "cli")
         chat_id = websocket.query_params.get("chat_id", "direct")
+        logger.info("WebSocket connected: soul={} session_key={} channel={} chat_id={}", soul_id, session_key, channel, chat_id)
         stream_key = (soul_id, session_key, channel, chat_id)
         streams: dict[tuple[str, str, str, str], StreamState] = websocket.app.state.streams
         stream = streams.setdefault(stream_key, StreamState())
@@ -552,6 +725,7 @@ def create_app(
             try:
                 payload = await websocket.receive_json()
             except WebSocketDisconnect:
+                logger.info("WebSocket disconnected: soul={} session_key={} channel={} chat_id={}", soul_id, session_key, channel, chat_id)
                 stream.websockets.discard(websocket)
                 if not stream.websockets and not stream.reasoning_content and not stream.content:
                     streams.pop(stream_key, None)
@@ -566,6 +740,7 @@ def create_app(
             try:
                 await _stream_chat(stream, agent_loop, body)
             except WebSocketDisconnect:
+                logger.info("WebSocket disconnected during stream: soul={} session_key={} channel={} chat_id={}", soul_id, session_key, channel, chat_id)
                 stream.websockets.discard(websocket)
                 break
 

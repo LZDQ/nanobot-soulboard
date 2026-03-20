@@ -11,7 +11,8 @@ from typing import Callable
 from nanobot.agent.loop import AgentLoop
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.manager import ChannelManager
-from nanobot.config.schema import Config
+from nanobot.config.loader import save_config
+from nanobot.config.schema import Config, MCPServerConfig
 from nanobot.providers.base import LLMProvider
 from nanobot.session.manager import SessionManager
 
@@ -24,6 +25,8 @@ from nanobot_soulboard.config import (
     validate_soul_id,
 )
 from nanobot_soulboard.context import SoulboardContextBuilder
+
+SOUL_PROMPT_FILES = ("AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "SYSTEM.md")
 
 
 @dataclass(frozen=True)
@@ -125,12 +128,14 @@ class SoulSupervisor:
         nano_root: Path,
         soulboard_config: SoulboardConfig | None = None,
         config_path: Path | None = None,
+        base_config_path: Path | None = None,
         provider_factory: Callable[[Config], LLMProvider] | None = None,
     ):
         self.base_config = base_config
         self.soulboard_config = soulboard_config or SoulboardConfig()
         self.nano_root = nano_root
         self.config_path = config_path or get_soulboard_config_path(nano_root)
+        self.base_config_path = base_config_path
         self.provider_factory = provider_factory
         self._running_souls: dict[str, _RunningSoul] = {}
 
@@ -144,6 +149,29 @@ class SoulSupervisor:
             if spec.soul_id == soul_id:
                 return spec
         raise KeyError(f"Unknown soul: {soul_id}")
+
+    def read_soul_prompt_files(self, soul_id: str) -> dict[str, str | None]:
+        """Read the soul markdown prompt pack from its workspace."""
+        spec = self.get_spec(soul_id)
+        files: dict[str, str | None] = {}
+        for filename in SOUL_PROMPT_FILES:
+            path = spec.workspace / filename
+            files[filename] = path.read_text(encoding="utf-8") if path.exists() else None
+        return files
+
+    def write_soul_prompt_files(self, soul_id: str, files: dict[str, str]) -> dict[str, str | None]:
+        """Write the soul markdown prompt pack to its workspace."""
+        spec = self.get_spec(soul_id)
+        unknown = sorted(set(files) - set(SOUL_PROMPT_FILES))
+        if unknown:
+            unknown_str = ", ".join(unknown)
+            raise ValueError(f"Unknown prompt file(s): {unknown_str}")
+        spec.workspace.mkdir(parents=True, exist_ok=True)
+        for filename in SOUL_PROMPT_FILES:
+            if filename not in files:
+                continue
+            (spec.workspace / filename).write_text(files[filename], encoding="utf-8")
+        return self.read_soul_prompt_files(soul_id)
 
     def modify_soul(self, soul_id: str, overrides: SoulOverrides) -> None:
         """Update one soul definition unless it is currently running."""
@@ -170,6 +198,36 @@ class SoulSupervisor:
             raise KeyError(f"Unknown soul: {soul_id}")
         del self.soulboard_config.souls[soul_id]
         save_soulboard_config(self.soulboard_config, self.config_path)
+
+    def list_mcp_servers(self) -> dict[str, MCPServerConfig]:
+        """Return MCP server definitions from the base nanobot config."""
+        return dict(sorted(self.base_config.tools.mcp_servers.items()))
+
+    def create_mcp_server(self, name: str, definition: MCPServerConfig) -> MCPServerConfig:
+        """Create one MCP server definition in the base nanobot config."""
+        if name in self.base_config.tools.mcp_servers:
+            raise ValueError(f"MCP server already exists: {name}")
+        self.base_config.tools.mcp_servers[name] = definition
+        if self.base_config_path is not None:
+            save_config(self.base_config, self.base_config_path)
+        return self.base_config.tools.mcp_servers[name]
+
+    def update_mcp_server(self, name: str, definition: MCPServerConfig) -> MCPServerConfig:
+        """Replace one MCP server definition in the base nanobot config."""
+        if name not in self.base_config.tools.mcp_servers:
+            raise KeyError(f"Unknown MCP server: {name}")
+        self.base_config.tools.mcp_servers[name] = definition
+        if self.base_config_path is not None:
+            save_config(self.base_config, self.base_config_path)
+        return self.base_config.tools.mcp_servers[name]
+
+    def delete_mcp_server(self, name: str) -> None:
+        """Delete one MCP server definition from the base nanobot config."""
+        if name not in self.base_config.tools.mcp_servers:
+            raise KeyError(f"Unknown MCP server: {name}")
+        del self.base_config.tools.mcp_servers[name]
+        if self.base_config_path is not None:
+            save_config(self.base_config, self.base_config_path)
 
     def list_running_souls(self) -> list[str]:
         """Return IDs of currently running souls."""

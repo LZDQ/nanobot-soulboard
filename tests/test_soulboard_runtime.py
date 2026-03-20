@@ -90,6 +90,25 @@ def test_soul_agent_loop_swaps_in_soulboard_context(tmp_path: Path) -> None:
     assert loop.context.soul_id == "alpha"
 
 
+def test_soulboard_context_uses_workspace_system_md_verbatim(tmp_path: Path) -> None:
+    (tmp_path / "SYSTEM.md").write_text("# Custom system\n\nUse this as-is.\n", encoding="utf-8")
+
+    builder = SoulboardContextBuilder(tmp_path, soul_id="alpha")
+
+    assert builder.build_system_prompt() == "# Custom system\n\nUse this as-is.\n"
+
+
+def test_soulboard_context_falls_back_to_local_default_prompt(tmp_path: Path) -> None:
+    builder = SoulboardContextBuilder(tmp_path, soul_id="alpha")
+
+    prompt = builder.build_system_prompt()
+
+    assert 'You are the active soul "alpha" running inside nanobot-soulboard.' in prompt
+    assert "Working directory changes are disabled in this runtime." in prompt
+    assert str(tmp_path.resolve()) in prompt
+    assert "AGENTS.md" not in prompt
+
+
 def test_modify_soul_rejects_running_soul(tmp_path: Path) -> None:
     supervisor = SoulSupervisor(
         base_config=Config(),

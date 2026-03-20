@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Toaster, toast } from "sonner";
 
 type SoulOverrides = {
   workspace?: string | null;
@@ -7,6 +8,22 @@ type SoulOverrides = {
   channels: string[];
   mcp_servers: string[];
   autostart: boolean;
+};
+
+type MCPServerConfig = {
+  type: "stdio" | "sse" | "streamableHttp" | null;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  url: string;
+  headers: Record<string, string>;
+  toolTimeout: number;
+  enabledTools: string[];
+};
+
+type MCPServer = {
+  name: string;
+  config: MCPServerConfig;
 };
 
 type Soul = {
@@ -24,13 +41,21 @@ type SessionSummary = {
 };
 
 type SessionDetail = {
-  soul_id: string;
-  key: string;
   created_at: string;
   updated_at: string;
   metadata: Record<string, unknown>;
   last_consolidated: number;
   messages: Array<Record<string, unknown>>;
+};
+
+type SoulPromptFile = {
+  name: string;
+  exists: boolean;
+  content: string;
+};
+
+type SoulPromptFilesResponse = {
+  files: SoulPromptFile[];
 };
 
 type StreamResetMessage = {
@@ -60,9 +85,50 @@ type DraftOverrides = {
   model: string;
   provider: string;
   channels: string;
-  mcp_servers: string;
+  mcp_servers: string[];
   autostart: boolean;
 };
+
+type MCPServerDraft = {
+  type: string;
+  command: string;
+  args: string;
+  env: string;
+  url: string;
+  headers: string;
+  tool_timeout: string;
+  use_enabled_tools: boolean;
+  enabled_tools: string;
+};
+
+const SOUL_PROMPT_FILE_NAMES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "SYSTEM.md"] as const;
+
+type SoulPromptFileName = (typeof SOUL_PROMPT_FILE_NAMES)[number];
+type SoulPromptDraft = Record<SoulPromptFileName, string>;
+
+function getEmptyPromptDraft(): SoulPromptDraft {
+  return {
+    "AGENTS.md": "",
+    "SOUL.md": "",
+    "USER.md": "",
+    "TOOLS.md": "",
+    "SYSTEM.md": "",
+  };
+}
+
+function getEmptyMcpDraft(): MCPServerDraft {
+  return {
+    type: "stdio",
+    command: "",
+    args: "",
+    env: "{}",
+    url: "",
+    headers: "{}",
+    tool_timeout: "30",
+    use_enabled_tools: false,
+    enabled_tools: "",
+  };
+}
 
 const DEFAULT_CHAT_CHANNEL = "cli";
 const DEFAULT_CHAT_ID = "direct";
@@ -91,13 +157,24 @@ function splitCsv(value: string): string[] {
     .filter(Boolean);
 }
 
+function joinLines(values: string[]): string {
+  return values.join("\n");
+}
+
+function splitLines(value: string): string[] {
+  return value
+    .split("\n")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function overridesToDraft(overrides: SoulOverrides): DraftOverrides {
   return {
     workspace: overrides.workspace ?? "",
     model: overrides.model ?? "",
     provider: overrides.provider ?? "",
     channels: overrides.channels.join(", "),
-    mcp_servers: overrides.mcp_servers.join(", "),
+    mcp_servers: [...overrides.mcp_servers],
     autostart: overrides.autostart,
   };
 }
@@ -108,9 +185,89 @@ function draftToOverrides(draft: DraftOverrides): SoulOverrides {
     model: draft.model || null,
     provider: draft.provider || null,
     channels: splitCsv(draft.channels),
-    mcp_servers: splitCsv(draft.mcp_servers),
+    mcp_servers: [...draft.mcp_servers],
     autostart: draft.autostart,
   };
+}
+
+function mcpConfigToDraft(config: MCPServerConfig): MCPServerDraft {
+  return {
+    type: config.type ?? "stdio",
+    command: config.command,
+    args: joinLines(config.args),
+    env: JSON.stringify(config.env, null, 2),
+    url: config.url,
+    headers: JSON.stringify(config.headers, null, 2),
+    tool_timeout: String(config.toolTimeout),
+    use_enabled_tools: !(config.enabledTools.length === 1 && config.enabledTools[0] === "*"),
+    enabled_tools:
+      config.enabledTools.length === 1 && config.enabledTools[0] === "*"
+        ? ""
+        : joinLines(config.enabledTools),
+  };
+}
+
+function parseRecordInput(label: string, value: string): Record<string, string> {
+  if (!value.trim()) {
+    return {};
+  }
+  const parsed = JSON.parse(value) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${label} must be a JSON object`);
+  }
+  const entries = Object.entries(parsed);
+  for (const [key, item] of entries) {
+    if (typeof item !== "string") {
+      throw new Error(`${label}.${key} must be a string`);
+    }
+  }
+  return Object.fromEntries(entries);
+}
+
+function draftToMcpConfig(draft: MCPServerDraft): MCPServerConfig {
+  const toolTimeout = Number(draft.tool_timeout);
+  if (!Number.isFinite(toolTimeout) || toolTimeout <= 0) {
+    throw new Error("Tool timeout must be a positive number");
+  }
+  const type = draft.type.trim();
+  if (type !== "stdio" && type !== "sse" && type !== "streamableHttp") {
+    throw new Error("Type must be stdio, sse, or streamableHttp");
+  }
+  const command = draft.command.trim();
+  const url = draft.url.trim();
+  if (type === "stdio" && !command) {
+    throw new Error("Command is required for stdio MCP servers");
+  }
+  if ((type === "sse" || type === "streamableHttp") && !url) {
+    throw new Error("URL is required for HTTP MCP servers");
+  }
+  return {
+    type: type as MCPServerConfig["type"],
+    command: type === "stdio" ? command : "",
+    args: type === "stdio" ? splitLines(draft.args) : [],
+    env: parseRecordInput("env", draft.env),
+    url: type === "stdio" ? "" : url,
+    headers: type === "stdio" ? {} : parseRecordInput("headers", draft.headers),
+    toolTimeout: toolTimeout,
+    enabledTools: draft.use_enabled_tools ? splitLines(draft.enabled_tools) : ["*"],
+  };
+}
+
+function draftToMcpPayload(draft: MCPServerDraft): Record<string, unknown> {
+  const config = draftToMcpConfig(draft);
+  const payload: Record<string, unknown> = {
+    type: config.type,
+    command: config.command,
+    args: config.args,
+    env: config.env,
+    url: config.url,
+    headers: config.headers,
+    toolTimeout: config.toolTimeout,
+  };
+  if (draft.use_enabled_tools) {
+    payload.enabledTools = config.enabledTools;
+  }
+  return payload;
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -156,29 +313,100 @@ function renderContent(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
 
+function renderOverrideValue(value: string | string[] | boolean | null | undefined): string {
+  if (typeof value === "boolean") {
+    return value ? "enabled" : "disabled";
+  }
+  if (Array.isArray(value)) {
+    return value.length ? value.join(", ") : "inherits from base config";
+  }
+  if (typeof value === "string") {
+    return value.trim() ? value : "inherits from base config";
+  }
+  return "inherits from base config";
+}
+
+function renderEnabledList(values: string[]): string {
+  return values.length ? values.join(", ") : "none enabled";
+}
+
+function promptFilesToDraft(files: SoulPromptFile[]): SoulPromptDraft {
+  const draft = getEmptyPromptDraft();
+  for (const file of files) {
+    if (file.name in draft) {
+      draft[file.name as SoulPromptFileName] = file.content;
+    }
+  }
+  return draft;
+}
+
+function getMessageReasoning(message: Record<string, unknown>): string {
+  return typeof message.reasoning_content === "string" ? message.reasoning_content : "";
+}
+
+function getErrorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+function notifyError(cause: unknown): void {
+  toast.error(getErrorMessage(cause), { id: "global-error" });
+}
+
+function appendMessages(
+  current: SessionDetail | null,
+  messages: Array<Record<string, unknown>>,
+): SessionDetail | null {
+  if (!current || !messages.length) {
+    return current;
+  }
+  return {
+    ...current,
+    messages: [...current.messages, ...messages],
+  };
+}
+
+function renderMcpTypeLabel(value: string | null): string {
+  if (value === "streamableHttp") {
+    return "streamable HTTP";
+  }
+  return value || "unknown";
+}
+
 export default function App() {
   const [souls, setSouls] = useState<Soul[]>([]);
   const [selectedSoulId, setSelectedSoulId] = useState<string>("");
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [mcpServers, setMcpServers] = useState<MCPServer[]>([]);
+  const [promptFiles, setPromptFiles] = useState<SoulPromptFile[]>([]);
+  const [selectedMcpServerName, setSelectedMcpServerName] = useState<string>("");
+  const [createMcpServerName, setCreateMcpServerName] = useState("");
   const [sessionDetail, setSessionDetail] = useState<SessionDetail | null>(null);
-  const [sessionKey, setSessionKey] = useState("cli:direct");
+  const [sessionKey, setSessionKey] = useState<string | null>(null);
+  const [socketEpoch, setSocketEpoch] = useState(0);
   const [chatInput, setChatInput] = useState("");
   const [chatReasoning, setChatReasoning] = useState("");
   const [chatContent, setChatContent] = useState("");
   const [finalizedMessages, setFinalizedMessages] = useState<StreamFinalizedMessage[]>([]);
   const [pending, setPending] = useState<string>("");
-  const [error, setError] = useState<string>("");
+  const [soulError, setSoulError] = useState<string>("");
   const [createSoulId, setCreateSoulId] = useState("");
   const [draft, setDraft] = useState<DraftOverrides>({
     workspace: "",
     model: "",
     provider: "",
     channels: "",
-    mcp_servers: "",
+    mcp_servers: [],
     autostart: false,
   });
+  const [mcpDraft, setMcpDraft] = useState<MCPServerDraft>(getEmptyMcpDraft());
+  const [createMcpDraft, setCreateMcpDraft] = useState<MCPServerDraft>(getEmptyMcpDraft());
+  const [promptDraft, setPromptDraft] = useState<SoulPromptDraft>(getEmptyPromptDraft());
+  const [isEditingSoul, setIsEditingSoul] = useState(false);
+  const [isEditingPromptFiles, setIsEditingPromptFiles] = useState(false);
+  const [mcpMode, setMcpMode] = useState<"view" | "edit" | "create">("view");
   const [socketState, setSocketState] = useState<"closed" | "connecting" | "open">("closed");
   const socketRef = useRef<WebSocket | null>(null);
+  const initializedRef = useRef(false);
 
   const selectedSoul = useMemo(
     () => souls.find((soul) => soul.soul_id === selectedSoulId) ?? null,
@@ -186,12 +414,35 @@ export default function App() {
   );
 
   async function refreshSouls(preferredSoulId?: string): Promise<void> {
-    const nextSouls = await api<Soul[]>("/api/souls");
+    let nextSouls: Soul[];
+    try {
+      nextSouls = await api<Soul[]>("/api/souls");
+    } catch {
+      setSouls([]);
+      setSelectedSoulId("");
+      setSessions([]);
+      setPromptFiles([]);
+      setPromptDraft(getEmptyPromptDraft());
+      setSessionDetail(null);
+      setSessionKey(null);
+      setChatContent("");
+      setChatReasoning("");
+      setFinalizedMessages([]);
+      socketRef.current?.close();
+      socketRef.current = null;
+      setSocketState("closed");
+      throw new Error("Cannot fetch soulboard");
+    }
     setSouls(nextSouls);
     if (!nextSouls.length) {
       setSelectedSoulId("");
       setSessions([]);
+      setPromptFiles([]);
+      setPromptDraft(getEmptyPromptDraft());
       setSessionDetail(null);
+      setSessionKey(null);
+      setIsEditingSoul(false);
+      setIsEditingPromptFiles(false);
       return;
     }
     const nextSelected =
@@ -212,12 +463,50 @@ export default function App() {
     setSessions(nextSessions);
   }
 
+  async function refreshPromptFiles(soulId: string): Promise<void> {
+    const response = await api<SoulPromptFilesResponse>(`/api/souls/${encodeURIComponent(soulId)}/prompt-files`);
+    setPromptFiles(response.files);
+    if (!isEditingPromptFiles) {
+      setPromptDraft(promptFilesToDraft(response.files));
+    }
+  }
+
+  async function refreshMcpServers(preferredName?: string): Promise<void> {
+    const nextServers = await api<MCPServer[]>("/api/mcp-servers");
+    setMcpServers(nextServers);
+    if (!nextServers.length) {
+      setSelectedMcpServerName("");
+      setMcpDraft(getEmptyMcpDraft());
+      setMcpMode("create");
+      return;
+    }
+    const nextSelected =
+      preferredName && nextServers.some((server) => server.name === preferredName)
+        ? preferredName
+        : selectedMcpServerName && nextServers.some((server) => server.name === selectedMcpServerName)
+          ? selectedMcpServerName
+          : nextServers[0].name;
+    setSelectedMcpServerName(nextSelected);
+    const server = nextServers.find((item) => item.name === nextSelected);
+    if (server) {
+      setMcpDraft(mcpConfigToDraft(server.config));
+    }
+    if (mcpMode !== "create") {
+      setMcpMode("view");
+    }
+  }
+
   useEffect(() => {
+    if (initializedRef.current) {
+      return;
+    }
+    initializedRef.current = true;
     void (async () => {
       try {
         await refreshSouls();
+        await refreshMcpServers();
       } catch (cause) {
-        setError(cause instanceof Error ? cause.message : String(cause));
+        notifyError(cause);
       }
     })();
   }, []);
@@ -227,15 +516,41 @@ export default function App() {
       return;
     }
     setDraft(overridesToDraft(selectedSoul.overrides));
-    setError("");
+    setIsEditingSoul(false);
+    setPromptFiles([]);
+    setPromptDraft(getEmptyPromptDraft());
+    setIsEditingPromptFiles(false);
+    setSoulError("");
+    setSessionDetail(null);
+    setSessionKey(null);
+    setChatContent("");
+    setChatReasoning("");
+    setFinalizedMessages([]);
+    socketRef.current?.close();
+    socketRef.current = null;
+    setSocketState("closed");
     void refreshSessions(selectedSoul.soul_id).catch((cause) => {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      notifyError(cause);
+    });
+    void refreshPromptFiles(selectedSoul.soul_id).catch((cause) => {
+      notifyError(cause);
     });
   }, [selectedSoul?.soul_id]);
 
   useEffect(() => {
+    const selected = mcpServers.find((server) => server.name === selectedMcpServerName);
+    if (!selected) {
+      return;
+    }
+    setMcpDraft(mcpConfigToDraft(selected.config));
+    if (mcpMode !== "create") {
+      setMcpMode("view");
+    }
+  }, [mcpServers, selectedMcpServerName]);
+
+  useEffect(() => {
     const soulId = selectedSoul?.soul_id;
-    if (!soulId || !selectedSoul.running) {
+    if (!soulId || !selectedSoul.running || !sessionKey) {
       socketRef.current?.close();
       socketRef.current = null;
       setSocketState("closed");
@@ -258,9 +573,12 @@ export default function App() {
     socket.onmessage = (event) => {
       const message = JSON.parse(event.data) as StreamMessage;
       if (message.type === "reset") {
+        setFinalizedMessages((current) => {
+          setSessionDetail((detail) => appendMessages(detail, current));
+          return [];
+        });
         setChatContent(message.content ?? "");
         setChatReasoning(message.reasoning_content ?? "");
-        setFinalizedMessages([]);
         return;
       }
       if (message.type === "chunk") {
@@ -278,15 +596,14 @@ export default function App() {
     return () => {
       socket.close();
     };
-  }, [selectedSoul?.soul_id, selectedSoul?.running, sessionKey]);
+  }, [selectedSoul?.soul_id, selectedSoul?.running, sessionKey, socketEpoch]);
 
   async function runAction(action: string, work: () => Promise<void>) {
     setPending(action);
-    setError("");
     try {
       await work();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      throw cause;
     } finally {
       setPending("");
     }
@@ -294,47 +611,107 @@ export default function App() {
 
   async function createSoul() {
     if (!createSoulId.trim()) {
-      setError("soul_id is required");
+      notifyError("soul_id is required");
       return;
     }
-    await runAction("create", async () => {
-      const created = await api<Soul>("/api/souls", {
-        method: "POST",
-        body: JSON.stringify({
-          soul_id: createSoulId.trim(),
-          overrides: draftToOverrides(draft),
-        }),
+    try {
+      await runAction("create", async () => {
+        const created = await api<Soul>("/api/souls", {
+          method: "POST",
+          body: JSON.stringify({
+            soul_id: createSoulId.trim(),
+            overrides: draftToOverrides(draft),
+          }),
+        });
+        setCreateSoulId("");
+        await refreshSouls(created.soul_id);
+        await refreshSessions(created.soul_id);
       });
-      setCreateSoulId("");
-      await refreshSouls(created.soul_id);
-      await refreshSessions(created.soul_id);
-    });
+    } catch (cause) {
+      notifyError(cause);
+    }
   }
 
   async function updateSoul() {
     if (!selectedSoul) {
       return;
     }
-    await runAction("update", async () => {
-      await api<Soul>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}`, {
-        method: "PATCH",
-        body: JSON.stringify({ overrides: draftToOverrides(draft) }),
+    setSoulError("");
+    try {
+      await runAction("update", async () => {
+        if (selectedSoul.running) {
+          await api<Soul>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/stop`, {
+            method: "POST",
+          });
+        }
+        await api<Soul>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}`, {
+          method: "PATCH",
+          body: JSON.stringify({ overrides: draftToOverrides(draft) }),
+        });
+        if (selectedSoul.running) {
+          await api<Soul>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/start`, {
+            method: "POST",
+          });
+        }
+        await refreshSouls(selectedSoul.soul_id);
+        setIsEditingSoul(false);
       });
-      await refreshSouls(selectedSoul.soul_id);
-    });
+    } catch (cause) {
+      setSoulError(getErrorMessage(cause));
+    }
+  }
+
+  async function updatePromptFiles() {
+    if (!selectedSoul) {
+      return;
+    }
+    setSoulError("");
+    try {
+      await runAction("prompt-files", async () => {
+        if (selectedSoul.running) {
+          await api<Soul>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/stop`, {
+            method: "POST",
+          });
+        }
+        const response = await api<SoulPromptFilesResponse>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/prompt-files`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            files: SOUL_PROMPT_FILE_NAMES.map((name) => ({
+              name,
+              content: promptDraft[name],
+            })),
+          }),
+        });
+        if (selectedSoul.running) {
+          await api<Soul>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/start`, {
+            method: "POST",
+          });
+        }
+        setPromptFiles(response.files);
+        setPromptDraft(promptFilesToDraft(response.files));
+        await refreshSouls(selectedSoul.soul_id);
+        setIsEditingPromptFiles(false);
+      });
+    } catch (cause) {
+      setSoulError(getErrorMessage(cause));
+    }
   }
 
   async function toggleSoulRunning() {
     if (!selectedSoul) {
       return;
     }
-    await runAction(selectedSoul.running ? "stop" : "start", async () => {
-      const action = selectedSoul.running ? "stop" : "start";
-      await api<Soul>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/${action}`, {
-        method: "POST",
+    try {
+      await runAction(selectedSoul.running ? "stop" : "start", async () => {
+        const action = selectedSoul.running ? "stop" : "start";
+        await api<Soul>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/${action}`, {
+          method: "POST",
+        });
+        await refreshSouls(selectedSoul.soul_id);
       });
-      await refreshSouls(selectedSoul.soul_id);
-    });
+    } catch (cause) {
+      notifyError(cause);
+    }
   }
 
   async function deleteSoul() {
@@ -342,23 +719,103 @@ export default function App() {
       return;
     }
     const soulId = selectedSoul.soul_id;
-    await runAction("delete", async () => {
-      await api<void>(`/api/souls/${encodeURIComponent(soulId)}`, { method: "DELETE" });
-      await refreshSouls();
-    });
+    try {
+      await runAction("delete", async () => {
+        await api<void>(`/api/souls/${encodeURIComponent(soulId)}`, { method: "DELETE" });
+        await refreshSouls();
+      });
+    } catch (cause) {
+      notifyError(cause);
+    }
   }
 
   async function loadSession(key: string) {
     if (!selectedSoul) {
       return;
     }
-    await runAction("session", async () => {
-      const detail = await api<SessionDetail>(
-        `/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/sessions/${encodeURIComponent(key)}`,
-      );
-      setSessionDetail(detail);
-      setSessionKey(key);
-    });
+    try {
+      await runAction("session", async () => {
+        socketRef.current?.close();
+        socketRef.current = null;
+        setSocketState("closed");
+        const detail = await api<SessionDetail>(
+          `/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/sessions/${encodeURIComponent(key)}`,
+        );
+        setSessionDetail(detail);
+        setSessionKey(key);
+        setChatContent("");
+        setChatReasoning("");
+        setFinalizedMessages([]);
+        setSocketEpoch((current) => current + 1);
+      });
+    } catch (cause) {
+      notifyError(cause);
+    }
+  }
+
+  async function updateMcpServer() {
+    if (!selectedMcpServerName) {
+      return;
+    }
+    try {
+      await runAction("mcp", async () => {
+        await api<MCPServer>(`/api/mcp-servers/${encodeURIComponent(selectedMcpServerName)}`, {
+          method: "PATCH",
+          body: JSON.stringify({ config: draftToMcpPayload(mcpDraft) }),
+        });
+        await refreshMcpServers(selectedMcpServerName);
+        setMcpMode("view");
+      });
+    } catch (cause) {
+      notifyError(cause);
+    }
+  }
+
+  async function deleteMcpServer() {
+    if (!selectedMcpServerName) {
+      return;
+    }
+    const deletedName = selectedMcpServerName;
+    try {
+      await runAction("mcp-delete", async () => {
+        await api<void>(`/api/mcp-servers/${encodeURIComponent(deletedName)}`, {
+          method: "DELETE",
+        });
+        setDraft((current) => ({
+          ...current,
+          mcp_servers: current.mcp_servers.filter((name) => name !== deletedName),
+        }));
+        await refreshMcpServers();
+        setMcpMode("view");
+      });
+    } catch (cause) {
+      notifyError(cause);
+    }
+  }
+
+  async function createMcpServer() {
+    const name = createMcpServerName.trim();
+    if (!name) {
+      notifyError("MCP server name is required");
+      return;
+    }
+    try {
+      await runAction("mcp-create", async () => {
+        await api<MCPServer>("/api/mcp-servers", {
+          method: "POST",
+          body: JSON.stringify({
+            name,
+            config: draftToMcpPayload(createMcpDraft),
+          }),
+        });
+        setCreateMcpServerName("");
+        setCreateMcpDraft(getEmptyMcpDraft());
+        await refreshMcpServers(name);
+        setMcpMode("view");
+      });
+    } catch (cause) {
+      notifyError(cause);
+    }
   }
 
   async function submitChat(event: FormEvent) {
@@ -375,9 +832,14 @@ export default function App() {
   }
 
   const runningCount = souls.filter((soul) => soul.running).length;
+  const chatHistory = [...(sessionDetail?.messages ?? []), ...finalizedMessages] as Array<Record<string, unknown>>;
+  const hasStreamingTurn = !!chatReasoning || !!chatContent;
+  const selectedMcpServer = mcpServers.find((server) => server.name === selectedMcpServerName) ?? null;
+  const activeMcpDraft = mcpMode === "create" ? createMcpDraft : mcpDraft;
 
   return (
     <div className="app-shell">
+      <Toaster richColors position="top-center" expand visibleToasts={3} />
       <header className="hero">
         <div>
           <p className="eyebrow">nanobot soulboard</p>
@@ -392,20 +854,22 @@ export default function App() {
             <span>running</span>
             <strong>{runningCount}</strong>
           </div>
-          <div className="stat-card">
-            <span>socket</span>
-            <strong>{socketState}</strong>
-          </div>
         </div>
       </header>
-
-      {error ? <section className="banner error">{error}</section> : null}
 
       <main className="grid">
         <section className="panel souls-panel">
           <div className="panel-head">
             <h2>Souls</h2>
-            <button className="ghost" onClick={() => void refreshSouls(selectedSoulId)} disabled={!!pending}>
+            <button
+              className="ghost"
+              onClick={() => {
+                void refreshSouls(selectedSoulId).catch((cause) => {
+                  notifyError(cause);
+                });
+              }}
+              disabled={!!pending}
+            >
               Refresh
             </button>
           </div>
@@ -438,86 +902,19 @@ export default function App() {
           </div>
         </section>
 
-        <section className="panel details-panel">
-          <div className="panel-head">
-            <h2>Selected soul</h2>
-            {selectedSoul ? <code>{selectedSoul.soul_id}</code> : null}
-          </div>
-          {selectedSoul ? (
-            <>
-              <div className="action-row">
-                <button onClick={() => void toggleSoulRunning()} disabled={!!pending}>
-                  {selectedSoul.running ? "Stop soul" : "Start soul"}
-                </button>
-                <button className="ghost" onClick={() => void updateSoul()} disabled={!!pending}>
-                  Save overrides
-                </button>
-                <button className="danger" onClick={() => void deleteSoul()} disabled={!!pending}>
-                  Delete soul
-                </button>
-              </div>
-
-              <div className="field-grid">
-                <label>
-                  <span>Workspace override</span>
-                  <input
-                    value={draft.workspace}
-                    onChange={(event) => setDraft((current) => ({ ...current, workspace: event.target.value }))}
-                    placeholder={selectedSoul.workspace}
-                  />
-                </label>
-                <label>
-                  <span>Model</span>
-                  <input
-                    value={draft.model}
-                    onChange={(event) => setDraft((current) => ({ ...current, model: event.target.value }))}
-                    placeholder="inherits from base config"
-                  />
-                </label>
-                <label>
-                  <span>Provider</span>
-                  <input
-                    value={draft.provider}
-                    onChange={(event) => setDraft((current) => ({ ...current, provider: event.target.value }))}
-                    placeholder="inherits from base config"
-                  />
-                </label>
-                <label>
-                  <span>Channels</span>
-                  <input
-                    value={draft.channels}
-                    onChange={(event) => setDraft((current) => ({ ...current, channels: event.target.value }))}
-                    placeholder="cli, telegram"
-                  />
-                </label>
-                <label>
-                  <span>MCP servers</span>
-                  <input
-                    value={draft.mcp_servers}
-                    onChange={(event) => setDraft((current) => ({ ...current, mcp_servers: event.target.value }))}
-                    placeholder="filesystem, github"
-                  />
-                </label>
-                <label className="checkbox">
-                  <input
-                    type="checkbox"
-                    checked={draft.autostart}
-                    onChange={(event) => setDraft((current) => ({ ...current, autostart: event.target.checked }))}
-                  />
-                  <span>Autostart on server boot</span>
-                </label>
-              </div>
-            </>
-          ) : (
-            <p className="muted">Select a soul to inspect or create one from the draft form.</p>
-          )}
-        </section>
-
         <section className="panel sessions-panel">
           <div className="panel-head">
             <h2>Sessions</h2>
             {selectedSoul ? (
-              <button className="ghost" onClick={() => void refreshSessions(selectedSoul.soul_id)} disabled={!!pending}>
+              <button
+                className="ghost"
+                onClick={() => {
+                  void refreshSessions(selectedSoul.soul_id).catch((cause) => {
+                    notifyError(cause);
+                  });
+                }}
+                disabled={!!pending}
+              >
                 Reload
               </button>
             ) : null}
@@ -532,51 +929,660 @@ export default function App() {
             ))}
             {!sessions.length ? <p className="muted">No sessions found for this soul.</p> : null}
           </div>
-          {sessionDetail ? (
-            <article className="session-detail">
-              <div className="panel-head">
-                <h3>{sessionDetail.key}</h3>
-                <span className="muted">last consolidated {sessionDetail.last_consolidated}</span>
-              </div>
-              <pre>{JSON.stringify(sessionDetail.messages, null, 2)}</pre>
-            </article>
-          ) : null}
         </section>
 
+        <section className="panel details-panel">
+          {soulError ? <section className="banner error">{soulError}</section> : null}
+          <div className="panel-head">
+            <h2>Selected soul</h2>
+            {selectedSoul ? <code>{selectedSoul.soul_id}</code> : null}
+          </div>
+          {selectedSoul ? (
+            <>
+              <div className="action-row">
+                <button onClick={() => void toggleSoulRunning()} disabled={!!pending}>
+                  {selectedSoul.running ? "Stop soul" : "Start soul"}
+                </button>
+                <button className="danger" onClick={() => void deleteSoul()} disabled={!!pending}>
+                  Delete soul
+                </button>
+              </div>
+
+              <div className="details-stack">
+                <section className="subpanel">
+                  <div className="panel-head">
+                    <h3>Overrides</h3>
+                    {isEditingSoul ? (
+                      <div className="action-row">
+                        <button
+                          className="ghost"
+                          onClick={() => {
+                            setDraft(overridesToDraft(selectedSoul.overrides));
+                            setIsEditingSoul(false);
+                          }}
+                          disabled={!!pending}
+                        >
+                          Cancel
+                        </button>
+                        <button onClick={() => void updateSoul()} disabled={!!pending}>
+                          {selectedSoul.running ? "Save & Restart" : "Save"}
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        className="ghost"
+                        onClick={() => {
+                          setDraft(overridesToDraft(selectedSoul.overrides));
+                          setIsEditingSoul(true);
+                        }}
+                        disabled={!!pending}
+                      >
+                        Edit
+                      </button>
+                    )}
+                  </div>
+
+                  {isEditingSoul ? (
+                    <div className="field-grid">
+                      <label>
+                        <span>Workspace override</span>
+                        <input
+                          value={draft.workspace}
+                          onChange={(event) => setDraft((current) => ({ ...current, workspace: event.target.value }))}
+                          placeholder={selectedSoul.workspace}
+                        />
+                      </label>
+                      <label>
+                        <span>Model</span>
+                        <input
+                          value={draft.model}
+                          onChange={(event) => setDraft((current) => ({ ...current, model: event.target.value }))}
+                          placeholder="inherits from base config"
+                        />
+                      </label>
+                      <label>
+                        <span>Provider</span>
+                        <input
+                          value={draft.provider}
+                          onChange={(event) => setDraft((current) => ({ ...current, provider: event.target.value }))}
+                          placeholder="inherits from base config"
+                        />
+                      </label>
+                      <label>
+                        <span>Channels</span>
+                        <input
+                          value={draft.channels}
+                          onChange={(event) => setDraft((current) => ({ ...current, channels: event.target.value }))}
+                          placeholder="cli, telegram"
+                        />
+                      </label>
+                      <label>
+                        <span>MCP servers</span>
+                        <div className="selection-grid">
+                          {mcpServers.map((server) => (
+                            <label key={server.name} className="check-tile">
+                              <input
+                                type="checkbox"
+                                checked={draft.mcp_servers.includes(server.name)}
+                                onChange={(event) => {
+                                  setDraft((current) => ({
+                                    ...current,
+                                    mcp_servers: event.target.checked
+                                      ? [...current.mcp_servers, server.name]
+                                      : current.mcp_servers.filter((name) => name !== server.name),
+                                  }));
+                                }}
+                              />
+                              <span>{server.name}</span>
+                            </label>
+                          ))}
+                          {!mcpServers.length ? <p className="muted">No MCP server definitions available.</p> : null}
+                        </div>
+                      </label>
+                      <label className="checkbox">
+                        <input
+                          type="checkbox"
+                          checked={draft.autostart}
+                          onChange={(event) => setDraft((current) => ({ ...current, autostart: event.target.checked }))}
+                        />
+                        <span>Autostart on server boot</span>
+                      </label>
+                    </div>
+                  ) : (
+                    <div className="override-grid">
+                      <article className="override-card">
+                        <span>Workspace override</span>
+                        <strong>{renderOverrideValue(selectedSoul.overrides.workspace)}</strong>
+                      </article>
+                      <article className="override-card">
+                        <span>Resolved workspace</span>
+                        <strong>{selectedSoul.workspace}</strong>
+                      </article>
+                      <article className="override-card">
+                        <span>Model override</span>
+                        <strong>{renderOverrideValue(selectedSoul.overrides.model)}</strong>
+                      </article>
+                      <article className="override-card">
+                        <span>Provider override</span>
+                        <strong>{renderOverrideValue(selectedSoul.overrides.provider)}</strong>
+                      </article>
+                      <article className="override-card">
+                        <span>Channel overrides</span>
+                        <strong>{renderEnabledList(selectedSoul.overrides.channels)}</strong>
+                      </article>
+                      <article className="override-card">
+                        <span>Enabled MCP servers</span>
+                        <strong>{renderEnabledList(selectedSoul.overrides.mcp_servers)}</strong>
+                      </article>
+                      <article className="override-card">
+                        <span>Autostart</span>
+                        <strong>{renderOverrideValue(selectedSoul.overrides.autostart)}</strong>
+                      </article>
+                      <article className="override-card">
+                        <span>Runtime status</span>
+                        <strong>{selectedSoul.running ? "running" : "stopped"}</strong>
+                      </article>
+                    </div>
+                  )}
+                </section>
+
+                <section className="subpanel">
+                  <div className="panel-head">
+                    <h3>Prompt files</h3>
+                    {isEditingPromptFiles ? (
+                      <div className="action-row">
+                        <button
+                          className="ghost"
+                          onClick={() => {
+                            setPromptDraft(promptFilesToDraft(promptFiles));
+                            setIsEditingPromptFiles(false);
+                          }}
+                          disabled={!!pending}
+                        >
+                          Cancel
+                        </button>
+                        <button onClick={() => void updatePromptFiles()} disabled={!!pending || !promptFiles.length}>
+                          {selectedSoul.running ? "Save & Restart" : "Save"}
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        className="ghost"
+                        onClick={() => {
+                          setPromptDraft(promptFilesToDraft(promptFiles));
+                          setIsEditingPromptFiles(true);
+                        }}
+                        disabled={!!pending || !promptFiles.length}
+                      >
+                        Edit
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="md-file-list">
+                    {promptFiles.length ? (
+                      SOUL_PROMPT_FILE_NAMES.map((name) => {
+                        const file = promptFiles.find((item) => item.name === name);
+                        const exists = file?.exists ?? false;
+                        const content = isEditingPromptFiles ? promptDraft[name] : (file?.content ?? "");
+                        return (
+                          <details key={name} className="md-file">
+                            <summary>
+                              <span>{name}</span>
+                              <span className={`pill ${exists ? "live" : "idle"}`}>{exists ? "present" : "missing"}</span>
+                            </summary>
+                            {isEditingPromptFiles ? (
+                              <label>
+                                <span>{name}</span>
+                                <textarea
+                                  value={content}
+                                  onChange={(event) =>
+                                    setPromptDraft((current) => ({
+                                      ...current,
+                                      [name]: event.target.value,
+                                    }))
+                                  }
+                                  placeholder={`Enter ${name} content`}
+                                />
+                              </label>
+                            ) : content ? (
+                              <pre>{content}</pre>
+                            ) : (
+                              <p className="muted">This file does not exist yet.</p>
+                            )}
+                          </details>
+                        );
+                      })
+                    ) : (
+                      <p className="muted">Loading prompt files…</p>
+                    )}
+                  </div>
+                </section>
+
+                <section className="subpanel">
+                  <div className="panel-head">
+                    <h3>MCP servers</h3>
+                    <button
+                      className="ghost"
+                      onClick={() => {
+                        void refreshMcpServers(selectedMcpServerName).catch((cause) => {
+                          notifyError(cause);
+                        });
+                      }}
+                      disabled={!!pending}
+                    >
+                      Reload
+                    </button>
+                  </div>
+                  <div className="mcp-layout">
+                    <div className="mcp-list">
+                      {mcpServers.map((server) => (
+                        <button
+                          key={server.name}
+                          className={`session-card ${selectedMcpServerName === server.name ? "active" : ""}`}
+                          onClick={() => {
+                            setSelectedMcpServerName(server.name);
+                            setMcpMode("view");
+                          }}
+                        >
+                          <strong>{server.name}</strong>
+                          <span>{server.config.type || "auto"} transport</span>
+                          <code>{server.config.command || server.config.url || "no endpoint configured"}</code>
+                        </button>
+                      ))}
+                      {!mcpServers.length ? <p className="muted">No MCP server definitions found in the base nanobot config.</p> : null}
+
+                      <div className="create-box">
+                        <h3>Create MCP server</h3>
+                        <button
+                          className="ghost"
+                          onClick={() => {
+                            setMcpMode("create");
+                            setCreateMcpServerName("");
+                            setCreateMcpDraft(getEmptyMcpDraft());
+                          }}
+                          disabled={!!pending}
+                        >
+                          New MCP server
+                        </button>
+                      </div>
+                    </div>
+
+                    {mcpMode === "create" ? (
+                      <div className="mcp-editor">
+                        <div className="panel-head">
+                          <h3>Create definition</h3>
+                          <code>{createMcpServerName || "new server"}</code>
+                        </div>
+                        <div className="field-grid">
+                          <label>
+                            <span>Name</span>
+                            <input
+                              value={createMcpServerName}
+                              onChange={(event) => setCreateMcpServerName(event.target.value)}
+                              placeholder="github"
+                            />
+                          </label>
+                          <label>
+                            <span>Type</span>
+                            <select
+                              value={createMcpDraft.type}
+                              onChange={(event) => setCreateMcpDraft((current) => ({ ...current, type: event.target.value }))}
+                            >
+                              <option value="stdio">stdio</option>
+                              <option value="sse">sse</option>
+                              <option value="streamableHttp">streamableHttp</option>
+                            </select>
+                          </label>
+                          <label>
+                            <span>Tool timeout</span>
+                            <input
+                              value={createMcpDraft.tool_timeout}
+                              onChange={(event) =>
+                                setCreateMcpDraft((current) => ({ ...current, tool_timeout: event.target.value }))
+                              }
+                              placeholder="30"
+                            />
+                          </label>
+                          {createMcpDraft.type === "stdio" ? (
+                            <>
+                              <label>
+                                <span>Command</span>
+                                <input
+                                  value={createMcpDraft.command}
+                                  onChange={(event) =>
+                                    setCreateMcpDraft((current) => ({ ...current, command: event.target.value }))
+                                  }
+                                  placeholder="npx"
+                                />
+                              </label>
+                              <label>
+                                <span>Args, one per line</span>
+                                <textarea
+                                  value={createMcpDraft.args}
+                                  onChange={(event) =>
+                                    setCreateMcpDraft((current) => ({ ...current, args: event.target.value }))
+                                  }
+                                />
+                              </label>
+                              <label>
+                                <span>Env JSON</span>
+                                <textarea
+                                  value={createMcpDraft.env}
+                                  onChange={(event) =>
+                                    setCreateMcpDraft((current) => ({ ...current, env: event.target.value }))
+                                  }
+                                />
+                              </label>
+                            </>
+                          ) : (
+                            <>
+                              <label>
+                                <span>URL</span>
+                                <input
+                                  value={createMcpDraft.url}
+                                  onChange={(event) => setCreateMcpDraft((current) => ({ ...current, url: event.target.value }))}
+                                  placeholder="https://example.com/mcp"
+                                />
+                              </label>
+                              <label>
+                                <span>Headers JSON</span>
+                                <textarea
+                                  value={createMcpDraft.headers}
+                                  onChange={(event) =>
+                                    setCreateMcpDraft((current) => ({ ...current, headers: event.target.value }))
+                                  }
+                                />
+                              </label>
+                            </>
+                          )}
+                          <label className="checkbox">
+                            <input
+                              type="checkbox"
+                              checked={createMcpDraft.use_enabled_tools}
+                              onChange={(event) =>
+                                setCreateMcpDraft((current) => ({
+                                  ...current,
+                                  use_enabled_tools: event.target.checked,
+                                  enabled_tools: event.target.checked ? current.enabled_tools : "",
+                                }))
+                              }
+                            />
+                            <span>Whitelist tools</span>
+                          </label>
+                          {createMcpDraft.use_enabled_tools ? (
+                            <label>
+                              <span>Whitelisted tools, one per line</span>
+                              <textarea
+                                value={createMcpDraft.enabled_tools}
+                                onChange={(event) =>
+                                  setCreateMcpDraft((current) => ({ ...current, enabled_tools: event.target.value }))
+                                }
+                              />
+                            </label>
+                          ) : null}
+                        </div>
+                        <div className="action-row">
+                          <button
+                            className="ghost"
+                            onClick={() => {
+                              setCreateMcpServerName("");
+                              setCreateMcpDraft(getEmptyMcpDraft());
+                              setMcpMode(selectedMcpServer ? "view" : "create");
+                            }}
+                            disabled={!!pending}
+                          >
+                            Cancel
+                          </button>
+                          <button onClick={() => void createMcpServer()} disabled={!!pending}>
+                            Create MCP server
+                          </button>
+                        </div>
+                      </div>
+                    ) : selectedMcpServer ? (
+                      <div className="mcp-editor">
+                        <div className="panel-head">
+                          <h3>{mcpMode === "edit" ? "Edit definition" : "Definition"}</h3>
+                          <code>{selectedMcpServer.name}</code>
+                        </div>
+                        {mcpMode === "edit" ? (
+                          <div className="field-grid">
+                            <label>
+                              <span>Type</span>
+                              <select
+                                value={activeMcpDraft.type}
+                                onChange={(event) => setMcpDraft((current) => ({ ...current, type: event.target.value }))}
+                              >
+                                <option value="stdio">stdio</option>
+                                <option value="sse">sse</option>
+                                <option value="streamableHttp">streamableHttp</option>
+                              </select>
+                            </label>
+                            <label>
+                              <span>Tool timeout</span>
+                              <input
+                                value={activeMcpDraft.tool_timeout}
+                                onChange={(event) => setMcpDraft((current) => ({ ...current, tool_timeout: event.target.value }))}
+                                placeholder="30"
+                              />
+                            </label>
+                            {activeMcpDraft.type === "stdio" ? (
+                              <>
+                                <label>
+                                  <span>Command</span>
+                                  <input
+                                    value={activeMcpDraft.command}
+                                    onChange={(event) => setMcpDraft((current) => ({ ...current, command: event.target.value }))}
+                                    placeholder="npx"
+                                  />
+                                </label>
+                                <label>
+                                  <span>Args, one per line</span>
+                                  <textarea
+                                    value={activeMcpDraft.args}
+                                    onChange={(event) => setMcpDraft((current) => ({ ...current, args: event.target.value }))}
+                                  />
+                                </label>
+                                <label>
+                                  <span>Env JSON</span>
+                                  <textarea
+                                    value={activeMcpDraft.env}
+                                    onChange={(event) => setMcpDraft((current) => ({ ...current, env: event.target.value }))}
+                                  />
+                                </label>
+                              </>
+                            ) : (
+                              <>
+                                <label>
+                                  <span>URL</span>
+                                  <input
+                                    value={activeMcpDraft.url}
+                                    onChange={(event) => setMcpDraft((current) => ({ ...current, url: event.target.value }))}
+                                    placeholder="https://example.com/mcp"
+                                  />
+                                </label>
+                                <label>
+                                  <span>Headers JSON</span>
+                                  <textarea
+                                    value={activeMcpDraft.headers}
+                                    onChange={(event) => setMcpDraft((current) => ({ ...current, headers: event.target.value }))}
+                                  />
+                                </label>
+                              </>
+                            )}
+                            <label className="checkbox">
+                              <input
+                                type="checkbox"
+                                checked={activeMcpDraft.use_enabled_tools}
+                                onChange={(event) =>
+                                  setMcpDraft((current) => ({
+                                    ...current,
+                                    use_enabled_tools: event.target.checked,
+                                    enabled_tools: event.target.checked ? current.enabled_tools : "",
+                                  }))
+                                }
+                              />
+                              <span>Whitelist tools</span>
+                            </label>
+                            {activeMcpDraft.use_enabled_tools ? (
+                              <label>
+                                <span>Whitelisted tools, one per line</span>
+                                <textarea
+                                  value={activeMcpDraft.enabled_tools}
+                                  onChange={(event) =>
+                                    setMcpDraft((current) => ({ ...current, enabled_tools: event.target.value }))
+                                  }
+                                />
+                              </label>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <div className="override-grid">
+                            <article className="override-card">
+                              <span>Type</span>
+                              <strong>{renderMcpTypeLabel(selectedMcpServer.config.type)}</strong>
+                            </article>
+                            <article className="override-card">
+                              <span>Command</span>
+                              <strong>{selectedMcpServer.config.command || "n/a"}</strong>
+                            </article>
+                            <article className="override-card">
+                              <span>URL</span>
+                              <strong>{selectedMcpServer.config.url || "n/a"}</strong>
+                            </article>
+                            <article className="override-card">
+                              <span>Tool timeout</span>
+                              <strong>{String(selectedMcpServer.config.toolTimeout)}</strong>
+                            </article>
+                            <article className="override-card">
+                              <span>Args</span>
+                              <strong>{renderEnabledList(selectedMcpServer.config.args)}</strong>
+                            </article>
+                            <article className="override-card">
+                              <span>Whitelist</span>
+                              <strong>
+                                {selectedMcpServer.config.enabledTools.length === 1 &&
+                                selectedMcpServer.config.enabledTools[0] === "*"
+                                  ? "all tools"
+                                  : renderEnabledList(selectedMcpServer.config.enabledTools)}
+                              </strong>
+                            </article>
+                            <article className="override-card">
+                              <span>Env</span>
+                              <strong>{Object.keys(selectedMcpServer.config.env).length ? JSON.stringify(selectedMcpServer.config.env) : "none"}</strong>
+                            </article>
+                            <article className="override-card">
+                              <span>Headers</span>
+                              <strong>{Object.keys(selectedMcpServer.config.headers).length ? JSON.stringify(selectedMcpServer.config.headers) : "none"}</strong>
+                            </article>
+                          </div>
+                        )}
+                        <div className="action-row">
+                          {mcpMode === "edit" ? (
+                            <>
+                              <button
+                                className="ghost"
+                                onClick={() => {
+                                  setMcpDraft(mcpConfigToDraft(selectedMcpServer.config));
+                                  setMcpMode("view");
+                                }}
+                                disabled={!!pending}
+                              >
+                                Cancel
+                              </button>
+                              <button onClick={() => void updateMcpServer()} disabled={!!pending}>
+                                Save MCP server
+                              </button>
+                              <button className="danger" onClick={() => void deleteMcpServer()} disabled={!!pending}>
+                                Delete
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                className="ghost"
+                                onClick={() => {
+                                  setMcpDraft(mcpConfigToDraft(selectedMcpServer.config));
+                                  setMcpMode("edit");
+                                }}
+                                disabled={!!pending}
+                              >
+                                Edit
+                              </button>
+                              <button className="danger" onClick={() => void deleteMcpServer()} disabled={!!pending}>
+                                Delete
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </section>
+                </div>
+            </>
+          ) : (
+            <p className="muted">Select a soul to inspect or create one from the draft form.</p>
+          )}
+        </section>
+
+        {sessionKey ? (
         <section className="panel chat-panel">
           <div className="panel-head">
             <h2>Live chat</h2>
             <div className="chat-meta">
-              <span className={`pill ${socketState === "open" ? "live" : "idle"}`}>{socketState}</span>
-              <input value={sessionKey} onChange={(event) => setSessionKey(event.target.value)} />
+              <span className={`pill ${socketState === "open" ? "live" : "idle"}`}>
+                {socketState === "open" ? "open" : socketState}
+              </span>
+              <code>{sessionKey}</code>
             </div>
           </div>
 
-          <div className="stream-grid">
-            <article className="stream-box reasoning">
-              <h3>Reasoning stream</h3>
-              <pre>{chatReasoning || "Waiting for stream output."}</pre>
-            </article>
-            <article className="stream-box answer">
-              <h3>Content stream</h3>
-              <pre>{chatContent || "No streamed content yet."}</pre>
-            </article>
-          </div>
-
           <article className="finalized-box">
-            <h3>Finalized messages</h3>
+            <div className="panel-head">
+              <h3>Message history</h3>
+              {sessionDetail ? <span className="muted">last consolidated {sessionDetail.last_consolidated}</span> : null}
+            </div>
             <div className="message-list">
-              {finalizedMessages.map((message, index) => (
-                <div key={`${message.role}-${index}`} className="message-card">
+              {hasStreamingTurn ? (
+                <div className="message-card streaming">
                   <div className="message-head">
-                    <strong>{message.role}</strong>
-                    {message.tool_call_id ? <code>{message.tool_call_id}</code> : null}
+                    <strong>assistant</strong>
+                    <span className="muted">streaming</span>
                   </div>
-                  {message.tool_calls ? <pre>{JSON.stringify(message.tool_calls, null, 2)}</pre> : null}
-                  <pre>{renderContent(message.content) || "(empty)"}</pre>
+                  {chatReasoning ? (
+                    <details>
+                      <summary>Reasoning</summary>
+                      <pre>{chatReasoning}</pre>
+                    </details>
+                  ) : null}
+                  <pre>{chatContent || "(waiting for content)"}</pre>
                 </div>
-              ))}
-              {!finalizedMessages.length ? <p className="muted">No finalized messages for the current turn.</p> : null}
+              ) : null}
+              {chatHistory.map((message, index) => {
+                const role = typeof message.role === "string" ? message.role : "unknown";
+                const toolCallId = typeof message.tool_call_id === "string" ? message.tool_call_id : null;
+                const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : null;
+                const content = "content" in message ? message.content : null;
+                const reasoning = getMessageReasoning(message);
+                return (
+                <div key={`${role}-${index}`} className="message-card">
+                  <div className="message-head">
+                    <strong>{role}</strong>
+                    {toolCallId ? <code>{toolCallId}</code> : null}
+                  </div>
+                  {reasoning ? (
+                    <details>
+                      <summary>Reasoning</summary>
+                      <pre>{reasoning}</pre>
+                    </details>
+                  ) : null}
+                  {toolCalls ? <pre>{JSON.stringify(toolCalls, null, 2)}</pre> : null}
+                  <pre>{renderContent(content) || "(empty)"}</pre>
+                </div>
+                );
+              })}
+              {!chatHistory.length ? <p className="muted">Open a session to load its message history.</p> : null}
             </div>
           </article>
 
@@ -592,6 +1598,8 @@ export default function App() {
             </button>
           </form>
         </section>
+        ) : null}
+
       </main>
     </div>
   );
