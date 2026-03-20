@@ -85,3 +85,14 @@ def load_soulboard_config(path: Path) -> SoulboardConfig:
     for soul_id in config.souls:
         validate_soul_id(soul_id)
     return config
+
+
+def save_soulboard_config(config: SoulboardConfig, path: Path) -> None:
+    """Persist soulboard config as formatted JSON."""
+    for soul_id in config.souls:
+        validate_soul_id(soul_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = config.model_dump(mode="json", exclude_none=True, by_alias=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+        f.write("\n")

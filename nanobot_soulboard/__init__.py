@@ -7,9 +7,11 @@ from nanobot_soulboard.config import (
     get_soulboard_root,
     get_souls_root,
     load_soulboard_config,
+    save_soulboard_config,
     validate_soul_id,
 )
 from nanobot_soulboard.context import SoulboardContextBuilder
+from nanobot_soulboard.providers import make_provider
 from nanobot_soulboard.runtime import (
     SoulAgentLoop,
     SoulSpec,
@@ -17,6 +19,7 @@ from nanobot_soulboard.runtime import (
     build_runtime_config,
     discover_soul_specs,
 )
+from nanobot_soulboard.server import create_app
 
 __all__ = [
     "SoulAgentLoop",
@@ -26,10 +29,13 @@ __all__ = [
     "SoulboardConfig",
     "SoulboardContextBuilder",
     "build_runtime_config",
+    "create_app",
     "discover_soul_specs",
     "get_soulboard_config_path",
     "get_soulboard_root",
     "get_souls_root",
     "load_soulboard_config",
+    "make_provider",
+    "save_soulboard_config",
     "validate_soul_id",
 ]

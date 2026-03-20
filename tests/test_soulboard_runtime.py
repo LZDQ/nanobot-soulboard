@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -5,7 +6,7 @@ import pytest
 
 from nanobot.bus.queue import MessageBus
 from nanobot.config.schema import Config
-from nanobot_soulboard.config import SoulOverrides, SoulboardConfig
+from nanobot_soulboard.config import SoulOverrides, SoulboardConfig, load_soulboard_config
 from nanobot_soulboard.context import SoulboardContextBuilder
 from nanobot_soulboard.runtime import SoulAgentLoop, SoulSpec, SoulSupervisor, build_runtime_config, discover_soul_specs
 
@@ -100,3 +101,53 @@ def test_modify_soul_rejects_running_soul(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="Cannot modify running soul"):
         supervisor.modify_soul("alpha", SoulOverrides(model="other-model"))
+
+
+def test_create_modify_and_delete_soul_persist_config(tmp_path: Path) -> None:
+    supervisor = SoulSupervisor(
+        base_config=Config(),
+        nano_root=tmp_path,
+        soulboard_config=SoulboardConfig(),
+        provider_factory=MagicMock(),
+    )
+
+    spec = supervisor.create_soul("alpha", SoulOverrides(model="model-a", autostart=True))
+
+    assert spec.soul_id == "alpha"
+    saved = load_soulboard_config(tmp_path / "soulboard" / "config.json")
+    assert saved.souls["alpha"].model == "model-a"
+    assert saved.souls["alpha"].autostart is True
+
+    supervisor.modify_soul("alpha", SoulOverrides(provider="openrouter"))
+    saved = load_soulboard_config(tmp_path / "soulboard" / "config.json")
+    assert saved.souls["alpha"].provider == "openrouter"
+
+    supervisor.delete_soul("alpha")
+    saved = load_soulboard_config(tmp_path / "soulboard" / "config.json")
+    assert "alpha" not in saved.souls
+
+
+def test_start_autostart_souls_starts_only_marked_souls(tmp_path: Path) -> None:
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    provider_factory = MagicMock(return_value=provider)
+    supervisor = SoulSupervisor(
+        base_config=Config(),
+        nano_root=tmp_path,
+        soulboard_config=SoulboardConfig(
+            souls={
+                "alpha": SoulOverrides(autostart=True),
+                "beta": SoulOverrides(autostart=False),
+            }
+        ),
+        provider_factory=provider_factory,
+    )
+
+    loops = asyncio.run(supervisor.start_autostart_souls())
+
+    assert {loop.context.soul_id for loop in loops} == {"alpha"}
+    assert supervisor.list_running_souls() == ["alpha"]
+    assert supervisor.is_running("alpha") is True
+    assert supervisor.is_running("beta") is False
+
+    asyncio.run(supervisor.stop_all())

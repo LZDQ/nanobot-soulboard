@@ -15,7 +15,14 @@ from nanobot.config.schema import Config
 from nanobot.providers.base import LLMProvider
 from nanobot.session.manager import SessionManager
 
-from nanobot_soulboard.config import SoulOverrides, SoulboardConfig, get_souls_root, validate_soul_id
+from nanobot_soulboard.config import (
+    SoulOverrides,
+    SoulboardConfig,
+    get_soulboard_config_path,
+    get_souls_root,
+    save_soulboard_config,
+    validate_soul_id,
+)
 from nanobot_soulboard.context import SoulboardContextBuilder
 
 
@@ -117,11 +124,13 @@ class SoulSupervisor:
         base_config: Config,
         nano_root: Path,
         soulboard_config: SoulboardConfig | None = None,
+        config_path: Path | None = None,
         provider_factory: Callable[[Config], LLMProvider] | None = None,
     ):
         self.base_config = base_config
         self.soulboard_config = soulboard_config or SoulboardConfig()
         self.nano_root = nano_root
+        self.config_path = config_path or get_soulboard_config_path(nano_root)
         self.provider_factory = provider_factory
         self._running_souls: dict[str, _RunningSoul] = {}
 
@@ -142,6 +151,40 @@ class SoulSupervisor:
             raise RuntimeError(f"Cannot modify running soul: {soul_id}")
         validate_soul_id(soul_id)
         self.soulboard_config.souls[soul_id] = overrides
+        save_soulboard_config(self.soulboard_config, self.config_path)
+
+    def create_soul(self, soul_id: str, overrides: SoulOverrides | None = None) -> SoulSpec:
+        """Create and persist a new soul definition."""
+        validate_soul_id(soul_id)
+        if soul_id in self.soulboard_config.souls:
+            raise ValueError(f"Soul already exists: {soul_id}")
+        self.soulboard_config.souls[soul_id] = overrides or SoulOverrides()
+        save_soulboard_config(self.soulboard_config, self.config_path)
+        return self.get_spec(soul_id)
+
+    def delete_soul(self, soul_id: str) -> None:
+        """Delete a soul definition unless it is currently running."""
+        if soul_id in self._running_souls:
+            raise RuntimeError(f"Cannot delete running soul: {soul_id}")
+        if soul_id not in self.soulboard_config.souls:
+            raise KeyError(f"Unknown soul: {soul_id}")
+        del self.soulboard_config.souls[soul_id]
+        save_soulboard_config(self.soulboard_config, self.config_path)
+
+    def list_running_souls(self) -> list[str]:
+        """Return IDs of currently running souls."""
+        return sorted(self._running_souls)
+
+    def is_running(self, soul_id: str) -> bool:
+        """Return whether a soul is currently running."""
+        return soul_id in self._running_souls
+
+    def get_agent_loop(self, soul_id: str) -> SoulAgentLoop:
+        """Return the running agent loop for a soul."""
+        running = self._running_souls.get(soul_id)
+        if running is None:
+            raise KeyError(f"Soul is not running: {soul_id}")
+        return running.agent_loop
 
     def _build_running_soul(self, soul_id: str) -> _RunningSoul:
         """Construct supervisor-owned runtime state without starting it."""
@@ -193,6 +236,14 @@ class SoulSupervisor:
             running.channels_task = asyncio.create_task(running.channel_manager.start_all())
         return running.agent_loop
 
+    async def start_autostart_souls(self) -> list[SoulAgentLoop]:
+        """Start all souls marked autostart."""
+        loops: list[SoulAgentLoop] = []
+        for spec in self.list_specs():
+            if spec.overrides.autostart:
+                loops.append(await self.start_soul(spec.soul_id))
+        return loops
+
     async def stop_soul(self, soul_id: str) -> None:
         """Stop a running soul if present."""
         running = self._running_souls.pop(soul_id, None)
@@ -206,3 +257,8 @@ class SoulSupervisor:
             running.channels_task.cancel()
             await asyncio.gather(running.channels_task, return_exceptions=True)
         await running.channel_manager.stop_all()
+
+    async def stop_all(self) -> None:
+        """Stop all running souls."""
+        for soul_id in list(self._running_souls):
+            await self.stop_soul(soul_id)

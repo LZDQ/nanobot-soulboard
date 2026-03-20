@@ -5,7 +5,9 @@ description = "Single-process runtime management for multiple nanobot souls"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "fastapi>=0.115.0,<1.0.0",
     "nanobot-ai",
+    "uvicorn>=0.32.0,<1.0.0",
 ]
 
 [dependency-groups]
