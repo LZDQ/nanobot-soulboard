@@ -1,0 +1,53 @@
+services:
+  db:
+    image: postgres:17.7-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: claw
+      POSTGRES_PASSWORD: 123456
+      POSTGRES_DB: litellm
+    volumes:
+      - ./db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U claw"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  litellm_proxy:
+    image: ghcr.io/berriai/litellm:v1.80.15-stable
+    env_file:
+      - ./litellm_proxy/.env
+    environment:
+      DATABASE_URL: postgresql://claw:123456@db:5432/litellm
+    volumes:
+      - ./litellm_proxy/litellm_config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml"]
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:4000:4000"
+
+  napcat:
+    image: mlikiowa/napcat-docker:latest
+    env_file:
+      - .env.qq  # configure NAPCAT_UID and NAPCAT_GID there
+    volumes:
+      - ./qq-data:/app/.config/QQ
+      - ./napcat-config:/app/napcat/config
+    ports:
+      - "127.0.0.1:6099:6099"
+      - "127.0.0.1:3001:3001"
+
+  filebrowser:
+    image: filebrowser/filebrowser
+    ports:
+      - "127.0.0.1:8080:80"
+    # group_add: 1001  # Uncomment this to access shared group directories
+    volumes:
+      - /:/srv
+      - ./filebrowser/database:/database
+      - ./filebrowser/config:/config
+    command: ["--noauth"]

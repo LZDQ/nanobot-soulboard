@@ -1,4 +1,6 @@
-:1337 {
+https://:1337 {
+	tls internal
+
 	basic_auth {
 		{$BASIC_AUTH_USER} {$BASIC_AUTH_PASSWORD_HASH}
 	}
@@ -14,9 +16,24 @@
 	}
 
 	redir /terminal /terminal/
+	redir /filebrowser /filebrowser/
+	redir /mihomo /mihomo/
+	redir /napcat /napcat/
 
 	handle_path /terminal/* {
 		reverse_proxy localhost:7681
+	}
+
+	handle_path /filebrowser/* {
+		reverse_proxy localhost:8080
+	}
+
+	handle_path /mihomo/* {
+		reverse_proxy localhost:9090
+	}
+
+	handle_path /napcat/* {
+		reverse_proxy localhost:6099
 	}
 
 	handle {

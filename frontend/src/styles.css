@@ -159,6 +159,13 @@ pre {
   justify-items: end;
 }
 
+.app-links {
+  display: flex;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .button-link {
   display: inline-flex;
   align-items: center;

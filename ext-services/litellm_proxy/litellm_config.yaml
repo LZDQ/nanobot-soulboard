@@ -1,0 +1,15 @@
+model_list:
+  - model_name: openrouter/*
+    litellm_params:
+      model: openrouter/*
+      api_key: os.environ/OPENROUTER_API_KEY
+
+# General settings for litellm
+litellm_settings:
+  set_verbose: False # Set to True for debugging litellm calls
+
+general_settings:
+  master_key: "123456"
+  host: 0.0.0.0
+  store_model_in_db: true
+  store_prompts_in_spend_logs: true # see https://github.com/BerriAI/litellm/issues/10988

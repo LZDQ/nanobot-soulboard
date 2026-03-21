@@ -921,9 +921,20 @@ export default function App() {
           <h1>Operator console for soul switching, session review, and streamed chat.</h1>
         </div>
         <div className="hero-side">
-          <a className="button-link ghost" href="/terminal/" target="_blank" rel="noreferrer">
-            Open terminal
-          </a>
+          <div className="app-links">
+            <a className="button-link ghost" href="/terminal/" target="_blank" rel="noreferrer">
+              Terminal
+            </a>
+            <a className="button-link ghost" href="/filebrowser/" target="_blank" rel="noreferrer">
+              Filebrowser
+            </a>
+            <a className="button-link ghost" href="/mihomo/" target="_blank" rel="noreferrer">
+              Mihomo
+            </a>
+            <a className="button-link ghost" href="/napcat/" target="_blank" rel="noreferrer">
+              NapCat
+            </a>
+          </div>
           <div className="hero-stats">
             <div className="stat-card">
               <span>souls</span>
