@@ -377,6 +377,7 @@ export default function App() {
   const [promptFiles, setPromptFiles] = useState<SoulPromptFile[]>([]);
   const [selectedMcpServerName, setSelectedMcpServerName] = useState<string>("");
   const [createMcpServerName, setCreateMcpServerName] = useState("");
+  const [createSessionKey, setCreateSessionKey] = useState("");
   const [sessionDetail, setSessionDetail] = useState<SessionDetail | null>(null);
   const [sessionKey, setSessionKey] = useState<string | null>(null);
   const [socketEpoch, setSocketEpoch] = useState(0);
@@ -400,6 +401,7 @@ export default function App() {
   const [promptDraft, setPromptDraft] = useState<SoulPromptDraft>(getEmptyPromptDraft());
   const [isEditingSoul, setIsEditingSoul] = useState(false);
   const [isEditingPromptFiles, setIsEditingPromptFiles] = useState(false);
+  const [isCreatingSoul, setIsCreatingSoul] = useState(false);
   const [mcpMode, setMcpMode] = useState<"view" | "edit" | "create">("view");
   const [socketState, setSocketState] = useState<"closed" | "connecting" | "open">("closed");
   const socketRef = useRef<WebSocket | null>(null);
@@ -440,6 +442,7 @@ export default function App() {
       setSessionKey(null);
       setIsEditingSoul(false);
       setIsEditingPromptFiles(false);
+      setIsCreatingSoul(false);
       return;
     }
     const nextSelected =
@@ -514,6 +517,7 @@ export default function App() {
     }
     setDraft(overridesToDraft(selectedSoul.overrides));
     setIsEditingSoul(false);
+    setIsCreatingSoul(false);
     setPromptFiles([]);
     setPromptDraft(getEmptyPromptDraft());
     setIsEditingPromptFiles(false);
@@ -621,6 +625,7 @@ export default function App() {
           }),
         });
         setCreateSoulId("");
+        setIsCreatingSoul(false);
         await refreshSouls(created.soul_id);
         await refreshSessions(created.soul_id);
       });
@@ -748,6 +753,37 @@ export default function App() {
     } catch (cause) {
       notifyError(cause);
     }
+  }
+
+  async function createSession() {
+    if (!selectedSoul) {
+      return;
+    }
+    const key = createSessionKey.trim();
+    if (!key) {
+      notifyError("Session key is required");
+      return;
+    }
+    await runAction("create-session", async () => {
+      socketRef.current?.close();
+      socketRef.current = null;
+      setSocketState("closed");
+      setSessionDetail({
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        metadata: {},
+        last_consolidated: 0,
+        messages: [],
+      });
+      setSessionKey(key);
+      setCreateSessionKey("");
+      setChatContent("");
+      setChatReasoning("");
+      setFinalizedMessages([]);
+      setSocketEpoch((current) => current + 1);
+    }).catch((cause) => {
+      notifyError(cause);
+    });
   }
 
   async function updateMcpServer() {
@@ -894,20 +930,50 @@ export default function App() {
 
           <div className="create-box">
             <h3>Create soul</h3>
-            <label>
-              <span>Soul ID</span>
-              <input value={createSoulId} onChange={(event) => setCreateSoulId(event.target.value)} placeholder="reviewer" />
-            </label>
-            <button onClick={() => void createSoul()} disabled={!!pending}>
-              Create from current draft
+            <button
+              onClick={() => {
+                setIsCreatingSoul(true);
+                setSelectedSoulId("");
+                setSessions([]);
+                setSessionDetail(null);
+                setSessionKey(null);
+                setChatContent("");
+                setChatReasoning("");
+                setFinalizedMessages([]);
+                setSoulError("");
+                setDraft({
+                  workspace: "",
+                  model: "",
+                  provider: "",
+                  channels: "",
+                  mcp_servers: [],
+                  autostart: false,
+                });
+              }}
+              disabled={!!pending}
+            >
+              New soul
             </button>
           </div>
         </section>
 
         <section className="panel sessions-panel">
           <div className="panel-head">
-            <h2>Sessions</h2>
-            {selectedSoul ? (
+            <h2>{isCreatingSoul ? "Create new soul" : "Sessions"}</h2>
+            {isCreatingSoul ? (
+              <button
+                className="ghost"
+                onClick={() => {
+                  setIsCreatingSoul(false);
+                  if (selectedSoul) {
+                    setDraft(overridesToDraft(selectedSoul.overrides));
+                  }
+                }}
+                disabled={!!pending}
+              >
+                Cancel
+              </button>
+            ) : selectedSoul ? (
               <button
                 className="ghost"
                 onClick={() => {
@@ -921,16 +987,110 @@ export default function App() {
               </button>
             ) : null}
           </div>
-          <div className="session-list">
-            {sessions.map((session) => (
-              <button key={session.key} className="session-card" onClick={() => void loadSession(session.key)}>
-                <strong>{session.key}</strong>
-                <span>updated {formatDate(session.updated_at)}</span>
-                <code>{session.path}</code>
+          {isCreatingSoul ? (
+            <div className="details-stack">
+              <label>
+                <span>Soul ID</span>
+                <input value={createSoulId} onChange={(event) => setCreateSoulId(event.target.value)} placeholder="reviewer" />
+              </label>
+              <div className="field-grid">
+                <label>
+                  <span>Workspace override</span>
+                  <input
+                    value={draft.workspace}
+                    onChange={(event) => setDraft((current) => ({ ...current, workspace: event.target.value }))}
+                    placeholder="inherits soulboard default workspace"
+                  />
+                </label>
+                <label>
+                  <span>Model</span>
+                  <input
+                    value={draft.model}
+                    onChange={(event) => setDraft((current) => ({ ...current, model: event.target.value }))}
+                    placeholder="inherits from base config"
+                  />
+                </label>
+                <label>
+                  <span>Provider</span>
+                  <input
+                    value={draft.provider}
+                    onChange={(event) => setDraft((current) => ({ ...current, provider: event.target.value }))}
+                    placeholder="inherits from base config"
+                  />
+                </label>
+                <label>
+                  <span>Channels</span>
+                  <input
+                    value={draft.channels}
+                    onChange={(event) => setDraft((current) => ({ ...current, channels: event.target.value }))}
+                    placeholder="cli, telegram"
+                  />
+                </label>
+                <label>
+                  <span>MCP servers</span>
+                  <div className="selection-grid">
+                    {mcpServers.map((server) => (
+                      <label key={server.name} className="check-tile">
+                        <input
+                          type="checkbox"
+                          checked={draft.mcp_servers.includes(server.name)}
+                          onChange={(event) => {
+                            setDraft((current) => ({
+                              ...current,
+                              mcp_servers: event.target.checked
+                                ? [...current.mcp_servers, server.name]
+                                : current.mcp_servers.filter((name) => name !== server.name),
+                            }));
+                          }}
+                        />
+                        <span>{server.name}</span>
+                      </label>
+                    ))}
+                    {!mcpServers.length ? <p className="muted">No MCP server definitions available.</p> : null}
+                  </div>
+                </label>
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={draft.autostart}
+                    onChange={(event) => setDraft((current) => ({ ...current, autostart: event.target.checked }))}
+                  />
+                  <span>Autostart on server boot</span>
+                </label>
+              </div>
+              <button onClick={() => void createSoul()} disabled={!!pending}>
+                Create soul
               </button>
-            ))}
-            {!sessions.length ? <p className="muted">No sessions found for this soul.</p> : null}
-          </div>
+            </div>
+          ) : (
+            <>
+              <div className="session-list">
+                {sessions.map((session) => (
+                  <button key={session.key} className="session-card" onClick={() => void loadSession(session.key)}>
+                    <strong>{session.key}</strong>
+                    <span>updated {formatDate(session.updated_at)}</span>
+                    <code>{session.path}</code>
+                  </button>
+                ))}
+                {!sessions.length ? <p className="muted">No sessions found for this soul.</p> : null}
+              </div>
+
+              <div className="create-box">
+                <h3>Create session</h3>
+                <label>
+                  <span>Session key</span>
+                  <input
+                    value={createSessionKey}
+                    onChange={(event) => setCreateSessionKey(event.target.value)}
+                    placeholder="cli:direct"
+                  />
+                </label>
+                <button onClick={() => void createSession()} disabled={!!pending || !selectedSoul}>
+                  Open session
+                </button>
+              </div>
+            </>
+          )}
         </section>
 
         <section className="panel details-panel">

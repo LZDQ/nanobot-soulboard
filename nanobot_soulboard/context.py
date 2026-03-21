@@ -42,7 +42,6 @@ Your workspace is at: {workspace_path}
 - If {self.SYSTEM_FILENAME} exists here, it overrides this default prompt entirely.
 
 ## Soulboard Rules
-- Working directory changes are disabled in this runtime.
 - Only one soul runs at a time.
 - State intent before tool calls, but never claim results before receiving them.
 - Before modifying a file, read it first. Do not assume files or directories exist.

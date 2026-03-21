@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -14,7 +15,7 @@ from nanobot.channels.manager import ChannelManager
 from nanobot.config.loader import save_config
 from nanobot.config.schema import Config, MCPServerConfig
 from nanobot.providers.base import LLMProvider
-from nanobot.session.manager import SessionManager
+from nanobot.session.manager import Session, SessionManager
 
 from nanobot_soulboard.config import (
     SoulOverrides,
@@ -25,6 +26,7 @@ from nanobot_soulboard.config import (
     validate_soul_id,
 )
 from nanobot_soulboard.context import SoulboardContextBuilder
+from nanobot_soulboard.shell_tools import CdTool, SetEnvTool, SoulExecTool
 
 SOUL_PROMPT_FILES = ("AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "SYSTEM.md")
 
@@ -100,8 +102,134 @@ class SoulAgentLoop(AgentLoop):
     """AgentLoop wrapper that swaps in the soulboard context builder."""
 
     def __init__(self, *args, soul_id: str, **kwargs):
+        session_manager = kwargs.pop("session_manager", None)
+        self._cwd: Path | None = None
+        self._env: dict[str, str] | None = None
         super().__init__(*args, **kwargs)
+        self.sessions = session_manager or SoulSessionManager(
+            self.workspace,
+            get_cwd=lambda: self._cwd,
+            get_env=lambda: self._env,
+        )
         self.context = SoulboardContextBuilder(self.workspace, soul_id=soul_id)
+
+    def _register_default_tools(self) -> None:
+        super()._register_default_tools()
+        self.tools.register(
+            SoulExecTool(
+                get_cwd=self.get_cwd,
+                get_env=self.get_env,
+                timeout=self.exec_config.timeout,
+            )
+        )
+        self.tools.register(
+            CdTool(
+                get_cwd=self.get_cwd,
+                set_cwd=self.set_cwd,
+            )
+        )
+        self.tools.register(
+            SetEnvTool(
+                get_env=self.get_env,
+                set_env=self.set_env,
+            )
+        )
+        if os.name != "nt":
+            from nanobot_soulboard.shell_tools import SourceTool
+
+            self.tools.register(
+                SourceTool(
+                    get_cwd=self.get_cwd,
+                    get_env=self.get_env,
+                    set_env=self.set_env,
+                )
+            )
+
+    def get_cwd(self) -> Path:
+        return self._cwd or self.workspace
+
+    def set_cwd(self, cwd: Path) -> None:
+        self._cwd = cwd
+
+    def get_env(self) -> dict[str, str]:
+        return dict(self._env) if self._env is not None else os.environ.copy()
+
+    def set_env(self, env: dict[str, str]) -> None:
+        self._env = {str(key): str(value) for key, value in env.items()}
+
+    def _restore_session_state(self, session: SoulSession) -> None:
+        self._cwd = session.cwd
+        self._env = dict(session.env) if session.env is not None else None
+
+    async def _process_message(self, msg, session_key: str | None = None, on_progress=None):
+        key = session_key or msg.session_key
+        session = self.sessions.get_or_create(key)
+        self._restore_session_state(session)
+        return await super()._process_message(msg, session_key=session_key, on_progress=on_progress)
+
+
+@dataclass
+class SoulSession(Session):
+    """Session with optional persisted shell state."""
+
+    cwd: Path | None = None
+    env: dict[str, str] | None = None
+
+
+class SoulSessionManager(SessionManager):
+    """Session manager that persists shell state in metadata."""
+
+    def __init__(
+        self,
+        workspace: Path,
+        *,
+        get_cwd: Callable[[], Path | None],
+        get_env: Callable[[], dict[str, str] | None],
+    ):
+        super().__init__(workspace)
+        self._get_loop_cwd = get_cwd
+        self._get_loop_env = get_env
+
+    def get_or_create(self, key: str) -> SoulSession:
+        if key in self._cache:
+            return self._cache[key]  # type: ignore[return-value]
+        session = self._load(key)
+        if session is None:
+            session = SoulSession(key=key)
+        self._cache[key] = session
+        return session
+
+    def _load(self, key: str) -> SoulSession | None:
+        session = super()._load(key)
+        if session is None:
+            return None
+        raw_cwd = session.metadata.get("cwd")
+        raw_env = session.metadata.get("env")
+        return SoulSession(
+            key=session.key,
+            messages=session.messages,
+            created_at=session.created_at,
+            updated_at=session.updated_at,
+            metadata=session.metadata,
+            last_consolidated=session.last_consolidated,
+            cwd=Path(raw_cwd).expanduser().resolve() if isinstance(raw_cwd, str) and raw_cwd else None,
+            env={str(key): str(value) for key, value in raw_env.items()} if isinstance(raw_env, dict) else None,
+        )
+
+    def save(self, session: SoulSession) -> None:
+        loop_cwd = self._get_loop_cwd()
+        loop_env = self._get_loop_env()
+        session.cwd = loop_cwd
+        session.env = dict(loop_env) if loop_env is not None else None
+        if session.cwd is not None:
+            session.metadata["cwd"] = str(session.cwd)
+        else:
+            session.metadata.pop("cwd", None)
+        if session.env is not None:
+            session.metadata["env"] = dict(session.env)
+        else:
+            session.metadata.pop("env", None)
+        super().save(session)
 
 
 @dataclass
@@ -112,7 +240,7 @@ class _RunningSoul:
     config: Config
     provider: LLMProvider
     bus: MessageBus
-    session_manager: SessionManager
+    session_manager: SoulSessionManager
     agent_loop: SoulAgentLoop
     channel_manager: ChannelManager
     agent_task: asyncio.Task | None = None
@@ -252,7 +380,11 @@ class SoulSupervisor:
         config = build_runtime_config(self.base_config, spec)
         provider = self.provider_factory(config)
         bus = MessageBus()
-        session_manager = SessionManager(config.workspace_path)
+        session_manager = SoulSessionManager(
+            config.workspace_path,
+            get_cwd=lambda: agent_loop._cwd,
+            get_env=lambda: agent_loop._env,
+        )
         agent_loop = SoulAgentLoop(
             soul_id=spec.soul_id,
             bus=bus,
@@ -269,6 +401,8 @@ class SoulSupervisor:
             mcp_servers=config.tools.mcp_servers,
             channels_config=config.channels,
         )
+        session_manager._get_loop_cwd = lambda: agent_loop._cwd
+        session_manager._get_loop_env = lambda: agent_loop._env
         channel_manager = ChannelManager(config, bus)
         return _RunningSoul(
             spec=spec,

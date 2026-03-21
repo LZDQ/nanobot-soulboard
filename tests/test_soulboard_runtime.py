@@ -1,4 +1,5 @@
 import asyncio
+import os
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -8,7 +9,8 @@ from nanobot.bus.queue import MessageBus
 from nanobot.config.schema import Config
 from nanobot_soulboard.config import SoulOverrides, SoulboardConfig, load_soulboard_config
 from nanobot_soulboard.context import SoulboardContextBuilder
-from nanobot_soulboard.runtime import SoulAgentLoop, SoulSpec, SoulSupervisor, build_runtime_config, discover_soul_specs
+from nanobot_soulboard.runtime import SoulAgentLoop, SoulSession, SoulSessionManager, SoulSpec, SoulSupervisor, build_runtime_config, discover_soul_specs
+from nanobot_soulboard.shell_tools import CdTool, SetEnvTool
 
 
 def test_discover_soul_specs_uses_config_as_source_of_truth(tmp_path: Path) -> None:
@@ -88,6 +90,11 @@ def test_soul_agent_loop_swaps_in_soulboard_context(tmp_path: Path) -> None:
 
     assert isinstance(loop.context, SoulboardContextBuilder)
     assert loop.context.soul_id == "alpha"
+    assert loop.tools.has("cd") is True
+    assert loop.tools.has("set_env") is True
+    assert loop.tools.has("exec") is True
+    assert "working_dir" not in loop.tools.get("exec").parameters["properties"]
+    assert loop.tools.has("source") is (os.name != "nt")
 
 
 def test_soulboard_context_uses_workspace_system_md_verbatim(tmp_path: Path) -> None:
@@ -104,9 +111,113 @@ def test_soulboard_context_falls_back_to_local_default_prompt(tmp_path: Path) ->
     prompt = builder.build_system_prompt()
 
     assert 'You are the active soul "alpha" running inside nanobot-soulboard.' in prompt
-    assert "Working directory changes are disabled in this runtime." in prompt
     assert str(tmp_path.resolve()) in prompt
     assert "AGENTS.md" not in prompt
+
+
+def test_cd_tool_updates_directory_and_enforces_workspace(tmp_path: Path) -> None:
+    current = {"cwd": tmp_path}
+    child = tmp_path / "child"
+    child.mkdir()
+    outside = tmp_path.parent / "outside"
+    outside.mkdir(exist_ok=True)
+    tool = CdTool(
+        get_cwd=lambda: current["cwd"],
+        set_cwd=lambda path: current.__setitem__("cwd", path),
+    )
+
+    result = asyncio.run(tool.execute("child"))
+    assert result == str(child.resolve())
+    assert current["cwd"] == child.resolve()
+
+    moved = asyncio.run(tool.execute(str(outside)))
+    assert moved == str(outside.resolve())
+
+
+def test_set_env_tool_merges_values() -> None:
+    current = {"env": {"PATH": "/usr/bin"}}
+    tool = SetEnvTool(
+        get_env=lambda: dict(current["env"]),
+        set_env=lambda env: current.__setitem__("env", env),
+    )
+
+    result = asyncio.run(tool.execute({"HELLO": "world"}))
+
+    assert "HELLO" in result
+    assert current["env"]["PATH"] == "/usr/bin"
+    assert current["env"]["HELLO"] == "world"
+
+
+def test_soul_agent_loop_shell_state_is_lazy_and_persisted(tmp_path: Path) -> None:
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    loop = SoulAgentLoop(
+        soul_id="alpha",
+        bus=MessageBus(),
+        provider=provider,
+        workspace=tmp_path,
+        model="test-model",
+    )
+    session = loop.sessions.get_or_create("cli:direct")
+
+    loop._restore_session_state(session)
+    assert loop._cwd is None
+    assert loop._env is None
+    assert loop.get_cwd() == tmp_path
+    assert "PATH" in loop.get_env()
+    assert session.metadata == {}
+
+    loop.set_cwd(tmp_path / "nested")
+    loop.set_env({"HELLO": "world"})
+    loop.sessions.save(session)
+    assert session.metadata["cwd"] == str((tmp_path / "nested"))
+    assert session.metadata["env"] == {"HELLO": "world"}
+
+    restored = SoulSession(
+        key="cli:second",
+        cwd=(tmp_path / "saved").resolve(),
+        env={"FOO": "bar"},
+    )
+    loop._restore_session_state(restored)
+    assert loop.get_cwd() == (tmp_path / "saved").resolve()
+    assert loop.get_env()["FOO"] == "bar"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="source tool is unix-only")
+def test_source_tool_loads_environment(tmp_path: Path) -> None:
+    from nanobot_soulboard.shell_tools import SourceTool
+
+    current = {"cwd": tmp_path, "env": {"PATH": os.environ.get("PATH", "")}}
+    script = tmp_path / "activate.sh"
+    script.write_text('export SOULBOARD_TEST_VAR="hello"\n', encoding="utf-8")
+    tool = SourceTool(
+        get_cwd=lambda: current["cwd"],
+        get_env=lambda: dict(current["env"]),
+        set_env=lambda env: current.__setitem__("env", env),
+    )
+
+    result = asyncio.run(tool.execute("activate.sh"))
+
+    assert result == f"Sourced environment from {script.resolve()}"
+    assert current["env"]["SOULBOARD_TEST_VAR"] == "hello"
+
+
+def test_soul_session_manager_loads_and_saves_shell_state(tmp_path: Path) -> None:
+    manager = SoulSessionManager(
+        tmp_path,
+        get_cwd=lambda: (tmp_path / "cwd").resolve(),
+        get_env=lambda: {"FOO": "bar"},
+    )
+    session = manager.get_or_create("cli:direct")
+    assert session.cwd is None
+    assert session.env is None
+
+    manager.save(session)
+    reloaded = manager._load("cli:direct")
+
+    assert reloaded is not None
+    assert reloaded.cwd == (tmp_path / "cwd").resolve()
+    assert reloaded.env == {"FOO": "bar"}
 
 
 def test_modify_soul_rejects_running_soul(tmp_path: Path) -> None:
