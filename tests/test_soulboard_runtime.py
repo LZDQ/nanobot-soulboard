@@ -1,12 +1,13 @@
 import asyncio
 import os
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from nanobot.bus.queue import MessageBus
 from nanobot.config.schema import Config
+from nanobot.providers.base import LLMResponse, ToolCallRequest
 from nanobot_soulboard.config import SoulOverrides, SoulboardConfig, load_soulboard_config
 from nanobot_soulboard.context import SoulboardContextBuilder
 from nanobot_soulboard.runtime import SoulAgentLoop, SoulSession, SoulSessionManager, SoulSpec, SoulSupervisor, build_runtime_config, discover_soul_specs
@@ -116,22 +117,20 @@ def test_soulboard_context_falls_back_to_local_default_prompt(tmp_path: Path) ->
 
 
 def test_cd_tool_updates_directory_and_enforces_workspace(tmp_path: Path) -> None:
-    current = {"cwd": tmp_path}
+    current = {"cwd": None}
     child = tmp_path / "child"
     child.mkdir()
     outside = tmp_path.parent / "outside"
     outside.mkdir(exist_ok=True)
-    tool = CdTool(
-        get_cwd=lambda: current["cwd"],
-        set_cwd=lambda path: current.__setitem__("cwd", path),
-    )
+    tool = CdTool(set_cwd=lambda path: current.__setitem__("cwd", path))
 
-    result = asyncio.run(tool.execute("child"))
+    result = asyncio.run(tool.execute(str(child)))
     assert result == str(child.resolve())
     assert current["cwd"] == child.resolve()
 
     moved = asyncio.run(tool.execute(str(outside)))
     assert moved == str(outside.resolve())
+    assert current["cwd"] == outside.resolve()
 
 
 def test_set_env_tool_merges_values() -> None:
@@ -218,6 +217,134 @@ def test_soul_session_manager_loads_and_saves_shell_state(tmp_path: Path) -> Non
     assert reloaded is not None
     assert reloaded.cwd == (tmp_path / "cwd").resolve()
     assert reloaded.env == {"FOO": "bar"}
+
+
+def test_soul_agent_loop_persists_completed_tool_loops_incrementally(tmp_path: Path) -> None:
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    loop = SoulAgentLoop(
+        soul_id="alpha",
+        bus=MessageBus(),
+        provider=provider,
+        workspace=tmp_path,
+        model="test-model",
+    )
+    tool_results = {"first_tool": "first result", "second_tool": "second result"}
+
+    async def _execute(name: str, _arguments: dict) -> str:
+        return tool_results[name]
+
+    async def _chat_with_retry(*, messages, tools, model):
+        call_index = _chat_with_retry.calls
+        _chat_with_retry.calls += 1
+        if call_index == 0:
+            return LLMResponse(
+                content="first loop",
+                tool_calls=[ToolCallRequest(id="call_1", name="first_tool", arguments={"value": 1})],
+                finish_reason="tool_calls",
+            )
+        if call_index == 1:
+            reloaded = SoulSessionManager(
+                tmp_path,
+                get_cwd=lambda: None,
+                get_env=lambda: None,
+            )._load("cli:direct")
+            assert reloaded is not None
+            assert [message["role"] for message in reloaded.messages] == ["user", "assistant", "tool"]
+            assert reloaded.messages[1]["tool_calls"][0]["id"] == "call_1"
+            return LLMResponse(
+                content="second loop",
+                tool_calls=[ToolCallRequest(id="call_2", name="second_tool", arguments={"value": 2})],
+                finish_reason="tool_calls",
+            )
+        return LLMResponse(content="final answer", finish_reason="stop")
+
+    _chat_with_retry.calls = 0
+    provider.chat_with_retry.side_effect = _chat_with_retry
+    loop.tools.execute = _execute
+
+    result = asyncio.run(loop.process_direct("hello"))
+
+    assert result == "final answer"
+    reloaded = SoulSessionManager(tmp_path, get_cwd=lambda: None, get_env=lambda: None)._load("cli:direct")
+    assert reloaded is not None
+    assert [message["role"] for message in reloaded.messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+    assert sum(1 for message in reloaded.messages if message["role"] == "user") == 1
+
+
+def test_soul_agent_loop_preserves_completed_tool_loops_after_crash(tmp_path: Path) -> None:
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    loop = SoulAgentLoop(
+        soul_id="alpha",
+        bus=MessageBus(),
+        provider=provider,
+        workspace=tmp_path,
+        model="test-model",
+    )
+
+    async def _execute(_name: str, _arguments: dict) -> str:
+        return "first result"
+
+    async def _chat_with_retry(*, messages, tools, model):
+        call_index = _chat_with_retry.calls
+        _chat_with_retry.calls += 1
+        if call_index == 0:
+            return LLMResponse(
+                content="first loop",
+                tool_calls=[ToolCallRequest(id="call_1", name="first_tool", arguments={"value": 1})],
+                finish_reason="tool_calls",
+            )
+        raise RuntimeError("boom")
+
+    _chat_with_retry.calls = 0
+    provider.chat_with_retry.side_effect = _chat_with_retry
+    loop.tools.execute = _execute
+
+    with pytest.raises(RuntimeError, match="boom"):
+        asyncio.run(loop.process_direct("hello"))
+
+    reloaded = SoulSessionManager(tmp_path, get_cwd=lambda: None, get_env=lambda: None)._load("cli:direct")
+    assert reloaded is not None
+    assert [message["role"] for message in reloaded.messages] == ["user", "assistant", "tool"]
+    history = reloaded.get_history(max_messages=0)
+    assert [message["role"] for message in history] == ["user", "assistant", "tool"]
+    assert history[1]["tool_calls"][0]["id"] == "call_1"
+    assert history[2]["tool_call_id"] == "call_1"
+
+
+def test_soul_agent_loop_persists_final_response_once_and_keeps_shell_metadata(tmp_path: Path) -> None:
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    loop = SoulAgentLoop(
+        soul_id="alpha",
+        bus=MessageBus(),
+        provider=provider,
+        workspace=tmp_path,
+        model="test-model",
+    )
+    provider.chat_with_retry = AsyncMock(return_value=LLMResponse(content="done", finish_reason="stop"))
+
+    session = loop.sessions.get_or_create("cli:direct")
+    loop.set_cwd((tmp_path / "nested").resolve())
+    loop.set_env({"HELLO": "world"})
+    loop.sessions.save(session)
+
+    result = asyncio.run(loop.process_direct("hello"))
+
+    assert result == "done"
+    reloaded = SoulSessionManager(tmp_path, get_cwd=lambda: None, get_env=lambda: None)._load("cli:direct")
+    assert reloaded is not None
+    assert [message["role"] for message in reloaded.messages] == ["user", "assistant"]
+    assert reloaded.metadata["cwd"] == str((tmp_path / "nested").resolve())
+    assert reloaded.metadata["env"] == {"HELLO": "world"}
 
 
 def test_modify_soul_rejects_running_soul(tmp_path: Path) -> None:

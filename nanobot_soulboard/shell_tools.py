@@ -99,8 +99,7 @@ class SoulExecTool(Tool):
 class CdTool(Tool):
     """Change the session-scoped working directory."""
 
-    def __init__(self, *, get_cwd: Callable[[], Path], set_cwd: Callable[[Path], None]):
-        self.get_cwd = get_cwd
+    def __init__(self, *, set_cwd: Callable[[Path], None]):
         self.set_cwd = set_cwd
 
     @property
@@ -118,7 +117,7 @@ class CdTool(Tool):
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Relative or absolute target directory.",
+                    "description": "Absolute target directory.",
                     "minLength": 1,
                 },
             },
@@ -127,7 +126,7 @@ class CdTool(Tool):
 
     async def execute(self, path: str, **kwargs: Any) -> str:
         del kwargs
-        target = (self.get_cwd() / path).expanduser().resolve()
+        target = Path(path).expanduser().resolve()
         if not target.exists():
             return f"Error: Directory does not exist: {target}"
         if not target.is_dir():

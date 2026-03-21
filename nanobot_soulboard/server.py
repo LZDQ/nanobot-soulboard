@@ -15,12 +15,11 @@ from pydantic import BaseModel, Field
 
 from nanobot.config.loader import load_config
 from nanobot.config.schema import MCPServerConfig
-from nanobot.session.manager import SessionManager
 from nanobot.utils.helpers import sync_workspace_templates
 
 from nanobot_soulboard.config import SoulOverrides, load_soulboard_config
 from nanobot_soulboard.providers import make_provider
-from nanobot_soulboard.runtime import SOUL_PROMPT_FILES, SoulSpec, SoulSupervisor
+from nanobot_soulboard.runtime import SOUL_PROMPT_FILES, SoulAgentLoop, SoulSessionManager, SoulSpec, SoulSupervisor
 
 
 class CreateSoulRequest(BaseModel):
@@ -264,8 +263,20 @@ def _error_detail(exc: Exception) -> str:
     return str(exc.args[0]) if exc.args else str(exc)
 
 
-def _build_session_manager(spec: SoulSpec) -> SessionManager:
-    return SessionManager(spec.workspace)
+def _build_session_manager(spec: SoulSpec) -> SoulSessionManager:
+    return SoulSessionManager(
+        spec.workspace,
+        get_cwd=lambda: None,
+        get_env=lambda: None,
+    )
+
+
+def _get_session_manager(supervisor: SoulSupervisor, spec: SoulSpec) -> SoulSessionManager:
+    try:
+        agent_loop: SoulAgentLoop = supervisor.get_agent_loop(spec.soul_id)
+        return agent_loop.sessions
+    except KeyError:
+        return _build_session_manager(spec)
 
 
 def _build_prompt_files_response(files: dict[str, str | None]) -> SoulPromptFilesResponse:
@@ -666,7 +677,7 @@ def create_app(
             spec = supervisor.get_spec(soul_id)
         except KeyError as exc:
             _raise_not_found(_error_detail(exc))
-        manager = _build_session_manager(spec)
+        manager = _get_session_manager(supervisor, spec)
         return [SessionSummaryResponse(**item) for item in manager.list_sessions()]
 
     @app.post(
@@ -685,7 +696,7 @@ def create_app(
             spec = supervisor.get_spec(soul_id)
         except KeyError as exc:
             _raise_not_found(_error_detail(exc))
-        manager = _build_session_manager(spec)
+        manager = _get_session_manager(supervisor, spec)
         session = manager.get_or_create(body.key)
         if not session.metadata:
             session.metadata = _build_session_metadata(body.key)
@@ -714,7 +725,7 @@ def create_app(
             spec = supervisor.get_spec(soul_id)
         except KeyError as exc:
             _raise_not_found(_error_detail(exc))
-        manager = _build_session_manager(spec)
+        manager = _get_session_manager(supervisor, spec)
         known = {item["key"] for item in manager.list_sessions()}
         if session_key not in known:
             _raise_not_found(f"Unknown session: {session_key}")
@@ -747,7 +758,7 @@ def create_app(
             agent_loop = supervisor.get_agent_loop(soul_id)
             return SessionShellStateResponse(cwd=str(agent_loop.get_cwd()), env=agent_loop.get_env())
         except KeyError:
-            manager = _build_session_manager(spec)
+            manager = _get_session_manager(supervisor, spec)
             known = {item["key"] for item in manager.list_sessions()}
             if session_key not in known:
                 _raise_not_found(f"Unknown session: {session_key}")

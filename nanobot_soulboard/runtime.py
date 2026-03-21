@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from copy import deepcopy
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
-from typing import Callable
+from typing import Any, Awaitable, Callable
 
+from loguru import logger
+from nanobot.agent.context import ContextBuilder
 from nanobot.agent.loop import AgentLoop
+from nanobot.agent.tools.message import MessageTool
+from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.manager import ChannelManager
 from nanobot.config.loader import save_config
@@ -124,7 +130,6 @@ class SoulAgentLoop(AgentLoop):
         )
         self.tools.register(
             CdTool(
-                get_cwd=self.get_cwd,
                 set_cwd=self.set_cwd,
             )
         )
@@ -161,11 +166,233 @@ class SoulAgentLoop(AgentLoop):
         self._cwd = session.cwd
         self._env = dict(session.env) if session.env is not None else None
 
+    def _persist_turn_slice(self, session: SoulSession, messages: list[dict[str, Any]], start: int) -> int:
+        """Persist one suffix of newly-created turn messages and return the new cursor."""
+        for message in messages[start:]:
+            entry = dict(message)
+            role = entry.get("role")
+            content = entry.get("content")
+            if role == "assistant" and not content and not entry.get("tool_calls"):
+                continue
+            if role == "tool" and isinstance(content, str) and len(content) > self._TOOL_RESULT_MAX_CHARS:
+                entry["content"] = content[:self._TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
+            elif role == "user":
+                if isinstance(content, str) and content.startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
+                    parts = content.split("\n\n", 1)
+                    if len(parts) > 1 and parts[1].strip():
+                        entry["content"] = parts[1]
+                    else:
+                        continue
+                if isinstance(content, list):
+                    filtered = []
+                    for item in content:
+                        if (
+                            item.get("type") == "text"
+                            and isinstance(item.get("text"), str)
+                            and item["text"].startswith(ContextBuilder._RUNTIME_CONTEXT_TAG)
+                        ):
+                            continue
+                        if (
+                            item.get("type") == "image_url"
+                            and item.get("image_url", {}).get("url", "").startswith("data:image/")
+                        ):
+                            path = (item.get("_meta") or {}).get("path", "")
+                            placeholder = f"[image: {path}]" if path else "[image]"
+                            filtered.append({"type": "text", "text": placeholder})
+                        else:
+                            filtered.append(item)
+                    if not filtered:
+                        continue
+                    entry["content"] = filtered
+            entry.setdefault("timestamp", datetime.now().isoformat())
+            session.messages.append(entry)
+        session.updated_at = datetime.now()
+        self.sessions.save(session)
+        return len(messages)
+
+    async def _run_agent_loop_incremental(
+        self,
+        session: SoulSession,
+        initial_messages: list[dict[str, Any]],
+        persisted_until: int,
+        on_progress: Callable[..., Awaitable[None]] | None = None,
+    ) -> tuple[str | None, list[str], list[dict[str, Any]]]:
+        """Run the agent loop and flush completed tool iterations incrementally."""
+        messages = initial_messages
+        iteration = 0
+        final_content = None
+        tools_used: list[str] = []
+
+        while iteration < self.max_iterations:
+            iteration += 1
+
+            tool_defs = self.tools.get_definitions()
+            response = await self.provider.chat_with_retry(
+                messages=messages,
+                tools=tool_defs,
+                model=self.model,
+            )
+
+            if response.has_tool_calls:
+                if on_progress:
+                    thought = self._strip_think(response.content)
+                    if thought:
+                        await on_progress(thought)
+                    tool_hint = self._tool_hint(response.tool_calls)
+                    tool_hint = self._strip_think(tool_hint)
+                    await on_progress(tool_hint, tool_hint=True)
+
+                tool_call_dicts = [tool_call.to_openai_tool_call() for tool_call in response.tool_calls]
+                messages = self.context.add_assistant_message(
+                    messages,
+                    response.content,
+                    tool_call_dicts,
+                    reasoning_content=response.reasoning_content,
+                    thinking_blocks=response.thinking_blocks,
+                )
+
+                for tool_call in response.tool_calls:
+                    tools_used.append(tool_call.name)
+                    args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
+                    logger.info("Tool call: {}({})", tool_call.name, args_str[:200])
+                    result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                    messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, result)
+
+                persisted_until = self._persist_turn_slice(session, messages, persisted_until)
+                continue
+
+            clean = self._strip_think(response.content)
+            if response.finish_reason == "error":
+                logger.error("LLM returned error: {}", (clean or "")[:200])
+                final_content = clean or "Sorry, I encountered an error calling the AI model."
+                break
+
+            messages = self.context.add_assistant_message(
+                messages,
+                clean,
+                reasoning_content=response.reasoning_content,
+                thinking_blocks=response.thinking_blocks,
+            )
+            persisted_until = self._persist_turn_slice(session, messages, persisted_until)
+            final_content = clean
+            break
+
+        if final_content is None and iteration >= self.max_iterations:
+            logger.warning("Max iterations ({}) reached", self.max_iterations)
+            final_content = (
+                f"I reached the maximum number of tool call iterations ({self.max_iterations}) "
+                "without completing the task. You can try breaking the task into smaller steps."
+            )
+
+        return final_content, tools_used, messages
+
     async def _process_message(self, msg, session_key: str | None = None, on_progress=None):
         key = session_key or msg.session_key
         session = self.sessions.get_or_create(key)
         self._restore_session_state(session)
-        return await super()._process_message(msg, session_key=session_key, on_progress=on_progress)
+        if msg.channel == "system":
+            channel, chat_id = (msg.chat_id.split(":", 1) if ":" in msg.chat_id else ("cli", msg.chat_id))
+            logger.info("Processing system message from {}", msg.sender_id)
+            system_key = f"{channel}:{chat_id}"
+            session = self.sessions.get_or_create(system_key)
+            self._restore_session_state(session)
+            await self.memory_consolidator.maybe_consolidate_by_tokens(session)
+            self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"))
+            history = session.get_history(max_messages=0)
+            current_role = "assistant" if msg.sender_id == "subagent" else "user"
+            messages = self.context.build_messages(
+                history=history,
+                current_message=msg.content,
+                channel=channel,
+                chat_id=chat_id,
+                current_role=current_role,
+            )
+            persisted_until = self._persist_turn_slice(session, messages, len(messages) - 1)
+            final_content, _, _ = await self._run_agent_loop_incremental(
+                session,
+                messages,
+                persisted_until,
+                on_progress=on_progress,
+            )
+            self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
+            return OutboundMessage(
+                channel=channel,
+                chat_id=chat_id,
+                content=final_content or "Background task completed.",
+            )
+
+        preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
+        logger.info("Processing message from {}:{}: {}", msg.channel, msg.sender_id, preview)
+
+        cmd = msg.content.strip().lower()
+        if cmd == "/new":
+            snapshot = session.messages[session.last_consolidated:]
+            session.clear()
+            self.sessions.save(session)
+            self.sessions.invalidate(session.key)
+
+            if snapshot:
+                self._schedule_background(self.memory_consolidator.archive_messages(snapshot))
+
+            return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="New session started.")
+        if cmd == "/help":
+            lines = [
+                "🐈 nanobot commands:",
+                "/new — Start a new conversation",
+                "/stop — Stop the current task",
+                "/restart — Restart the bot",
+                "/help — Show available commands",
+            ]
+            return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="\n".join(lines))
+
+        await self.memory_consolidator.maybe_consolidate_by_tokens(session)
+
+        self._set_tool_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"))
+        if message_tool := self.tools.get("message"):
+            if isinstance(message_tool, MessageTool):
+                message_tool.start_turn()
+
+        history = session.get_history(max_messages=0)
+        initial_messages = self.context.build_messages(
+            history=history,
+            current_message=msg.content,
+            media=msg.media if msg.media else None,
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+        )
+
+        async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:
+            meta = dict(msg.metadata or {})
+            meta["_progress"] = True
+            meta["_tool_hint"] = tool_hint
+            await self.bus.publish_outbound(
+                OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=content, metadata=meta)
+            )
+
+        persisted_until = self._persist_turn_slice(session, initial_messages, len(initial_messages) - 1)
+        final_content, _, _ = await self._run_agent_loop_incremental(
+            session,
+            initial_messages,
+            persisted_until,
+            on_progress=on_progress or _bus_progress,
+        )
+
+        if final_content is None:
+            final_content = "I've completed processing but have no response to give."
+
+        self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
+
+        if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
+            return None
+
+        preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
+        logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
+        return OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content=final_content,
+            metadata=msg.metadata or {},
+        )
 
 
 @dataclass
