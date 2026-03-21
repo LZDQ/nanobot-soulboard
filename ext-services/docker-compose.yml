@@ -45,9 +45,7 @@ services:
     image: filebrowser/filebrowser
     ports:
       - "127.0.0.1:8080:80"
-    # group_add: 1001  # Uncomment this to access shared group directories
+    # group_add: [1001]  # Uncomment this to access shared group directories
     volumes:
       - /:/srv
-      - ./filebrowser/database:/database
-      - ./filebrowser/config:/config
-    command: ["--noauth"]
+    command: ["--noauth", "--baseURL", "/filebrowser"]
