@@ -27,7 +27,7 @@ class SoulboardContextBuilder(ContextBuilder):
     def _build_default_system_prompt(self) -> str:
         return f"""# Soulboard
 
-You are the active soul {self.soul_id:r} running inside nanobot-soulboard.
+You are the active soul {self.soul_id!r} running inside nanobot-soulboard.
 
 ## Runtime
 {platform.platform()}
