@@ -161,6 +161,43 @@ def test_server_lists_and_reads_sessions(monkeypatch, tmp_path: Path) -> None:
         assert "key" not in detail.json()
 
 
+def test_server_creates_empty_session(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("nanobot_soulboard.server.make_provider", lambda _config: MagicMock())
+    monkeypatch.setattr("nanobot_soulboard.server.sync_workspace_templates", lambda *_args, **_kwargs: [])
+
+    _write_json(tmp_path / "config.json", {})
+    _write_json(tmp_path / "soulboard" / "config.json", {"souls": {"alpha": {}}})
+
+    app = create_app(
+        nano_root=tmp_path,
+        base_config_path=tmp_path / "config.json",
+        soulboard_config_path=tmp_path / "soulboard" / "config.json",
+    )
+
+    with TestClient(app) as client:
+        created = client.post("/api/souls/alpha/sessions", json={"key": "cli:new"})
+        assert created.status_code == 200
+        assert created.json()["messages"] == []
+        assert created.json()["metadata"] == {
+            "title": "cli:new",
+            "channel": "cli",
+            "chat_id": "new",
+        }
+
+        listed = client.get("/api/souls/alpha/sessions")
+        assert listed.status_code == 200
+        assert listed.json()[0]["key"] == "cli:new"
+
+        detail = client.get("/api/souls/alpha/sessions/cli:new")
+        assert detail.status_code == 200
+        assert detail.json()["messages"] == []
+        assert detail.json()["metadata"] == {
+            "title": "cli:new",
+            "channel": "cli",
+            "chat_id": "new",
+        }
+
+
 def test_server_reads_session_shell_state(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("nanobot_soulboard.server.make_provider", lambda _config: MagicMock())
     monkeypatch.setattr("nanobot_soulboard.server.sync_workspace_templates", lambda *_args, **_kwargs: [])

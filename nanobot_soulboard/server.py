@@ -76,6 +76,27 @@ class ChatRequest(BaseModel):
     )
 
 
+class CreateSessionRequest(BaseModel):
+    """Request body for creating one empty persisted session."""
+
+    key: str = Field(
+        min_length=1,
+        description="Session key used by nanobot SessionManager, typically in channel:chat_id form.",
+    )
+
+
+def _build_session_metadata(key: str) -> dict[str, str]:
+    """Derive basic session metadata from a session key."""
+    metadata: dict[str, str] = {"title": key}
+    if ":" in key:
+        channel, chat_id = key.split(":", 1)
+        if channel:
+            metadata["channel"] = channel
+        if chat_id:
+            metadata["chat_id"] = chat_id
+    return metadata
+
+
 class StreamChunkResponse(BaseModel):
     """One streamed chunk sent from server to frontend."""
 
@@ -647,6 +668,35 @@ def create_app(
             _raise_not_found(_error_detail(exc))
         manager = _build_session_manager(spec)
         return [SessionSummaryResponse(**item) for item in manager.list_sessions()]
+
+    @app.post(
+        "/api/souls/{soul_id}/sessions",
+        response_model=SessionDetailResponse,
+        responses={404: {"model": ErrorResponse}},
+        summary="Create Empty Session",
+        description=(
+            "Persist an empty session file for the selected soul workspace. If the session already exists, "
+            "this returns its current persisted contents."
+        ),
+    )
+    def create_soul_session(request: Request, soul_id: str, body: CreateSessionRequest) -> SessionDetailResponse:
+        supervisor = _get_supervisor(request)
+        try:
+            spec = supervisor.get_spec(soul_id)
+        except KeyError as exc:
+            _raise_not_found(_error_detail(exc))
+        manager = _build_session_manager(spec)
+        session = manager.get_or_create(body.key)
+        if not session.metadata:
+            session.metadata = _build_session_metadata(body.key)
+        manager.save(session)
+        return SessionDetailResponse(
+            created_at=session.created_at.isoformat(),
+            updated_at=session.updated_at.isoformat(),
+            metadata=session.metadata,
+            last_consolidated=session.last_consolidated,
+            messages=session.messages,
+        )
 
     @app.get(
         "/api/souls/{soul_id}/sessions/{session_key}",

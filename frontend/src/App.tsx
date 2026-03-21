@@ -810,19 +810,18 @@ export default function App() {
       socketRef.current?.close();
       socketRef.current = null;
       setSocketState("closed");
-      setSessionDetail({
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        metadata: {},
-        last_consolidated: 0,
-        messages: [],
+      const detail = await api<SessionDetail>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/sessions`, {
+        method: "POST",
+        body: JSON.stringify({ key }),
       });
+      setSessionDetail(detail);
       setSessionShellState({ cwd: null, env: null });
       setSessionKey(key);
       setCreateSessionKey("");
       setChatContent("");
       setChatReasoning("");
       setFinalizedMessages([]);
+      await refreshSessions(selectedSoul.soul_id);
       setSocketEpoch((current) => current + 1);
     }).catch((cause) => {
       notifyError(cause);
