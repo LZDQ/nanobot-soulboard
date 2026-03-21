@@ -603,6 +603,7 @@ def create_app(
             spec = supervisor.get_spec(soul_id)
             sync_workspace_templates(spec.workspace, silent=True)
             await supervisor.start_soul(soul_id)
+            spec = supervisor.get_spec(soul_id)
         except KeyError as exc:
             _raise_not_found(_error_detail(exc))
         except ValueError as exc:

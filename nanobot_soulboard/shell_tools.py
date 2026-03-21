@@ -33,7 +33,7 @@ class SoulExecTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Execute a shell command and return its output."
+        return "Execute a shell command in a subshell and return its output. Use the 'cd' tool to change directory so that it will be persisted."
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -193,7 +193,7 @@ if os.name != "nt":
 
         @property
         def description(self) -> str:
-            return "Source a POSIX shell file and persist the resulting environment for this session."
+            return "Source a POSIX shell file and persist the resulting environment for this session. Useful for activating a venv."
 
         @property
         def parameters(self) -> dict[str, Any]:

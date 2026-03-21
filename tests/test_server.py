@@ -60,6 +60,52 @@ def test_server_soul_lifecycle(monkeypatch, tmp_path: Path) -> None:
         assert deleted.status_code == 204
 
 
+def test_server_start_prunes_unknown_mcp_servers(monkeypatch, tmp_path: Path) -> None:
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+
+    monkeypatch.setattr("nanobot_soulboard.server.make_provider", lambda _config: provider)
+    monkeypatch.setattr("nanobot_soulboard.server.sync_workspace_templates", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("nanobot_soulboard.runtime.SoulAgentLoop.run", AsyncMock(return_value=None))
+
+    _write_json(
+        tmp_path / "config.json",
+        {
+            "tools": {
+                "mcpServers": {
+                    "filesystem": {
+                        "type": "stdio",
+                        "command": "npx",
+                        "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+                        "env": {},
+                        "headers": {},
+                        "enabledTools": ["*"],
+                    }
+                }
+            }
+        },
+    )
+    _write_json(
+        tmp_path / "soulboard" / "config.json",
+        {"souls": {"alpha": {"mcp_servers": ["filesystem", "missing"], "autostart": False}}},
+    )
+
+    app = create_app(
+        nano_root=tmp_path,
+        base_config_path=tmp_path / "config.json",
+        soulboard_config_path=tmp_path / "soulboard" / "config.json",
+    )
+
+    with TestClient(app) as client:
+        started = client.post("/api/souls/alpha/start")
+        assert started.status_code == 200
+        assert started.json()["running"] is True
+        assert started.json()["overrides"]["mcp_servers"] == ["filesystem"]
+
+        persisted = json.loads((tmp_path / "soulboard" / "config.json").read_text(encoding="utf-8"))
+        assert persisted["souls"]["alpha"]["mcp_servers"] == ["filesystem"]
+
+
 def test_server_lists_and_reads_sessions(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("nanobot_soulboard.server.make_provider", lambda _config: MagicMock())
     monkeypatch.setattr("nanobot_soulboard.server.sync_workspace_templates", lambda *_args, **_kwargs: [])

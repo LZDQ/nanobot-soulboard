@@ -278,6 +278,20 @@ class SoulSupervisor:
                 return spec
         raise KeyError(f"Unknown soul: {soul_id}")
 
+    def _prune_missing_mcp_servers(self, soul_id: str) -> None:
+        """Remove stale MCP server references from one soul override set."""
+        overrides = self.soulboard_config.souls.get(soul_id)
+        if overrides is None:
+            raise KeyError(f"Unknown soul: {soul_id}")
+        if not overrides.mcp_servers:
+            return
+        known = set(self.base_config.tools.mcp_servers)
+        filtered = [name for name in overrides.mcp_servers if name in known]
+        if filtered == overrides.mcp_servers:
+            return
+        self.soulboard_config.souls[soul_id] = overrides.model_copy(update={"mcp_servers": filtered})
+        save_soulboard_config(self.soulboard_config, self.config_path)
+
     def read_soul_prompt_files(self, soul_id: str) -> dict[str, str | None]:
         """Read the soul markdown prompt pack from its workspace."""
         spec = self.get_spec(soul_id)
@@ -376,6 +390,7 @@ class SoulSupervisor:
         """Construct supervisor-owned runtime state without starting it."""
         if self.provider_factory is None:
             raise RuntimeError("SoulSupervisor requires a provider_factory to build runtimes")
+        self._prune_missing_mcp_servers(soul_id)
         spec = self.get_spec(soul_id)
         config = build_runtime_config(self.base_config, spec)
         provider = self.provider_factory(config)

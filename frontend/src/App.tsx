@@ -735,6 +735,25 @@ export default function App() {
     }
   }
 
+  async function restartSoul() {
+    if (!selectedSoul || !selectedSoul.running) {
+      return;
+    }
+    try {
+      await runAction("restart", async () => {
+        await api<Soul>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/stop`, {
+          method: "POST",
+        });
+        await api<Soul>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/start`, {
+          method: "POST",
+        });
+        await refreshSouls(selectedSoul.soul_id);
+      });
+    } catch (cause) {
+      notifyError(cause);
+    }
+  }
+
   async function deleteSoul() {
     if (!selectedSoul) {
       return;
@@ -1128,10 +1147,15 @@ export default function App() {
             <>
               <div className="action-row">
                 <button onClick={() => void toggleSoulRunning()} disabled={!!pending}>
-                  {selectedSoul.running ? "Stop soul" : "Start soul"}
+                  {selectedSoul.running ? "Stop" : "Start"}
                 </button>
+                {selectedSoul.running ? (
+                  <button className="ghost" onClick={() => void restartSoul()} disabled={!!pending}>
+                    Restart
+                  </button>
+                ) : null}
                 <button className="danger" onClick={() => void deleteSoul()} disabled={!!pending}>
-                  Delete soul
+                  Delete
                 </button>
               </div>
 
