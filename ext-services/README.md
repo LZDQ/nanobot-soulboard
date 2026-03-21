@@ -6,7 +6,7 @@ This directory uses `docker-compose.yml` for litellm proxy, napcat qq bot and fi
 
 ## NapCatQQ
 
-Create `.env.qq` and set `NAPCAT_UID` and `NAPCAT_GID` to your `id -u` and `id -g` to avoid permission errors.
+Create `.env.napcat` and set `NAPCAT_UID` and `NAPCAT_GID` to your `id -u` and `id -g` to avoid permission errors.
 
 Example:
 
