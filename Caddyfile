@@ -7,12 +7,12 @@ https://:1337 {
 
 	@backend_api path /api*
 	handle @backend_api {
-		reverse_proxy localhost:8000
+		reverse_proxy localhost:18791
 	}
 
 	@backend_ws path /ws*
 	handle @backend_ws {
-		reverse_proxy localhost:8000
+		reverse_proxy localhost:18791
 	}
 
 	redir /terminal /terminal/
@@ -37,6 +37,6 @@ https://:1337 {
 	}
 
 	handle {
-		reverse_proxy localhost:3000
+		reverse_proxy localhost:4173
 	}
 }
