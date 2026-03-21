@@ -15,7 +15,7 @@ fi
 # Otherwise, create a new detached session with window 0.
 tmux new-session -d -s "$SESSION_NAME"
 # Create the remaining windows.
-tmux new-window -d -t "${SESSION_NAME}:1" -n config
+tmux new-window -d -t "${SESSION_NAME}:1" -n config ~/.nanobot
 tmux new-window -d -t "${SESSION_NAME}:2" -n deploy-backend
 tmux new-window -d -t "${SESSION_NAME}:3" -n deploy-frontend -c ./frontend
 tmux new-window -d -t "${SESSION_NAME}:4" -n ttyd
