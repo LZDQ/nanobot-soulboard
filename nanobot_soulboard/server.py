@@ -130,6 +130,13 @@ class SessionDetailResponse(BaseModel):
     messages: list[dict[str, Any]]
 
 
+class SessionShellStateResponse(BaseModel):
+    """Persisted shell state for one session."""
+
+    cwd: str | None = None
+    env: dict[str, str] | None = None
+
+
 class SoulPromptFileResponse(BaseModel):
     """One editable markdown file from a soul workspace."""
 
@@ -668,6 +675,37 @@ def create_app(
             last_consolidated=session.last_consolidated,
             messages=session.messages,
         )
+
+    @app.get(
+        "/api/souls/{soul_id}/sessions/{session_key}/shell-state",
+        response_model=SessionShellStateResponse,
+        responses={404: {"model": ErrorResponse}},
+        summary="Get Session Shell State",
+        description=(
+            "Return the persisted cwd and environment for one session. These values are only present "
+            "after a shell-state tool mutates them and the session is saved."
+        ),
+    )
+    def get_session_shell_state(request: Request, soul_id: str, session_key: str) -> SessionShellStateResponse:
+        supervisor = _get_supervisor(request)
+        try:
+            spec = supervisor.get_spec(soul_id)
+        except KeyError as exc:
+            _raise_not_found(_error_detail(exc))
+        try:
+            agent_loop = supervisor.get_agent_loop(soul_id)
+            return SessionShellStateResponse(cwd=str(agent_loop.get_cwd()), env=agent_loop.get_env())
+        except KeyError:
+            manager = _build_session_manager(spec)
+            known = {item["key"] for item in manager.list_sessions()}
+            if session_key not in known:
+                _raise_not_found(f"Unknown session: {session_key}")
+            session = manager.get_or_create(session_key)
+            raw_cwd = session.metadata.get("cwd")
+            raw_env = session.metadata.get("env")
+            env = {str(key): str(value) for key, value in raw_env.items()} if isinstance(raw_env, dict) else None
+            return SessionShellStateResponse(cwd=raw_cwd if isinstance(raw_cwd, str) else None, env=env)
+
 
     @app.post(
         "/api/souls/{soul_id}/chat",

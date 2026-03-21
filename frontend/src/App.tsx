@@ -48,6 +48,11 @@ type SessionDetail = {
   messages: Array<Record<string, unknown>>;
 };
 
+type SessionShellState = {
+  cwd: string | null;
+  env: Record<string, string> | null;
+};
+
 type SoulPromptFile = {
   name: string;
   exists: boolean;
@@ -369,6 +374,16 @@ function renderMcpTypeLabel(value: string | null): string {
   return value || "unknown";
 }
 
+function formatEnvEntries(env: Record<string, string> | null): string {
+  if (!env) {
+    return "";
+  }
+  return Object.entries(env)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n");
+}
+
 export default function App() {
   const [souls, setSouls] = useState<Soul[]>([]);
   const [selectedSoulId, setSelectedSoulId] = useState<string>("");
@@ -379,6 +394,7 @@ export default function App() {
   const [createMcpServerName, setCreateMcpServerName] = useState("");
   const [createSessionKey, setCreateSessionKey] = useState("");
   const [sessionDetail, setSessionDetail] = useState<SessionDetail | null>(null);
+  const [sessionShellState, setSessionShellState] = useState<SessionShellState | null>(null);
   const [sessionKey, setSessionKey] = useState<string | null>(null);
   const [socketEpoch, setSocketEpoch] = useState(0);
   const [chatInput, setChatInput] = useState("");
@@ -423,6 +439,7 @@ export default function App() {
       setPromptFiles([]);
       setPromptDraft(getEmptyPromptDraft());
       setSessionDetail(null);
+      setSessionShellState(null);
       setSessionKey(null);
       setChatContent("");
       setChatReasoning("");
@@ -439,6 +456,7 @@ export default function App() {
       setPromptFiles([]);
       setPromptDraft(getEmptyPromptDraft());
       setSessionDetail(null);
+      setSessionShellState(null);
       setSessionKey(null);
       setIsEditingSoul(false);
       setIsEditingPromptFiles(false);
@@ -523,6 +541,7 @@ export default function App() {
     setIsEditingPromptFiles(false);
     setSoulError("");
     setSessionDetail(null);
+    setSessionShellState(null);
     setSessionKey(null);
     setChatContent("");
     setChatReasoning("");
@@ -743,7 +762,11 @@ export default function App() {
         const detail = await api<SessionDetail>(
           `/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/sessions/${encodeURIComponent(key)}`,
         );
+        const shellState = await api<SessionShellState>(
+          `/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/sessions/${encodeURIComponent(key)}/shell-state`,
+        );
         setSessionDetail(detail);
+        setSessionShellState(shellState);
         setSessionKey(key);
         setChatContent("");
         setChatReasoning("");
@@ -775,6 +798,7 @@ export default function App() {
         last_consolidated: 0,
         messages: [],
       });
+      setSessionShellState({ cwd: null, env: null });
       setSessionKey(key);
       setCreateSessionKey("");
       setChatContent("");
@@ -936,6 +960,7 @@ export default function App() {
                 setSelectedSoulId("");
                 setSessions([]);
                 setSessionDetail(null);
+                setSessionShellState(null);
                 setSessionKey(null);
                 setChatContent("");
                 setChatReasoning("");
@@ -1699,6 +1724,23 @@ export default function App() {
               <code>{sessionKey}</code>
             </div>
           </div>
+
+          <section className="shell-state-box">
+            <div className="panel-head">
+              <h3>Shell state</h3>
+              {sessionShellState?.cwd || sessionShellState?.env ? <span className="pill idle">persisted</span> : null}
+            </div>
+            <div className="shell-state-grid">
+              <article className="override-card">
+                <span>cwd</span>
+                <strong>{sessionShellState?.cwd ?? "default workspace"}</strong>
+              </article>
+              <details className="message-card shell-env-card">
+                <summary>env{sessionShellState?.env ? ` (${Object.keys(sessionShellState.env).length})` : ""}</summary>
+                <pre>{sessionShellState?.env ? formatEnvEntries(sessionShellState.env) : "default process environment"}</pre>
+              </details>
+            </div>
+          </section>
 
           <article className="finalized-box">
             <div className="panel-head">
