@@ -1,0 +1,12 @@
+[Unit]
+Description=Create soulboard tmux session
+After=default.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/claw/nanobot-soulboard
+ExecStart=/home/claw/nanobot-soulboard/recreate_tmux_session.sh --no-attach
+RemainAfterExit=yes
+
+[Install]
+WantedBy=default.target
