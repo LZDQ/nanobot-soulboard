@@ -315,6 +315,15 @@ function renderContent(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
 
+function summarizeToolResult(value: unknown): string {
+  const content = renderContent(value).trim();
+  if (!content) {
+    return "empty";
+  }
+  const singleLine = content.replace(/\s+/g, " ");
+  return singleLine.length > 96 ? `${singleLine.slice(0, 96)}...` : singleLine;
+}
+
 function renderOverrideValue(value: string | string[] | boolean | null | undefined): string {
   if (typeof value === "boolean") {
     return value ? "enabled" : "disabled";
@@ -1803,6 +1812,7 @@ export default function App() {
                 const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : null;
                 const content = "content" in message ? message.content : null;
                 const reasoning = getMessageReasoning(message);
+                const renderedContent = renderContent(content) || "(empty)";
                 return (
                 <div key={`${role}-${index}`} className="message-card">
                   <div className="message-head">
@@ -1816,7 +1826,14 @@ export default function App() {
                     </details>
                   ) : null}
                   {toolCalls ? <pre>{JSON.stringify(toolCalls, null, 2)}</pre> : null}
-                  <pre>{renderContent(content) || "(empty)"}</pre>
+                  {role === "tool" ? (
+                    <details className="tool-result-details">
+                      <summary>Result: {summarizeToolResult(content)}</summary>
+                      <pre>{renderedContent}</pre>
+                    </details>
+                  ) : (
+                    <pre>{renderedContent}</pre>
+                  )}
                 </div>
                 );
               })}

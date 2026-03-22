@@ -515,6 +515,22 @@ label span {
   margin-bottom: 0.5rem;
 }
 
+.tool-result-details {
+  border: 1px solid rgba(85, 52, 25, 0.08);
+  border-radius: 18px;
+  background: rgba(255, 248, 240, 0.88);
+  padding: 0.8rem 0.9rem;
+}
+
+.tool-result-details summary {
+  margin-bottom: 0;
+  font-weight: 600;
+}
+
+.tool-result-details[open] summary {
+  margin-bottom: 0.75rem;
+}
+
 .md-file-list {
   display: grid;
   gap: 0.75rem;
