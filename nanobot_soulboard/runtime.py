@@ -14,14 +14,18 @@ from typing import Any, Awaitable, Callable
 from loguru import logger
 from nanobot.agent.context import ContextBuilder
 from nanobot.agent.loop import AgentLoop
+from nanobot.agent.tools.cron import CronTool
 from nanobot.agent.tools.message import MessageTool
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.manager import ChannelManager
 from nanobot.config.loader import save_config
 from nanobot.config.schema import Config, MCPServerConfig
+from nanobot.cron.service import CronService
+from nanobot.cron.types import CronJob
 from nanobot.providers.base import LLMProvider
 from nanobot.session.manager import Session, SessionManager
+from nanobot.utils.evaluator import evaluate_response
 
 from nanobot_soulboard.config import (
     SoulOverrides,
@@ -493,6 +497,8 @@ class SoulSupervisor:
         self.base_config_path = base_config_path
         self.provider_factory = provider_factory
         self._running_souls: dict[str, _RunningSoul] = {}
+        self._cron = CronService(self.nano_root / "cron" / "jobs.json", on_job=self._on_cron_job)
+        self._cron_started = False
 
     def list_specs(self) -> list[SoulSpec]:
         """List all resolved soul specs."""
@@ -613,6 +619,61 @@ class SoulSupervisor:
             raise KeyError(f"Soul is not running: {soul_id}")
         return running.agent_loop
 
+    def _pick_cron_running_soul(self) -> _RunningSoul:
+        """Resolve which running soul should execute a scheduled cron job."""
+        if len(self._running_souls) != 1:
+            raise RuntimeError("Cron execution in soulboard requires exactly one running soul")
+        return next(iter(self._running_souls.values()))
+
+    async def _on_cron_job(self, job: CronJob) -> str | None:
+        """Execute one cron job through the currently running soul."""
+        running = self._pick_cron_running_soul()
+        agent = running.agent_loop
+
+        reminder_note = (
+            "[Scheduled Task] Timer finished.\n\n"
+            f"Task '{job.name}' has been triggered.\n"
+            f"Scheduled instruction: {job.payload.message}"
+        )
+
+        cron_tool = agent.tools.get("cron")
+        cron_token = None
+        if isinstance(cron_tool, CronTool):
+            cron_token = cron_tool.set_cron_context(True)
+        try:
+            resp = await agent.process_direct(
+                reminder_note,
+                session_key=f"cron:{job.id}",
+                channel=job.payload.channel or "cli",
+                chat_id=job.payload.to or "direct",
+            )
+        finally:
+            if isinstance(cron_tool, CronTool) and cron_token is not None:
+                cron_tool.reset_cron_context(cron_token)
+
+        response = resp.content if resp else ""
+
+        message_tool = agent.tools.get("message")
+        if isinstance(message_tool, MessageTool) and message_tool._sent_in_turn:
+            return response
+
+        if job.payload.deliver and job.payload.to and response:
+            should_notify = await evaluate_response(
+                response,
+                job.payload.message,
+                running.provider,
+                agent.model,
+            )
+            if should_notify:
+                await running.bus.publish_outbound(
+                    OutboundMessage(
+                        channel=job.payload.channel or "cli",
+                        chat_id=job.payload.to,
+                        content=response,
+                    )
+                )
+        return response
+
     def _build_running_soul(self, soul_id: str) -> _RunningSoul:
         """Construct supervisor-owned runtime state without starting it."""
         if self.provider_factory is None:
@@ -638,6 +699,7 @@ class SoulSupervisor:
             web_search_config=config.tools.web.search,
             web_proxy=config.tools.web.proxy or None,
             exec_config=config.tools.exec,
+            cron_service=self._cron,
             restrict_to_workspace=config.tools.restrict_to_workspace,
             session_manager=session_manager,
             mcp_servers=config.tools.mcp_servers,
@@ -662,6 +724,9 @@ class SoulSupervisor:
         if running is None:
             running = self._build_running_soul(soul_id)
             self._running_souls[soul_id] = running
+        if not self._cron_started:
+            await self._cron.start()
+            self._cron_started = True
         if not running.agent_task or running.agent_task.done():
             running.agent_task = asyncio.create_task(running.agent_loop.run())
         if running.channel_manager.enabled_channels and (
@@ -691,8 +756,14 @@ class SoulSupervisor:
             running.channels_task.cancel()
             await asyncio.gather(running.channels_task, return_exceptions=True)
         await running.channel_manager.stop_all()
+        if not self._running_souls and self._cron_started:
+            self._cron.stop()
+            self._cron_started = False
 
     async def stop_all(self) -> None:
         """Stop all running souls."""
         for soul_id in list(self._running_souls):
             await self.stop_soul(soul_id)
+        if self._cron_started:
+            self._cron.stop()
+            self._cron_started = False

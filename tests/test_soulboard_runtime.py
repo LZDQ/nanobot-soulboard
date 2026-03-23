@@ -408,3 +408,22 @@ def test_start_autostart_souls_starts_only_marked_souls(tmp_path: Path) -> None:
     assert supervisor.is_running("beta") is False
 
     asyncio.run(supervisor.stop_all())
+
+
+def test_start_soul_registers_cron_tool(tmp_path: Path) -> None:
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    provider_factory = MagicMock(return_value=provider)
+    supervisor = SoulSupervisor(
+        base_config=Config(),
+        nano_root=tmp_path,
+        soulboard_config=SoulboardConfig(souls={"alpha": SoulOverrides()}),
+        provider_factory=provider_factory,
+    )
+
+    loop = asyncio.run(supervisor.start_soul("alpha"))
+
+    assert loop.tools.has("cron") is True
+    assert supervisor._cron_started is True
+
+    asyncio.run(supervisor.stop_all())
