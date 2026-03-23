@@ -11,7 +11,7 @@ from nanobot_soulboard.config import (
     validate_soul_id,
 )
 from nanobot_soulboard.context import SoulboardContextBuilder
-from nanobot_soulboard.providers import make_provider
+from nanobot.cli.commands import _make_provider as make_provider
 from nanobot_soulboard.runtime import (
     SoulAgentLoop,
     SoulSpec,

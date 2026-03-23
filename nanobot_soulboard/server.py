@@ -15,10 +15,10 @@ from pydantic import BaseModel, Field
 
 from nanobot.config.loader import load_config
 from nanobot.config.schema import MCPServerConfig
+from nanobot.cli.commands import _make_provider as make_provider
 from nanobot.utils.helpers import sync_workspace_templates
 
 from nanobot_soulboard.config import SoulOverrides, load_soulboard_config
-from nanobot_soulboard.providers import make_provider
 from nanobot_soulboard.runtime import SOUL_PROMPT_FILES, SoulAgentLoop, SoulSessionManager, SoulSpec, SoulSupervisor
 
 
