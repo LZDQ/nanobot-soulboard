@@ -22,7 +22,7 @@ from nanobot.channels.manager import ChannelManager
 from nanobot.config.loader import save_config
 from nanobot.config.schema import Config, MCPServerConfig
 from nanobot.cron.service import CronService
-from nanobot.cron.types import CronJob, CronSchedule
+from nanobot.cron.types import CronJob, CronJobState, CronPayload, CronRunRecord, CronSchedule, CronStore
 from nanobot.providers.base import LLMProvider
 from nanobot.session.manager import Session, SessionManager
 
@@ -473,39 +473,138 @@ class SoulSessionManager(SessionManager):
 class SoulCronService(CronService):
     """Per-soul cron service that persists the originating session key for each job."""
 
-    def __init__(self, store_path: Path, *, session_keys_path: Path | None = None):
+    def __init__(self, store_path: Path):
         super().__init__(store_path)
-        self.session_keys_path = session_keys_path or store_path.with_name("session-keys.json")
         self._session_keys: dict[str, str] | None = None
 
-    def _load_session_keys(self) -> dict[str, str]:
-        if self._session_keys is not None:
-            return self._session_keys
-        if self.session_keys_path.exists():
+    def _load_store(self) -> CronStore:
+        """Load jobs from disk, including soulboard-only session keys stored per job."""
+        if self._store and self.store_path.exists():
+            mtime = self.store_path.stat().st_mtime
+            if mtime != self._last_mtime:
+                logger.info("Cron: jobs.json modified externally, reloading")
+                self._store = None
+                self._session_keys = None
+        if self._store:
+            if self._session_keys is None:
+                self._session_keys = {}
+            return self._store
+
+        self._session_keys = {}
+        if self.store_path.exists():
             try:
-                data = json.loads(self.session_keys_path.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    self._session_keys = {str(key): str(value) for key, value in data.items()}
-                else:
-                    self._session_keys = {}
+                data = json.loads(self.store_path.read_text(encoding="utf-8"))
+                jobs = []
+                for j in data.get("jobs", []):
+                    job = CronJob(
+                        id=j["id"],
+                        name=j["name"],
+                        enabled=j.get("enabled", True),
+                        schedule=CronSchedule(
+                            kind=j["schedule"]["kind"],
+                            at_ms=j["schedule"].get("atMs"),
+                            every_ms=j["schedule"].get("everyMs"),
+                            expr=j["schedule"].get("expr"),
+                            tz=j["schedule"].get("tz"),
+                        ),
+                        payload=CronPayload(
+                            kind=j["payload"].get("kind", "agent_turn"),
+                            message=j["payload"].get("message", ""),
+                            deliver=j["payload"].get("deliver", False),
+                            channel=j["payload"].get("channel"),
+                            to=j["payload"].get("to"),
+                        ),
+                        state=CronJobState(
+                            next_run_at_ms=j.get("state", {}).get("nextRunAtMs"),
+                            last_run_at_ms=j.get("state", {}).get("lastRunAtMs"),
+                            last_status=j.get("state", {}).get("lastStatus"),
+                            last_error=j.get("state", {}).get("lastError"),
+                            run_history=[
+                                CronRunRecord(
+                                    run_at_ms=r["runAtMs"],
+                                    status=r["status"],
+                                    duration_ms=r.get("durationMs", 0),
+                                    error=r.get("error"),
+                                )
+                                for r in j.get("state", {}).get("runHistory", [])
+                            ],
+                        ),
+                        created_at_ms=j.get("createdAtMs", 0),
+                        updated_at_ms=j.get("updatedAtMs", 0),
+                        delete_after_run=j.get("deleteAfterRun", False),
+                    )
+                    jobs.append(job)
+                    session_key = j.get("sessionKey")
+                    if isinstance(session_key, str) and session_key:
+                        self._session_keys[job.id] = session_key
+                self._store = CronStore(jobs=jobs)
             except Exception as exc:
-                logger.warning("Failed to load cron session key index: {}", exc)
+                logger.warning("Failed to load cron store: {}", exc)
+                self._store = CronStore()
                 self._session_keys = {}
         else:
+            self._store = CronStore()
             self._session_keys = {}
-        return self._session_keys
 
-    def _save_session_keys(self) -> None:
-        if self._session_keys is None:
+        return self._store
+
+    def _save_store(self) -> None:
+        """Save jobs to disk, including soulboard-only session keys per job."""
+        if not self._store:
             return
-        self.session_keys_path.parent.mkdir(parents=True, exist_ok=True)
-        self.session_keys_path.write_text(
-            json.dumps(self._session_keys, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+
+        self.store_path.parent.mkdir(parents=True, exist_ok=True)
+        session_keys = self._session_keys or {}
+        data = {
+            "version": self._store.version,
+            "jobs": [
+                {
+                    "id": job.id,
+                    "name": job.name,
+                    "enabled": job.enabled,
+                    "schedule": {
+                        "kind": job.schedule.kind,
+                        "atMs": job.schedule.at_ms,
+                        "everyMs": job.schedule.every_ms,
+                        "expr": job.schedule.expr,
+                        "tz": job.schedule.tz,
+                    },
+                    "payload": {
+                        "kind": job.payload.kind,
+                        "message": job.payload.message,
+                        "deliver": job.payload.deliver,
+                        "channel": job.payload.channel,
+                        "to": job.payload.to,
+                    },
+                    "state": {
+                        "nextRunAtMs": job.state.next_run_at_ms,
+                        "lastRunAtMs": job.state.last_run_at_ms,
+                        "lastStatus": job.state.last_status,
+                        "lastError": job.state.last_error,
+                        "runHistory": [
+                            {
+                                "runAtMs": run.run_at_ms,
+                                "status": run.status,
+                                "durationMs": run.duration_ms,
+                                "error": run.error,
+                            }
+                            for run in job.state.run_history
+                        ],
+                    },
+                    "createdAtMs": job.created_at_ms,
+                    "updatedAtMs": job.updated_at_ms,
+                    "deleteAfterRun": job.delete_after_run,
+                    "sessionKey": session_keys.get(job.id),
+                }
+                for job in self._store.jobs
+            ],
+        }
+        self.store_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        self._last_mtime = self.store_path.stat().st_mtime
 
     def get_session_key(self, job_id: str) -> str | None:
-        return self._load_session_keys().get(job_id)
+        self._load_store()
+        return (self._session_keys or {}).get(job_id)
 
     def add_job(
         self,
@@ -529,20 +628,25 @@ class SoulCronService(CronService):
             delete_after_run=delete_after_run,
         )
         if session_key:
-            self._load_session_keys()[job.id] = session_key
-            self._save_session_keys()
+            self._load_store()
+            assert self._session_keys is not None
+            self._session_keys[job.id] = session_key
+            self._save_store()
         return job
 
     def remove_job(self, job_id: str) -> bool:
         removed = super().remove_job(job_id)
         if removed:
-            self._load_session_keys().pop(job_id, None)
-            self._save_session_keys()
+            self._load_store()
+            if self._session_keys is not None:
+                self._session_keys.pop(job_id, None)
+                self._save_store()
         return removed
 
     def list_jobs_with_session_keys(self, include_disabled: bool = False) -> list[tuple[CronJob, str | None]]:
         """List jobs paired with the session key that created them."""
-        session_keys = self._load_session_keys()
+        self._load_store()
+        session_keys = self._session_keys or {}
         return [(job, session_keys.get(job.id)) for job in self.list_jobs(include_disabled=include_disabled)]
 
 
@@ -557,6 +661,28 @@ class SoulCronTool(CronTool):
     def set_context(self, channel: str, chat_id: str, session_key: str | None = None) -> None:
         super().set_context(channel, chat_id)
         self._session_key = session_key or ""
+
+    @property
+    def description(self) -> str:
+        return (
+            "Schedule reminders and recurring tasks. Actions: add, list, remove. "
+            "For add, 'message' is the content that the future cron job will inject back into the agent loop "
+            "when it runs, not an immediate reply to the current user."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        params = dict(super().parameters)
+        properties = dict(params.get("properties", {}))
+        properties["message"] = {
+            "type": "string",
+            "description": (
+                "Content that the scheduled job will send back into the agent loop when it fires "
+                "(for add). This becomes the future cron-triggered input, not an immediate user reply."
+            ),
+        }
+        params["properties"] = properties
+        return params
 
     def _add_job(
         self,
@@ -824,6 +950,12 @@ class SoulSupervisor:
             session_key = cron_service.get_session_key(job.id) or f"{job.payload.channel or 'cli'}:{job.payload.to or 'direct'}"
             channel = job.payload.channel or "cli"
             chat_id = job.payload.to or "direct"
+            fired_at = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
+            cron_content = (
+                f"System: cron job {job.name!r} fired. "
+                f"Job message: {job.payload.message!r}. "
+                f"Datetime: {fired_at}"
+            )
             cron_tool = running.agent_loop.tools.get("cron")
             cron_token = None
             if isinstance(cron_tool, CronTool):
@@ -834,7 +966,7 @@ class SoulSupervisor:
                         channel="system",
                         sender_id="cron",
                         chat_id=f"{channel}:{chat_id}",
-                        content=job.payload.message,
+                        content=cron_content,
                         metadata={"_system_session_key": session_key},
                     )
                 )

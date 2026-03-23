@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -447,3 +448,6 @@ def test_soul_cron_service_persists_origin_session_key(tmp_path: Path) -> None:
     reloaded = SoulCronService(tmp_path / "cron" / "jobs.json")
 
     assert reloaded.get_session_key(job.id) == "napcat:42:topic"
+    assert not (tmp_path / "cron" / "session-keys.json").exists()
+    stored = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))
+    assert stored["jobs"][0]["sessionKey"] == "napcat:42:topic"
