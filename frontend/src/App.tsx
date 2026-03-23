@@ -150,6 +150,16 @@ function getEmptyPromptDraft(): SoulPromptDraft {
   };
 }
 
+function getEmptyPromptSelection(): Record<SoulPromptFileName, boolean> {
+  return {
+    "AGENTS.md": false,
+    "SOUL.md": false,
+    "USER.md": false,
+    "TOOLS.md": false,
+    "SYSTEM.md": false,
+  };
+}
+
 function getEmptyMcpDraft(): MCPServerDraft {
   return {
     type: "stdio",
@@ -380,6 +390,16 @@ function promptFilesToDraft(files: SoulPromptFile[]): SoulPromptDraft {
   return draft;
 }
 
+function promptFilesToSelection(files: SoulPromptFile[]): Record<SoulPromptFileName, boolean> {
+  const selection = getEmptyPromptSelection();
+  for (const file of files) {
+    if (file.name in selection) {
+      selection[file.name as SoulPromptFileName] = file.exists;
+    }
+  }
+  return selection;
+}
+
 function getMessageReasoning(message: Record<string, unknown>): string {
   return typeof message.reasoning_content === "string" ? message.reasoning_content : "";
 }
@@ -478,6 +498,7 @@ export default function App() {
   const [mcpDraft, setMcpDraft] = useState<MCPServerDraft>(getEmptyMcpDraft());
   const [createMcpDraft, setCreateMcpDraft] = useState<MCPServerDraft>(getEmptyMcpDraft());
   const [promptDraft, setPromptDraft] = useState<SoulPromptDraft>(getEmptyPromptDraft());
+  const [promptSelection, setPromptSelection] = useState<Record<SoulPromptFileName, boolean>>(getEmptyPromptSelection());
   const [isEditingSoul, setIsEditingSoul] = useState(false);
   const [isEditingPromptFiles, setIsEditingPromptFiles] = useState(false);
   const [isCreatingSoul, setIsCreatingSoul] = useState(false);
@@ -502,6 +523,7 @@ export default function App() {
       setPromptFiles([]);
       setCronJobs(null);
       setPromptDraft(getEmptyPromptDraft());
+      setPromptSelection(getEmptyPromptSelection());
       setSessionDetail(null);
       setSessionShellState(null);
       setSessionKey(null);
@@ -520,6 +542,7 @@ export default function App() {
       setPromptFiles([]);
       setCronJobs(null);
       setPromptDraft(getEmptyPromptDraft());
+      setPromptSelection(getEmptyPromptSelection());
       setSessionDetail(null);
       setSessionShellState(null);
       setSessionKey(null);
@@ -546,11 +569,12 @@ export default function App() {
     setSessions(nextSessions);
   }
 
-  async function refreshPromptFiles(soulId: string): Promise<void> {
+  async function refreshPromptFiles(soulId: string, resetDraft = false): Promise<void> {
     const response = await api<SoulPromptFilesResponse>(`/api/souls/${encodeURIComponent(soulId)}/prompt-files`);
     setPromptFiles(response.files);
-    if (!isEditingPromptFiles) {
+    if (!isEditingPromptFiles || resetDraft) {
       setPromptDraft(promptFilesToDraft(response.files));
+      setPromptSelection(promptFilesToSelection(response.files));
     }
   }
 
@@ -609,6 +633,7 @@ export default function App() {
     setPromptFiles([]);
     setCronJobs(null);
     setPromptDraft(getEmptyPromptDraft());
+    setPromptSelection(getEmptyPromptSelection());
     setIsEditingPromptFiles(false);
     setSoulError("");
     setSessionDetail(null);
@@ -771,7 +796,7 @@ export default function App() {
         const response = await api<SoulPromptFilesResponse>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/prompt-files`, {
           method: "PATCH",
           body: JSON.stringify({
-            files: SOUL_PROMPT_FILE_NAMES.map((name) => ({
+            files: SOUL_PROMPT_FILE_NAMES.filter((name) => promptSelection[name]).map((name) => ({
               name,
               content: promptDraft[name],
             })),
@@ -784,6 +809,7 @@ export default function App() {
         }
         setPromptFiles(response.files);
         setPromptDraft(promptFilesToDraft(response.files));
+        setPromptSelection(promptFilesToSelection(response.files));
         await refreshSouls(selectedSoul.soul_id);
         setIsEditingPromptFiles(false);
       });
@@ -830,6 +856,9 @@ export default function App() {
 
   async function deleteSoul() {
     if (!selectedSoul) {
+      return;
+    }
+    if (!window.confirm(`Delete soul ${selectedSoul.soul_id}?`)) {
       return;
     }
     const soulId = selectedSoul.soul_id;
@@ -1384,6 +1413,20 @@ export default function App() {
                 <section className="subpanel">
                   <div className="panel-head">
                     <h3>Cron jobs</h3>
+                    <button
+                      className="ghost"
+                      onClick={() => {
+                        if (!selectedSoul) {
+                          return;
+                        }
+                        void refreshCronJobs(selectedSoul.soul_id).catch((cause) => {
+                          notifyError(cause);
+                        });
+                      }}
+                      disabled={!!pending || !selectedSoul}
+                    >
+                      Refresh
+                    </button>
                   </div>
 
                   {cronJobs === null ? (
@@ -1412,34 +1455,55 @@ export default function App() {
                 <section className="subpanel">
                   <div className="panel-head">
                     <h3>Prompt files</h3>
-                    {isEditingPromptFiles ? (
-                      <div className="action-row">
+                    <div className="action-row">
+                      <button
+                        className="ghost"
+                        onClick={() => {
+                          if (!selectedSoul) {
+                            return;
+                          }
+                          void refreshPromptFiles(selectedSoul.soul_id, true).catch((cause) => {
+                            notifyError(cause);
+                          });
+                        }}
+                        disabled={!!pending || !selectedSoul}
+                      >
+                        Refresh
+                      </button>
+                      {isEditingPromptFiles ? (
+                        <>
+                          <button
+                            className="ghost"
+                            onClick={() => {
+                              setPromptDraft(promptFilesToDraft(promptFiles));
+                              setPromptSelection(promptFilesToSelection(promptFiles));
+                              setIsEditingPromptFiles(false);
+                            }}
+                            disabled={!!pending}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={() => void updatePromptFiles()}
+                            disabled={!!pending || !promptFiles.length || !SOUL_PROMPT_FILE_NAMES.some((name) => promptSelection[name])}
+                          >
+                            {selectedSoul.running ? "Save & Restart" : "Save"}
+                          </button>
+                        </>
+                      ) : (
                         <button
                           className="ghost"
                           onClick={() => {
                             setPromptDraft(promptFilesToDraft(promptFiles));
-                            setIsEditingPromptFiles(false);
+                            setPromptSelection(promptFilesToSelection(promptFiles));
+                            setIsEditingPromptFiles(true);
                           }}
-                          disabled={!!pending}
+                          disabled={!!pending || !promptFiles.length}
                         >
-                          Cancel
+                          Edit
                         </button>
-                        <button onClick={() => void updatePromptFiles()} disabled={!!pending || !promptFiles.length}>
-                          {selectedSoul.running ? "Save & Restart" : "Save"}
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        className="ghost"
-                        onClick={() => {
-                          setPromptDraft(promptFilesToDraft(promptFiles));
-                          setIsEditingPromptFiles(true);
-                        }}
-                        disabled={!!pending || !promptFiles.length}
-                      >
-                        Edit
-                      </button>
-                    )}
+                      )}
+                    </div>
                   </div>
 
                   <div className="md-file-list">
@@ -1448,13 +1512,43 @@ export default function App() {
                         const file = promptFiles.find((item) => item.name === name);
                         const exists = file?.exists ?? false;
                         const content = isEditingPromptFiles ? promptDraft[name] : (file?.content ?? "");
+                        const selected = promptSelection[name];
+                        const toggleSelection = () => {
+                          setPromptSelection((current) => ({
+                            ...current,
+                            [name]: !current[name],
+                          }));
+                        };
                         return (
-                          <details key={name} className="md-file">
-                            <summary>
-                              <span>{name}</span>
+                          <details key={name} className="md-file" open={isEditingPromptFiles ? selected : undefined}>
+                            <summary
+                              onClick={
+                                isEditingPromptFiles
+                                  ? (event) => {
+                                      event.preventDefault();
+                                      toggleSelection();
+                                    }
+                                  : undefined
+                              }
+                            >
+                              <span className={`md-file-title ${isEditingPromptFiles ? "editable" : ""}`}>
+                                {isEditingPromptFiles ? (
+                                  <input
+                                    type="checkbox"
+                                    checked={selected}
+                                    onChange={() => {
+                                      toggleSelection();
+                                    }}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                    }}
+                                  />
+                                ) : null}
+                                <span>{name}</span>
+                              </span>
                               <span className={`pill ${exists ? "live" : "idle"}`}>{exists ? "present" : "missing"}</span>
                             </summary>
-                            {isEditingPromptFiles ? (
+                            {isEditingPromptFiles && selected ? (
                               <label>
                                 <span>{name}</span>
                                 <textarea
@@ -1468,6 +1562,8 @@ export default function App() {
                                   placeholder={`Enter ${name} content`}
                                 />
                               </label>
+                            ) : isEditingPromptFiles ? (
+                              <p className="muted">Enable this file to edit and include it in the save payload.</p>
                             ) : content ? (
                               <pre>{content}</pre>
                             ) : (
