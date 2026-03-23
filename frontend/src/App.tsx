@@ -63,6 +63,35 @@ type SoulPromptFilesResponse = {
   files: SoulPromptFile[];
 };
 
+type CronJobSchedule = {
+  kind: string;
+  at_ms: number | null;
+  every_ms: number | null;
+  expr: string | null;
+  tz: string | null;
+};
+
+type CronJobState = {
+  next_run_at_ms: number | null;
+  last_run_at_ms: number | null;
+  last_status: string | null;
+  last_error: string | null;
+};
+
+type CronJob = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  delete_after_run: boolean;
+  message: string;
+  deliver: boolean;
+  channel: string | null;
+  chat_id: string | null;
+  session_key: string | null;
+  schedule: CronJobSchedule;
+  state: CronJobState;
+};
+
 type StreamResetMessage = {
   type: "reset";
   content: string | null;
@@ -393,12 +422,37 @@ function formatEnvEntries(env: Record<string, string> | null): string {
     .join("\n");
 }
 
+function formatTimestampMs(value: number | null): string {
+  return value ? new Date(value).toLocaleString() : "none";
+}
+
+function formatCronSchedule(schedule: CronJobSchedule): string {
+  if (schedule.kind === "every" && schedule.every_ms) {
+    const seconds = schedule.every_ms / 1000;
+    if (seconds % 3600 === 0) {
+      return `every ${seconds / 3600}h`;
+    }
+    if (seconds % 60 === 0) {
+      return `every ${seconds / 60}m`;
+    }
+    return `every ${seconds}s`;
+  }
+  if (schedule.kind === "cron" && schedule.expr) {
+    return schedule.tz ? `${schedule.expr} (${schedule.tz})` : schedule.expr;
+  }
+  if (schedule.kind === "at" && schedule.at_ms) {
+    return `at ${formatTimestampMs(schedule.at_ms)}`;
+  }
+  return schedule.kind;
+}
+
 export default function App() {
   const [souls, setSouls] = useState<Soul[]>([]);
   const [selectedSoulId, setSelectedSoulId] = useState<string>("");
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [mcpServers, setMcpServers] = useState<MCPServer[]>([]);
   const [promptFiles, setPromptFiles] = useState<SoulPromptFile[]>([]);
+  const [cronJobs, setCronJobs] = useState<CronJob[] | null>(null);
   const [selectedMcpServerName, setSelectedMcpServerName] = useState<string>("");
   const [createMcpServerName, setCreateMcpServerName] = useState("");
   const [createSessionKey, setCreateSessionKey] = useState("");
@@ -446,6 +500,7 @@ export default function App() {
       setSelectedSoulId("");
       setSessions([]);
       setPromptFiles([]);
+      setCronJobs(null);
       setPromptDraft(getEmptyPromptDraft());
       setSessionDetail(null);
       setSessionShellState(null);
@@ -463,6 +518,7 @@ export default function App() {
       setSelectedSoulId("");
       setSessions([]);
       setPromptFiles([]);
+      setCronJobs(null);
       setPromptDraft(getEmptyPromptDraft());
       setSessionDetail(null);
       setSessionShellState(null);
@@ -496,6 +552,11 @@ export default function App() {
     if (!isEditingPromptFiles) {
       setPromptDraft(promptFilesToDraft(response.files));
     }
+  }
+
+  async function refreshCronJobs(soulId: string): Promise<void> {
+    const response = await api<CronJob[]>(`/api/souls/${encodeURIComponent(soulId)}/cron-jobs`);
+    setCronJobs(response);
   }
 
   async function refreshMcpServers(preferredName?: string): Promise<void> {
@@ -546,6 +607,7 @@ export default function App() {
     setIsEditingSoul(false);
     setIsCreatingSoul(false);
     setPromptFiles([]);
+    setCronJobs(null);
     setPromptDraft(getEmptyPromptDraft());
     setIsEditingPromptFiles(false);
     setSoulError("");
@@ -562,6 +624,9 @@ export default function App() {
       notifyError(cause);
     });
     void refreshPromptFiles(selectedSoul.soul_id).catch((cause) => {
+      notifyError(cause);
+    });
+    void refreshCronJobs(selectedSoul.soul_id).catch((cause) => {
       notifyError(cause);
     });
   }, [selectedSoul?.soul_id]);
@@ -1313,6 +1378,34 @@ export default function App() {
                         <strong>{selectedSoul.running ? "running" : "stopped"}</strong>
                       </article>
                     </div>
+                  )}
+                </section>
+
+                <section className="subpanel">
+                  <div className="panel-head">
+                    <h3>Cron jobs</h3>
+                  </div>
+
+                  {cronJobs === null ? (
+                    <p className="muted">Loading cron jobs…</p>
+                  ) : cronJobs.length ? (
+                    <div className="session-list">
+                      {cronJobs.map((job) => (
+                        <article key={job.id} className="session-card">
+                          <strong>{job.name}</strong>
+                          <span>{formatCronSchedule(job.schedule)}</span>
+                          <code>{job.session_key || "no session"}</code>
+                          <span>
+                            {job.enabled ? "enabled" : "disabled"}
+                            {job.state.last_status ? ` · last ${job.state.last_status}` : ""}
+                          </span>
+                          <span>next {formatTimestampMs(job.state.next_run_at_ms)}</span>
+                          <p>{job.message}</p>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="muted">No cron jobs found for this soul.</p>
                   )}
                 </section>
 

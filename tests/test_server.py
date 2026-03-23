@@ -4,7 +4,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 from fastapi.testclient import TestClient
 
+from nanobot.cron.types import CronSchedule
 from nanobot_soulboard.server import create_app
+from nanobot_soulboard.runtime import SoulCronService
 
 
 def _write_json(path: Path, data: dict) -> None:
@@ -313,6 +315,62 @@ def test_server_reads_and_updates_soul_prompt_files(monkeypatch, tmp_path: Path)
 
         assert (workspace / "SOUL.md").read_text(encoding="utf-8") == "# Soul profile\n"
         assert (workspace / "TOOLS.md").read_text(encoding="utf-8") == "# Tool hints\n"
+
+
+def test_server_lists_soul_cron_jobs(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("nanobot_soulboard.server.make_provider", lambda _config: MagicMock())
+    monkeypatch.setattr("nanobot_soulboard.server.sync_workspace_templates", lambda *_args, **_kwargs: [])
+
+    _write_json(tmp_path / "config.json", {})
+    _write_json(tmp_path / "soulboard" / "config.json", {"souls": {"alpha": {}}})
+
+    workspace = tmp_path / "soulboard" / "souls" / "alpha"
+    service = SoulCronService(workspace / "cron" / "jobs.json")
+    service.add_job(
+        name="Ping group",
+        schedule=CronSchedule(kind="every", every_ms=60_000),
+        message="daily ping",
+        deliver=True,
+        channel="napcat",
+        to="1064627451",
+        session_key="napcat:1064627451",
+    )
+
+    app = create_app(
+        nano_root=tmp_path,
+        base_config_path=tmp_path / "config.json",
+        soulboard_config_path=tmp_path / "soulboard" / "config.json",
+    )
+
+    with TestClient(app) as client:
+        listed = client.get("/api/souls/alpha/cron-jobs")
+        assert listed.status_code == 200
+        assert listed.json() == [
+            {
+                "id": listed.json()[0]["id"],
+                "name": "Ping group",
+                "enabled": True,
+                "delete_after_run": False,
+                "message": "daily ping",
+                "deliver": True,
+                "channel": "napcat",
+                "chat_id": "1064627451",
+                "session_key": "napcat:1064627451",
+                "schedule": {
+                    "kind": "every",
+                    "at_ms": None,
+                    "every_ms": 60000,
+                    "expr": None,
+                    "tz": None,
+                },
+                "state": {
+                    "next_run_at_ms": listed.json()[0]["state"]["next_run_at_ms"],
+                    "last_run_at_ms": None,
+                    "last_status": None,
+                    "last_error": None,
+                },
+            }
+        ]
 
 
 def test_server_lists_and_updates_mcp_servers(monkeypatch, tmp_path: Path) -> None:

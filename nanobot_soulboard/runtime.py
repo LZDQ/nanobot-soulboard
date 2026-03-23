@@ -540,6 +540,11 @@ class SoulCronService(CronService):
             self._save_session_keys()
         return removed
 
+    def list_jobs_with_session_keys(self, include_disabled: bool = False) -> list[tuple[CronJob, str | None]]:
+        """List jobs paired with the session key that created them."""
+        session_keys = self._load_session_keys()
+        return [(job, session_keys.get(job.id)) for job in self.list_jobs(include_disabled=include_disabled)]
+
 
 class SoulCronTool(CronTool):
     """Cron tool variant that remembers which session scheduled the job."""
@@ -759,6 +764,17 @@ class SoulSupervisor:
             raise KeyError(f"Soul is not running: {soul_id}")
         return running.agent_loop
 
+    def _build_cron_service(self, spec: SoulSpec) -> SoulCronService:
+        """Create a per-soul cron service rooted under the soul workspace."""
+        return SoulCronService(spec.workspace / "cron" / "jobs.json")
+
+    def list_cron_jobs(self, soul_id: str) -> list[tuple[CronJob, str | None]]:
+        """List one soul's cron jobs and their originating session keys."""
+        spec = self.get_spec(soul_id)
+        running = self._running_souls.get(soul_id)
+        service = running.cron_service if running is not None else self._build_cron_service(spec)
+        return service.list_jobs_with_session_keys(include_disabled=True)
+
     def _build_running_soul(self, soul_id: str) -> _RunningSoul:
         """Construct supervisor-owned runtime state without starting it."""
         if self.provider_factory is None:
@@ -768,7 +784,7 @@ class SoulSupervisor:
         config = build_runtime_config(self.base_config, spec)
         provider = self.provider_factory(config)
         bus = MessageBus()
-        cron_service = SoulCronService(spec.workspace / "cron" / "jobs.json")
+        cron_service = self._build_cron_service(spec)
         session_manager = SoulSessionManager(
             config.workspace_path,
             get_cwd=lambda: agent_loop._cwd,

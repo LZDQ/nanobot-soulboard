@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from nanobot.config.loader import load_config
 from nanobot.config.schema import MCPServerConfig
 from nanobot.cli.commands import _make_provider as make_provider
+from nanobot.cron.types import CronJob
 from nanobot.utils.helpers import sync_workspace_templates
 
 from nanobot_soulboard.config import SoulOverrides, load_soulboard_config
@@ -171,6 +172,41 @@ class SoulPromptFilesResponse(BaseModel):
     files: list[SoulPromptFileResponse]
 
 
+class CronJobScheduleResponse(BaseModel):
+    """One cron schedule definition."""
+
+    kind: str
+    at_ms: int | None = None
+    every_ms: int | None = None
+    expr: str | None = None
+    tz: str | None = None
+
+
+class CronJobStateResponse(BaseModel):
+    """One cron job runtime state snapshot."""
+
+    next_run_at_ms: int | None = None
+    last_run_at_ms: int | None = None
+    last_status: str | None = None
+    last_error: str | None = None
+
+
+class CronJobResponse(BaseModel):
+    """One soul cron job."""
+
+    id: str
+    name: str
+    enabled: bool
+    delete_after_run: bool
+    message: str
+    deliver: bool
+    channel: str | None = None
+    chat_id: str | None = None
+    session_key: str | None = None
+    schedule: CronJobScheduleResponse
+    state: CronJobStateResponse
+
+
 class UpdateSoulPromptFileRequest(BaseModel):
     """One prompt file replacement."""
 
@@ -285,6 +321,33 @@ def _build_prompt_files_response(files: dict[str, str | None]) -> SoulPromptFile
             SoulPromptFileResponse(name=name, exists=files[name] is not None, content=files[name] or "")
             for name in SOUL_PROMPT_FILES
         ]
+    )
+
+
+def _to_cron_job_response(job: CronJob, session_key: str | None) -> CronJobResponse:
+    return CronJobResponse(
+        id=job.id,
+        name=job.name,
+        enabled=job.enabled,
+        delete_after_run=job.delete_after_run,
+        message=job.payload.message,
+        deliver=job.payload.deliver,
+        channel=job.payload.channel,
+        chat_id=job.payload.to,
+        session_key=session_key,
+        schedule=CronJobScheduleResponse(
+            kind=job.schedule.kind,
+            at_ms=job.schedule.at_ms,
+            every_ms=job.schedule.every_ms,
+            expr=job.schedule.expr,
+            tz=job.schedule.tz,
+        ),
+        state=CronJobStateResponse(
+            next_run_at_ms=job.state.next_run_at_ms,
+            last_run_at_ms=job.state.last_run_at_ms,
+            last_status=job.state.last_status,
+            last_error=job.state.last_error,
+        ),
     )
 
 
@@ -554,6 +617,24 @@ def create_app(
         except KeyError as exc:
             _raise_not_found(_error_detail(exc))
         return _build_prompt_files_response(files)
+
+    @app.get(
+        "/api/souls/{soul_id}/cron-jobs",
+        response_model=list[CronJobResponse],
+        responses={404: {"model": ErrorResponse}},
+        summary="List Soul Cron Jobs",
+        description=(
+            "List one soul's persisted cron jobs from its workspace-local cron/jobs.json store, including the "
+            "originating session key that scheduled each job."
+        ),
+    )
+    def get_soul_cron_jobs(request: Request, soul_id: str) -> list[CronJobResponse]:
+        supervisor = _get_supervisor(request)
+        try:
+            jobs = supervisor.list_cron_jobs(soul_id)
+        except KeyError as exc:
+            _raise_not_found(_error_detail(exc))
+        return [_to_cron_job_response(job, session_key) for job, session_key in jobs]
 
     @app.patch(
         "/api/souls/{soul_id}/prompt-files",
