@@ -852,6 +852,8 @@ export default function App() {
           method: "POST",
         });
         await refreshSouls(selectedSoul.soul_id);
+        await refreshCronJobs(selectedSoul.soul_id);
+        await refreshPromptFiles(selectedSoul.soul_id, true);
       });
     } catch (cause) {
       notifyError(cause);
@@ -1435,7 +1437,7 @@ export default function App() {
                   <div className="panel-head">
                     <h3>Cron jobs</h3>
                     <div className="action-row">
-                      <label className="checkbox">
+                      <label className="check-tile cron-filter-toggle">
                         <input
                           type="checkbox"
                           checked={showOnlySelectedSessionCronJobs}

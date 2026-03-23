@@ -70,10 +70,27 @@ class SoulExecTool(Tool):
             except asyncio.TimeoutError:
                 process.kill()
                 try:
-                    await asyncio.wait_for(process.wait(), timeout=5.0)
+                    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=5.0)
                 except asyncio.TimeoutError:
-                    pass
-                return f"Error: Command timed out after {effective_timeout} seconds"
+                    stdout = b""
+                    stderr = b""
+                output_parts = []
+                if stdout:
+                    output_parts.append(stdout.decode("utf-8", errors="replace"))
+                if stderr:
+                    stderr_text = stderr.decode("utf-8", errors="replace")
+                    if stderr_text.strip():
+                        output_parts.append(f"STDERR:\n{stderr_text}")
+                output_parts.append(f"\nError: Command timed out after {effective_timeout} seconds")
+                result = "\n".join(output_parts) if output_parts else f"Error: Command timed out after {effective_timeout} seconds"
+                if len(result) > self._MAX_OUTPUT:
+                    half = self._MAX_OUTPUT // 2
+                    result = (
+                        result[:half]
+                        + f"\n\n... ({len(result) - self._MAX_OUTPUT:,} chars truncated) ...\n\n"
+                        + result[-half:]
+                    )
+                return result
 
             output_parts = []
             if stdout:
