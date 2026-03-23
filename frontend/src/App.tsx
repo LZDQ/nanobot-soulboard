@@ -390,14 +390,8 @@ function promptFilesToDraft(files: SoulPromptFile[]): SoulPromptDraft {
   return draft;
 }
 
-function promptFilesToSelection(files: SoulPromptFile[]): Record<SoulPromptFileName, boolean> {
-  const selection = getEmptyPromptSelection();
-  for (const file of files) {
-    if (file.name in selection) {
-      selection[file.name as SoulPromptFileName] = file.exists;
-    }
-  }
-  return selection;
+function promptFilesToSelection(): Record<SoulPromptFileName, boolean> {
+  return getEmptyPromptSelection();
 }
 
 function getMessageReasoning(message: Record<string, unknown>): string {
@@ -502,6 +496,7 @@ export default function App() {
   const [isEditingSoul, setIsEditingSoul] = useState(false);
   const [isEditingPromptFiles, setIsEditingPromptFiles] = useState(false);
   const [isCreatingSoul, setIsCreatingSoul] = useState(false);
+  const [showOnlySelectedSessionCronJobs, setShowOnlySelectedSessionCronJobs] = useState(true);
   const [mcpMode, setMcpMode] = useState<"view" | "edit" | "create">("view");
   const [socketState, setSocketState] = useState<"closed" | "connecting" | "open">("closed");
   const socketRef = useRef<WebSocket | null>(null);
@@ -511,6 +506,15 @@ export default function App() {
     () => souls.find((soul) => soul.soul_id === selectedSoulId) ?? null,
     [souls, selectedSoulId],
   );
+  const visibleCronJobs = useMemo(() => {
+    if (!cronJobs) {
+      return cronJobs;
+    }
+    if (!showOnlySelectedSessionCronJobs || !sessionKey) {
+      return cronJobs;
+    }
+    return cronJobs.filter((job) => job.session_key === sessionKey);
+  }, [cronJobs, sessionKey, showOnlySelectedSessionCronJobs]);
 
   async function refreshSouls(preferredSoulId?: string): Promise<void> {
     let nextSouls: Soul[];
@@ -574,7 +578,7 @@ export default function App() {
     setPromptFiles(response.files);
     if (!isEditingPromptFiles || resetDraft) {
       setPromptDraft(promptFilesToDraft(response.files));
-      setPromptSelection(promptFilesToSelection(response.files));
+      setPromptSelection(promptFilesToSelection());
     }
   }
 
@@ -809,7 +813,7 @@ export default function App() {
         }
         setPromptFiles(response.files);
         setPromptDraft(promptFilesToDraft(response.files));
-        setPromptSelection(promptFilesToSelection(response.files));
+        setPromptSelection(promptFilesToSelection());
         await refreshSouls(selectedSoul.soul_id);
         setIsEditingPromptFiles(false);
       });
@@ -900,6 +904,20 @@ export default function App() {
     }
   }
 
+  async function refreshSessionShellState() {
+    if (!selectedSoul || !sessionKey) {
+      return;
+    }
+    try {
+      const shellState = await api<SessionShellState>(
+        `/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/sessions/${encodeURIComponent(sessionKey)}/shell-state`,
+      );
+      setSessionShellState(shellState);
+    } catch (cause) {
+      notifyError(cause);
+    }
+  }
+
   async function createSession() {
     if (!selectedSoul) {
       return;
@@ -954,6 +972,9 @@ export default function App() {
       return;
     }
     const deletedName = selectedMcpServerName;
+    if (!window.confirm(`Delete MCP server ${deletedName}?`)) {
+      return;
+    }
     try {
       await runAction("mcp-delete", async () => {
         await api<void>(`/api/mcp-servers/${encodeURIComponent(deletedName)}`, {
@@ -1413,27 +1434,39 @@ export default function App() {
                 <section className="subpanel">
                   <div className="panel-head">
                     <h3>Cron jobs</h3>
-                    <button
-                      className="ghost"
-                      onClick={() => {
-                        if (!selectedSoul) {
-                          return;
-                        }
-                        void refreshCronJobs(selectedSoul.soul_id).catch((cause) => {
-                          notifyError(cause);
-                        });
-                      }}
-                      disabled={!!pending || !selectedSoul}
-                    >
-                      Refresh
-                    </button>
+                    <div className="action-row">
+                      <label className="checkbox">
+                        <input
+                          type="checkbox"
+                          checked={showOnlySelectedSessionCronJobs}
+                          onChange={(event) => {
+                            setShowOnlySelectedSessionCronJobs(event.target.checked);
+                          }}
+                        />
+                        <span>Only selected session</span>
+                      </label>
+                      <button
+                        className="ghost"
+                        onClick={() => {
+                          if (!selectedSoul) {
+                            return;
+                          }
+                          void refreshCronJobs(selectedSoul.soul_id).catch((cause) => {
+                            notifyError(cause);
+                          });
+                        }}
+                        disabled={!!pending || !selectedSoul}
+                      >
+                        Refresh
+                      </button>
+                    </div>
                   </div>
 
-                  {cronJobs === null ? (
+                  {visibleCronJobs === null ? (
                     <p className="muted">Loading cron jobs…</p>
-                  ) : cronJobs.length ? (
+                  ) : visibleCronJobs.length ? (
                     <div className="session-list">
-                      {cronJobs.map((job) => (
+                      {visibleCronJobs.map((job) => (
                         <article key={job.id} className="session-card">
                           <strong>{job.name}</strong>
                           <span>{formatCronSchedule(job.schedule)}</span>
@@ -1448,7 +1481,11 @@ export default function App() {
                       ))}
                     </div>
                   ) : (
-                    <p className="muted">No cron jobs found for this soul.</p>
+                    <p className="muted">
+                      {showOnlySelectedSessionCronJobs && sessionKey
+                        ? "No cron jobs found for the selected session."
+                        : "No cron jobs found for this soul."}
+                    </p>
                   )}
                 </section>
 
@@ -1476,7 +1513,7 @@ export default function App() {
                             className="ghost"
                             onClick={() => {
                               setPromptDraft(promptFilesToDraft(promptFiles));
-                              setPromptSelection(promptFilesToSelection(promptFiles));
+                              setPromptSelection(promptFilesToSelection());
                               setIsEditingPromptFiles(false);
                             }}
                             disabled={!!pending}
@@ -1495,7 +1532,7 @@ export default function App() {
                           className="ghost"
                           onClick={() => {
                             setPromptDraft(promptFilesToDraft(promptFiles));
-                            setPromptSelection(promptFilesToSelection(promptFiles));
+                            setPromptSelection(promptFilesToSelection());
                             setIsEditingPromptFiles(true);
                           }}
                           disabled={!!pending || !promptFiles.length}
@@ -1960,7 +1997,18 @@ export default function App() {
           <section className="shell-state-box">
             <div className="panel-head">
               <h3>Shell state</h3>
-              {sessionShellState?.cwd || sessionShellState?.env ? <span className="pill idle">persisted</span> : null}
+              <div className="action-row">
+                {sessionShellState?.cwd || sessionShellState?.env ? <span className="pill idle">persisted</span> : null}
+                <button
+                  className="ghost"
+                  onClick={() => {
+                    void refreshSessionShellState();
+                  }}
+                  disabled={!!pending || !selectedSoul || !sessionKey}
+                >
+                  Refresh
+                </button>
+              </div>
             </div>
             <div className="shell-state-grid">
               <article className="override-card">
@@ -2014,7 +2062,12 @@ export default function App() {
                       <pre>{reasoning}</pre>
                     </details>
                   ) : null}
-                  {toolCalls ? <pre>{JSON.stringify(toolCalls, null, 2)}</pre> : null}
+                  {toolCalls ? (
+                    <details className="tool-result-details">
+                      <summary>Tool calls ({toolCalls.length})</summary>
+                      <pre>{JSON.stringify(toolCalls, null, 2)}</pre>
+                    </details>
+                  ) : null}
                   {role === "tool" ? (
                     <details className="tool-result-details">
                       <summary>Result: {summarizeToolResult(content)}</summary>
