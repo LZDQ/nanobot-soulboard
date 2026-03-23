@@ -7,10 +7,11 @@ import pytest
 
 from nanobot.bus.queue import MessageBus
 from nanobot.config.schema import Config
+from nanobot.cron.types import CronSchedule
 from nanobot.providers.base import LLMResponse, ToolCallRequest
 from nanobot_soulboard.config import SoulOverrides, SoulboardConfig, load_soulboard_config
 from nanobot_soulboard.context import SoulboardContextBuilder
-from nanobot_soulboard.runtime import SoulAgentLoop, SoulSession, SoulSessionManager, SoulSpec, SoulSupervisor, build_runtime_config, discover_soul_specs
+from nanobot_soulboard.runtime import SoulAgentLoop, SoulCronService, SoulSession, SoulSessionManager, SoulSpec, SoulSupervisor, build_runtime_config, discover_soul_specs
 from nanobot_soulboard.shell_tools import CdTool, SetEnvTool
 
 
@@ -422,8 +423,27 @@ def test_start_soul_registers_cron_tool(tmp_path: Path) -> None:
     )
 
     loop = asyncio.run(supervisor.start_soul("alpha"))
+    running = supervisor._running_souls["alpha"]
 
     assert loop.tools.has("cron") is True
-    assert supervisor._cron_started is True
+    assert running.cron_started is True
+    assert running.cron_service.store_path == tmp_path / "soulboard" / "souls" / "alpha" / "cron" / "jobs.json"
 
     asyncio.run(supervisor.stop_all())
+
+
+def test_soul_cron_service_persists_origin_session_key(tmp_path: Path) -> None:
+    service = SoulCronService(tmp_path / "cron" / "jobs.json")
+
+    job = service.add_job(
+        name="hello",
+        schedule=CronSchedule(kind="every", every_ms=1000),
+        message="hello",
+        channel="napcat",
+        to="42",
+        session_key="napcat:42:topic",
+    )
+
+    reloaded = SoulCronService(tmp_path / "cron" / "jobs.json")
+
+    assert reloaded.get_session_key(job.id) == "napcat:42:topic"

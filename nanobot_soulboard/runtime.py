@@ -22,10 +22,9 @@ from nanobot.channels.manager import ChannelManager
 from nanobot.config.loader import save_config
 from nanobot.config.schema import Config, MCPServerConfig
 from nanobot.cron.service import CronService
-from nanobot.cron.types import CronJob
+from nanobot.cron.types import CronJob, CronSchedule
 from nanobot.providers.base import LLMProvider
 from nanobot.session.manager import Session, SessionManager
-from nanobot.utils.evaluator import evaluate_response
 
 from nanobot_soulboard.config import (
     SoulOverrides,
@@ -125,6 +124,8 @@ class SoulAgentLoop(AgentLoop):
 
     def _register_default_tools(self) -> None:
         super()._register_default_tools()
+        if self.cron_service:
+            self.tools.register(SoulCronTool(self.cron_service))
         self.tools.register(
             SoulExecTool(
                 get_cwd=self.get_cwd,
@@ -169,6 +170,12 @@ class SoulAgentLoop(AgentLoop):
     def _restore_session_state(self, session: SoulSession) -> None:
         self._cwd = session.cwd
         self._env = dict(session.env) if session.env is not None else None
+
+    def _set_tool_context(self, channel: str, chat_id: str, message_id: str | None = None, session_key: str | None = None) -> None:
+        super()._set_tool_context(channel, chat_id, message_id)
+        if cron_tool := self.tools.get("cron"):
+            if isinstance(cron_tool, SoulCronTool):
+                cron_tool.set_context(channel, chat_id, session_key)
 
     def _persist_turn_slice(self, session: SoulSession, messages: list[dict[str, Any]], start: int) -> int:
         """Persist one suffix of newly-created turn messages and return the new cursor."""
@@ -297,11 +304,11 @@ class SoulAgentLoop(AgentLoop):
         if msg.channel == "system":
             channel, chat_id = (msg.chat_id.split(":", 1) if ":" in msg.chat_id else ("cli", msg.chat_id))
             logger.info("Processing system message from {}", msg.sender_id)
-            system_key = f"{channel}:{chat_id}"
+            system_key = str((msg.metadata or {}).get("_system_session_key") or f"{channel}:{chat_id}")
             session = self.sessions.get_or_create(system_key)
             self._restore_session_state(session)
             await self.memory_consolidator.maybe_consolidate_by_tokens(session)
-            self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"))
+            self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"), system_key)
             history = session.get_history(max_messages=0)
             current_role = "assistant" if msg.sender_id == "subagent" else "user"
             messages = self.context.build_messages(
@@ -351,7 +358,7 @@ class SoulAgentLoop(AgentLoop):
 
         await self.memory_consolidator.maybe_consolidate_by_tokens(session)
 
-        self._set_tool_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"))
+        self._set_tool_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"), key)
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
                 message_tool.start_turn()
@@ -463,6 +470,139 @@ class SoulSessionManager(SessionManager):
         super().save(session)
 
 
+class SoulCronService(CronService):
+    """Per-soul cron service that persists the originating session key for each job."""
+
+    def __init__(self, store_path: Path, *, session_keys_path: Path | None = None):
+        super().__init__(store_path)
+        self.session_keys_path = session_keys_path or store_path.with_name("session-keys.json")
+        self._session_keys: dict[str, str] | None = None
+
+    def _load_session_keys(self) -> dict[str, str]:
+        if self._session_keys is not None:
+            return self._session_keys
+        if self.session_keys_path.exists():
+            try:
+                data = json.loads(self.session_keys_path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    self._session_keys = {str(key): str(value) for key, value in data.items()}
+                else:
+                    self._session_keys = {}
+            except Exception as exc:
+                logger.warning("Failed to load cron session key index: {}", exc)
+                self._session_keys = {}
+        else:
+            self._session_keys = {}
+        return self._session_keys
+
+    def _save_session_keys(self) -> None:
+        if self._session_keys is None:
+            return
+        self.session_keys_path.parent.mkdir(parents=True, exist_ok=True)
+        self.session_keys_path.write_text(
+            json.dumps(self._session_keys, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def get_session_key(self, job_id: str) -> str | None:
+        return self._load_session_keys().get(job_id)
+
+    def add_job(
+        self,
+        name: str,
+        schedule: CronSchedule,
+        message: str,
+        deliver: bool = False,
+        channel: str | None = None,
+        to: str | None = None,
+        delete_after_run: bool = False,
+        *,
+        session_key: str | None = None,
+    ) -> CronJob:
+        job = super().add_job(
+            name=name,
+            schedule=schedule,
+            message=message,
+            deliver=deliver,
+            channel=channel,
+            to=to,
+            delete_after_run=delete_after_run,
+        )
+        if session_key:
+            self._load_session_keys()[job.id] = session_key
+            self._save_session_keys()
+        return job
+
+    def remove_job(self, job_id: str) -> bool:
+        removed = super().remove_job(job_id)
+        if removed:
+            self._load_session_keys().pop(job_id, None)
+            self._save_session_keys()
+        return removed
+
+
+class SoulCronTool(CronTool):
+    """Cron tool variant that remembers which session scheduled the job."""
+
+    def __init__(self, cron_service: SoulCronService):
+        super().__init__(cron_service)
+        self._cron: SoulCronService = cron_service
+        self._session_key = ""
+
+    def set_context(self, channel: str, chat_id: str, session_key: str | None = None) -> None:
+        super().set_context(channel, chat_id)
+        self._session_key = session_key or ""
+
+    def _add_job(
+        self,
+        message: str,
+        every_seconds: int | None,
+        cron_expr: str | None,
+        tz: str | None,
+        at: str | None,
+    ) -> str:
+        if not message:
+            return "Error: message is required for add"
+        if not self._channel or not self._chat_id:
+            return "Error: no session context (channel/chat_id)"
+        if tz and not cron_expr:
+            return "Error: tz can only be used with cron_expr"
+        if tz:
+            from zoneinfo import ZoneInfo
+
+            try:
+                ZoneInfo(tz)
+            except (KeyError, Exception):
+                return f"Error: unknown timezone '{tz}'"
+
+        delete_after = False
+        if every_seconds:
+            schedule = CronSchedule(kind="every", every_ms=every_seconds * 1000)
+        elif cron_expr:
+            schedule = CronSchedule(kind="cron", expr=cron_expr, tz=tz)
+        elif at:
+            try:
+                dt = datetime.fromisoformat(at)
+            except ValueError:
+                return f"Error: invalid ISO datetime format '{at}'. Expected format: YYYY-MM-DDTHH:MM:SS"
+            schedule = CronSchedule(kind="at", at_ms=int(dt.timestamp() * 1000))
+            delete_after = True
+        else:
+            return "Error: either every_seconds, cron_expr, or at is required"
+
+        job = self._cron.add_job(
+            name=message[:30],
+            schedule=schedule,
+            message=message,
+            deliver=True,
+            channel=self._channel,
+            to=self._chat_id,
+            delete_after_run=delete_after,
+            session_key=self._session_key or None,
+        )
+        return f"Created job '{job.name}' (id: {job.id})"
+
+
 @dataclass
 class _RunningSoul:
     """Internal supervisor-owned state for one started soul."""
@@ -472,10 +612,12 @@ class _RunningSoul:
     provider: LLMProvider
     bus: MessageBus
     session_manager: SoulSessionManager
+    cron_service: SoulCronService
     agent_loop: SoulAgentLoop
     channel_manager: ChannelManager
     agent_task: asyncio.Task | None = None
     channels_task: asyncio.Task | None = None
+    cron_started: bool = False
 
 
 class SoulSupervisor:
@@ -497,8 +639,6 @@ class SoulSupervisor:
         self.base_config_path = base_config_path
         self.provider_factory = provider_factory
         self._running_souls: dict[str, _RunningSoul] = {}
-        self._cron = CronService(self.nano_root / "cron" / "jobs.json", on_job=self._on_cron_job)
-        self._cron_started = False
 
     def list_specs(self) -> list[SoulSpec]:
         """List all resolved soul specs."""
@@ -619,61 +759,6 @@ class SoulSupervisor:
             raise KeyError(f"Soul is not running: {soul_id}")
         return running.agent_loop
 
-    def _pick_cron_running_soul(self) -> _RunningSoul:
-        """Resolve which running soul should execute a scheduled cron job."""
-        if len(self._running_souls) != 1:
-            raise RuntimeError("Cron execution in soulboard requires exactly one running soul")
-        return next(iter(self._running_souls.values()))
-
-    async def _on_cron_job(self, job: CronJob) -> str | None:
-        """Execute one cron job through the currently running soul."""
-        running = self._pick_cron_running_soul()
-        agent = running.agent_loop
-
-        reminder_note = (
-            "[Scheduled Task] Timer finished.\n\n"
-            f"Task '{job.name}' has been triggered.\n"
-            f"Scheduled instruction: {job.payload.message}"
-        )
-
-        cron_tool = agent.tools.get("cron")
-        cron_token = None
-        if isinstance(cron_tool, CronTool):
-            cron_token = cron_tool.set_cron_context(True)
-        try:
-            resp = await agent.process_direct(
-                reminder_note,
-                session_key=f"cron:{job.id}",
-                channel=job.payload.channel or "cli",
-                chat_id=job.payload.to or "direct",
-            )
-        finally:
-            if isinstance(cron_tool, CronTool) and cron_token is not None:
-                cron_tool.reset_cron_context(cron_token)
-
-        response = resp.content if resp else ""
-
-        message_tool = agent.tools.get("message")
-        if isinstance(message_tool, MessageTool) and message_tool._sent_in_turn:
-            return response
-
-        if job.payload.deliver and job.payload.to and response:
-            should_notify = await evaluate_response(
-                response,
-                job.payload.message,
-                running.provider,
-                agent.model,
-            )
-            if should_notify:
-                await running.bus.publish_outbound(
-                    OutboundMessage(
-                        channel=job.payload.channel or "cli",
-                        chat_id=job.payload.to,
-                        content=response,
-                    )
-                )
-        return response
-
     def _build_running_soul(self, soul_id: str) -> _RunningSoul:
         """Construct supervisor-owned runtime state without starting it."""
         if self.provider_factory is None:
@@ -683,6 +768,7 @@ class SoulSupervisor:
         config = build_runtime_config(self.base_config, spec)
         provider = self.provider_factory(config)
         bus = MessageBus()
+        cron_service = SoulCronService(spec.workspace / "cron" / "jobs.json")
         session_manager = SoulSessionManager(
             config.workspace_path,
             get_cwd=lambda: agent_loop._cwd,
@@ -699,7 +785,7 @@ class SoulSupervisor:
             web_search_config=config.tools.web.search,
             web_proxy=config.tools.web.proxy or None,
             exec_config=config.tools.exec,
-            cron_service=self._cron,
+            cron_service=cron_service,
             restrict_to_workspace=config.tools.restrict_to_workspace,
             session_manager=session_manager,
             mcp_servers=config.tools.mcp_servers,
@@ -708,15 +794,40 @@ class SoulSupervisor:
         session_manager._get_loop_cwd = lambda: agent_loop._cwd
         session_manager._get_loop_env = lambda: agent_loop._env
         channel_manager = ChannelManager(config, bus)
-        return _RunningSoul(
+        running = _RunningSoul(
             spec=spec,
             config=config,
             provider=provider,
             bus=bus,
             session_manager=session_manager,
+            cron_service=cron_service,
             agent_loop=agent_loop,
             channel_manager=channel_manager,
         )
+        async def _on_cron_job(job: CronJob) -> str | None:
+            session_key = cron_service.get_session_key(job.id) or f"{job.payload.channel or 'cli'}:{job.payload.to or 'direct'}"
+            channel = job.payload.channel or "cli"
+            chat_id = job.payload.to or "direct"
+            cron_tool = running.agent_loop.tools.get("cron")
+            cron_token = None
+            if isinstance(cron_tool, CronTool):
+                cron_token = cron_tool.set_cron_context(True)
+            try:
+                await running.bus.publish_inbound(
+                    InboundMessage(
+                        channel="system",
+                        sender_id="cron",
+                        chat_id=f"{channel}:{chat_id}",
+                        content=job.payload.message,
+                        metadata={"_system_session_key": session_key},
+                    )
+                )
+            finally:
+                if isinstance(cron_tool, CronTool) and cron_token is not None:
+                    cron_tool.reset_cron_context(cron_token)
+            return None
+        cron_service.on_job = _on_cron_job
+        return running
 
     async def start_soul(self, soul_id: str) -> SoulAgentLoop:
         """Create and start a soul runtime, returning its agent loop."""
@@ -724,9 +835,9 @@ class SoulSupervisor:
         if running is None:
             running = self._build_running_soul(soul_id)
             self._running_souls[soul_id] = running
-        if not self._cron_started:
-            await self._cron.start()
-            self._cron_started = True
+        if not running.cron_started:
+            await running.cron_service.start()
+            running.cron_started = True
         if not running.agent_task or running.agent_task.done():
             running.agent_task = asyncio.create_task(running.agent_loop.run())
         if running.channel_manager.enabled_channels and (
@@ -756,14 +867,11 @@ class SoulSupervisor:
             running.channels_task.cancel()
             await asyncio.gather(running.channels_task, return_exceptions=True)
         await running.channel_manager.stop_all()
-        if not self._running_souls and self._cron_started:
-            self._cron.stop()
-            self._cron_started = False
+        if running.cron_started:
+            running.cron_service.stop()
+            running.cron_started = False
 
     async def stop_all(self) -> None:
         """Stop all running souls."""
         for soul_id in list(self._running_souls):
             await self.stop_soul(soul_id)
-        if self._cron_started:
-            self._cron.stop()
-            self._cron_started = False

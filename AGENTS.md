@@ -1,9 +1,9 @@
-nanobot-soulboard is a UI for nanobot providing a web UI and switching between multiple agent souls.
+nanobot-soulboard is a platform for nanobot providing a web UI and switching between multiple agent souls.
 
 Dev guide:
 
-- Backend will be in python, same as nanobot.
-- There will be multiple agents and workspaces but share the same `MessageBus` and `SessionManager`, etc. Only one agent can run at a time. To fully control the context, we need to inherit `ContextBuilder`.
-- The web UI should be able to list souls, switch between them, stop or start a soul. For a started soul, we should be able to list the tools it gets attached to, and add or remove. This could be impossible in upstream, so maybe we need to destroy the agent loop object and create a new one if necessary. Also show other stats like model, attached channels, etc. Sessions should also be accessible on the web UI.
-- Directory structure should still be under `~/.nanobot` but the hardcoded `workspace` will be dynamic.
+- Backend will be in python, same as nanobot. One python process runs all souls to avoid communication gaps.
+- There will be multiple agents and workspaces.
+- Do not touch upstream `nanobot` core files unless we need to contribute to it. For our downstream, the correct way is to subclass upstream's classes and override only the parts we need to change.
+- Avoid `getattr` at any cost because it makes the codebase extremely hard to maintain.
 - Frontend uses pnpm.
