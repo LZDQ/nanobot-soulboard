@@ -29,8 +29,10 @@ if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
 	tmux new-window -d -t "${SESSION_NAME}:4" -n ttyd
 
 	# Send commands.
+	tmux send-keys -t "${SESSION_NAME}:2" "source .venv/bin/activate" C-m
 	tmux send-keys -t "${SESSION_NAME}:2" "python -m nanobot_soulboard" C-m
-	tmux send-keys -t "${SESSION_NAME}:3" "pnpm preview" C-m
+	tmux send-keys -t "${SESSION_NAME}:3" "source ~/.nvm/nvm.sh; nvm use" C-m
+	tmux send-keys -t "${SESSION_NAME}:3" "pnpm build && pnpm preview" C-m
 	tmux send-keys -t "${SESSION_NAME}:4" "ttyd -i lo -W bash" C-m
 
 	tmux select-window -t "${SESSION_NAME}:0"
