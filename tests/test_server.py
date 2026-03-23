@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from nanobot.cron.types import CronSchedule
 from nanobot_soulboard.server import create_app
-from nanobot_soulboard.runtime import SoulCronService
+from nanobot_soulboard.cron import SoulCronService
 
 
 def _write_json(path: Path, data: dict) -> None:

@@ -11,8 +11,9 @@ from nanobot.config.schema import Config
 from nanobot.cron.types import CronSchedule
 from nanobot.providers.base import LLMResponse, ToolCallRequest
 from nanobot_soulboard.config import SoulOverrides, SoulboardConfig, load_soulboard_config
+from nanobot_soulboard.cron import SoulCronService, SoulCronTool
 from nanobot_soulboard.context import SoulboardContextBuilder
-from nanobot_soulboard.runtime import SoulAgentLoop, SoulCronService, SoulSession, SoulSessionManager, SoulSpec, SoulSupervisor, build_runtime_config, discover_soul_specs
+from nanobot_soulboard.runtime import SoulAgentLoop, SoulSession, SoulSessionManager, SoulSpec, SoulSupervisor, build_runtime_config, discover_soul_specs
 from nanobot_soulboard.shell_tools import CdTool, SetEnvTool
 
 
@@ -451,3 +452,61 @@ def test_soul_cron_service_persists_origin_session_key(tmp_path: Path) -> None:
     assert not (tmp_path / "cron" / "session-keys.json").exists()
     stored = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))
     assert stored["jobs"][0]["sessionKey"] == "napcat:42:topic"
+
+
+@pytest.mark.asyncio
+async def test_soul_cron_tool_lists_only_current_session_by_default(tmp_path: Path) -> None:
+    service = SoulCronService(tmp_path / "cron" / "jobs.json")
+    service.add_job(
+        name="job-a",
+        schedule=CronSchedule(kind="every", every_ms=1_000),
+        message="a",
+        channel="napcat",
+        to="42",
+        session_key="napcat:42",
+    )
+    service.add_job(
+        name="job-b",
+        schedule=CronSchedule(kind="every", every_ms=2_000),
+        message="b",
+        channel="napcat",
+        to="43",
+        session_key="napcat:43",
+    )
+
+    tool = SoulCronTool(service)
+    tool.set_context("napcat", "42", "napcat:42")
+
+    result = await tool.execute(action="list")
+
+    assert "job-a" in result
+    assert "job-b" not in result
+
+
+@pytest.mark.asyncio
+async def test_soul_cron_tool_can_list_all_sessions_jobs(tmp_path: Path) -> None:
+    service = SoulCronService(tmp_path / "cron" / "jobs.json")
+    service.add_job(
+        name="job-a",
+        schedule=CronSchedule(kind="every", every_ms=1_000),
+        message="a",
+        channel="napcat",
+        to="42",
+        session_key="napcat:42",
+    )
+    service.add_job(
+        name="job-b",
+        schedule=CronSchedule(kind="every", every_ms=2_000),
+        message="b",
+        channel="napcat",
+        to="43",
+        session_key="napcat:43",
+    )
+
+    tool = SoulCronTool(service)
+    tool.set_context("napcat", "42", "napcat:42")
+
+    result = await tool.execute(action="list", only_current_session=False)
+
+    assert "job-a" in result
+    assert "job-b" in result
