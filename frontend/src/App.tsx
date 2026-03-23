@@ -1564,7 +1564,7 @@ export default function App() {
                               </label>
                             ) : isEditingPromptFiles ? (
                               <p className="muted">Enable this file to edit and include it in the save payload.</p>
-                            ) : content ? (
+                            ) : exists ? (
                               <pre>{content}</pre>
                             ) : (
                               <p className="muted">This file does not exist yet.</p>
