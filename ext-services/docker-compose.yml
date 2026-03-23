@@ -40,6 +40,7 @@ services:
     ports:
       - "127.0.0.1:6099:6099"
       - "127.0.0.1:3001:3001"
+    restart: unless-stopped
 
   filebrowser:
     image: filebrowser/filebrowser
@@ -49,3 +50,4 @@ services:
     volumes:
       - /:/srv
     command: ["--noauth", "--baseURL", "/filebrowser"]
+    restart: unless-stopped
