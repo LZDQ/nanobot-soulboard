@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Toaster, toast } from "sonner";
 
 type SoulOverrides = {
@@ -361,6 +363,21 @@ function summarizeToolResult(value: unknown): string {
   }
   const singleLine = content.replace(/\s+/g, " ");
   return singleLine.length > 96 ? `${singleLine.slice(0, 96)}...` : singleLine;
+}
+
+function MarkdownMessage({ content }: { content: string }) {
+  return (
+    <div className="markdown-content">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: ({ ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
 }
 
 function renderOverrideValue(value: string | string[] | boolean | null | undefined): string {
@@ -2042,7 +2059,7 @@ export default function App() {
                       <pre>{chatReasoning}</pre>
                     </details>
                   ) : null}
-                  <pre>{chatContent || "(waiting for content)"}</pre>
+                  {chatContent ? <MarkdownMessage content={chatContent} /> : <pre>(waiting for content)</pre>}
                 </div>
               ) : null}
               {chatHistory.map((message, index) => {
@@ -2075,6 +2092,8 @@ export default function App() {
                       <summary>Result: {summarizeToolResult(content)}</summary>
                       <pre>{renderedContent}</pre>
                     </details>
+                  ) : role === "assistant" ? (
+                    <MarkdownMessage content={renderedContent} />
                   ) : (
                     <pre>{renderedContent}</pre>
                   )}
