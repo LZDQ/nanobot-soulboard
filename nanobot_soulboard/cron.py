@@ -14,11 +14,17 @@ from nanobot.cron.types import CronJob, CronJobState, CronPayload, CronRunRecord
 
 
 class SoulCronService(CronService):
-    """Per-soul cron service that persists the originating session key for each job."""
+    """Per-soul cron service that persists session-local delivery context for each job."""
 
-    def __init__(self, store_path: Path):
+    def __init__(self, store_path: Path, soul_id: str):
         super().__init__(store_path)
+        self._soul_id = soul_id
         self._session_keys: dict[str, str] | None = None
+        self._delivery_metadata: dict[str, dict[str, Any]] | None = None
+
+    async def start(self) -> None:
+        await super().start()
+        logger.info("Cron service started for soul '{}' with {} jobs", self._soul_id, len(self._store.jobs if self._store else []))
 
     def _load_store(self) -> CronStore:
         """Load jobs from disk, including soulboard-only session keys stored per job."""
@@ -28,12 +34,16 @@ class SoulCronService(CronService):
                 logger.info("Cron: jobs.json modified externally, reloading")
                 self._store = None
                 self._session_keys = None
+                self._delivery_metadata = None
         if self._store:
             if self._session_keys is None:
                 self._session_keys = {}
+            if self._delivery_metadata is None:
+                self._delivery_metadata = {}
             return self._store
 
         self._session_keys = {}
+        self._delivery_metadata = {}
         if self.store_path.exists():
             try:
                 data = json.loads(self.store_path.read_text(encoding="utf-8"))
@@ -80,14 +90,19 @@ class SoulCronService(CronService):
                     session_key = j.get("sessionKey")
                     if isinstance(session_key, str) and session_key:
                         self._session_keys[job.id] = session_key
+                    delivery_metadata = self._normalize_delivery_metadata(j.get("deliveryMetadata"))
+                    if delivery_metadata:
+                        self._delivery_metadata[job.id] = delivery_metadata
                 self._store = CronStore(jobs=jobs)
             except Exception as exc:
                 logger.warning("Failed to load cron store: {}", exc)
                 self._store = CronStore()
                 self._session_keys = {}
+                self._delivery_metadata = {}
         else:
             self._store = CronStore()
             self._session_keys = {}
+            self._delivery_metadata = {}
 
         return self._store
 
@@ -98,6 +113,7 @@ class SoulCronService(CronService):
 
         self.store_path.parent.mkdir(parents=True, exist_ok=True)
         session_keys = self._session_keys or {}
+        delivery_metadata = self._delivery_metadata or {}
         data = {
             "version": self._store.version,
             "jobs": [
@@ -138,6 +154,7 @@ class SoulCronService(CronService):
                     "updatedAtMs": job.updated_at_ms,
                     "deleteAfterRun": job.delete_after_run,
                     "sessionKey": session_keys.get(job.id),
+                    "deliveryMetadata": delivery_metadata.get(job.id),
                 }
                 for job in self._store.jobs
             ],
@@ -145,9 +162,23 @@ class SoulCronService(CronService):
         self.store_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         self._last_mtime = self.store_path.stat().st_mtime
 
+    @staticmethod
+    def _normalize_delivery_metadata(raw: Any) -> dict[str, Any]:
+        metadata: dict[str, Any] = {}
+        if not isinstance(raw, dict):
+            return metadata
+        if "is_group" in raw:
+            metadata["is_group"] = bool(raw["is_group"])
+        return metadata
+
     def get_session_key(self, job_id: str) -> str | None:
         self._load_store()
         return (self._session_keys or {}).get(job_id)
+
+    def get_delivery_metadata(self, job_id: str) -> dict[str, Any]:
+        self._load_store()
+        metadata = (self._delivery_metadata or {}).get(job_id, {})
+        return dict(metadata)
 
     def add_job(
         self,
@@ -160,6 +191,7 @@ class SoulCronService(CronService):
         delete_after_run: bool = False,
         *,
         session_key: str | None = None,
+        delivery_metadata: dict[str, Any] | None = None,
     ) -> CronJob:
         job = super().add_job(
             name=name,
@@ -170,10 +202,15 @@ class SoulCronService(CronService):
             to=to,
             delete_after_run=delete_after_run,
         )
-        if session_key:
+        normalized_metadata = self._normalize_delivery_metadata(delivery_metadata)
+        if session_key or normalized_metadata:
             self._load_store()
-            assert self._session_keys is not None
-            self._session_keys[job.id] = session_key
+            if session_key:
+                assert self._session_keys is not None
+                self._session_keys[job.id] = session_key
+            if normalized_metadata:
+                assert self._delivery_metadata is not None
+                self._delivery_metadata[job.id] = normalized_metadata
             self._save_store()
         return job
 
@@ -183,6 +220,8 @@ class SoulCronService(CronService):
             self._load_store()
             if self._session_keys is not None:
                 self._session_keys.pop(job_id, None)
+            if self._delivery_metadata is not None:
+                self._delivery_metadata.pop(job_id, None)
                 self._save_store()
         return removed
 
@@ -200,10 +239,18 @@ class SoulCronTool(CronTool):
         super().__init__(cron_service)
         self._cron: SoulCronService = cron_service
         self._session_key = ""
+        self._delivery_metadata: dict[str, Any] = {}
 
-    def set_context(self, channel: str, chat_id: str, session_key: str | None = None) -> None:
+    def set_context(
+        self,
+        channel: str,
+        chat_id: str,
+        session_key: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         super().set_context(channel, chat_id)
         self._session_key = session_key or ""
+        self._delivery_metadata = self._cron._normalize_delivery_metadata(metadata)
 
     @property
     def description(self) -> str:
@@ -282,6 +329,7 @@ class SoulCronTool(CronTool):
             to=self._chat_id,
             delete_after_run=delete_after,
             session_key=self._session_key or None,
+            delivery_metadata=self._delivery_metadata or None,
         )
         return f"Created job '{job.name}' (id: {job.id})"
 

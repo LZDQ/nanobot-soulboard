@@ -171,11 +171,18 @@ class SoulAgentLoop(AgentLoop):
         self._cwd = session.cwd
         self._env = dict(session.env) if session.env is not None else None
 
-    def _set_tool_context(self, channel: str, chat_id: str, message_id: str | None = None, session_key: str | None = None) -> None:
+    def _set_tool_context(
+        self,
+        channel: str,
+        chat_id: str,
+        message_id: str | None = None,
+        session_key: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         super()._set_tool_context(channel, chat_id, message_id)
         if cron_tool := self.tools.get("cron"):
             if isinstance(cron_tool, SoulCronTool):
-                cron_tool.set_context(channel, chat_id, session_key)
+                cron_tool.set_context(channel, chat_id, session_key, metadata)
 
     def _persist_turn_slice(self, session: SoulSession, messages: list[dict[str, Any]], start: int) -> int:
         """Persist one suffix of newly-created turn messages and return the new cursor."""
@@ -304,11 +311,12 @@ class SoulAgentLoop(AgentLoop):
         if msg.channel == "system":
             channel, chat_id = (msg.chat_id.split(":", 1) if ":" in msg.chat_id else ("cli", msg.chat_id))
             logger.info("Processing system message from {}", msg.sender_id)
-            system_key = str((msg.metadata or {}).get("_system_session_key") or f"{channel}:{chat_id}")
+            system_metadata = dict(msg.metadata or {})
+            system_key = str(system_metadata.get("_system_session_key") or f"{channel}:{chat_id}")
             session = self.sessions.get_or_create(system_key)
             self._restore_session_state(session)
             await self.memory_consolidator.maybe_consolidate_by_tokens(session)
-            self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"), system_key)
+            self._set_tool_context(channel, chat_id, system_metadata.get("message_id"), system_key, system_metadata)
             history = session.get_history(max_messages=0)
             current_role = "assistant" if msg.sender_id == "subagent" else "user"
             messages = self.context.build_messages(
@@ -326,10 +334,12 @@ class SoulAgentLoop(AgentLoop):
                 on_progress=on_progress,
             )
             self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
+            outbound_metadata = {key: value for key, value in system_metadata.items() if not key.startswith("_")}
             return OutboundMessage(
                 channel=channel,
                 chat_id=chat_id,
                 content=final_content or "Background task completed.",
+                metadata=outbound_metadata,
             )
 
         preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
@@ -358,7 +368,7 @@ class SoulAgentLoop(AgentLoop):
 
         await self.memory_consolidator.maybe_consolidate_by_tokens(session)
 
-        self._set_tool_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"), key)
+        self._set_tool_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"), key, msg.metadata or {})
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
                 message_tool.start_turn()
@@ -628,7 +638,7 @@ class SoulSupervisor:
 
     def _build_cron_service(self, spec: SoulSpec) -> SoulCronService:
         """Create a per-soul cron service rooted under the soul workspace."""
-        return SoulCronService(spec.workspace / "cron" / "jobs.json")
+        return SoulCronService(spec.workspace / "cron" / "jobs.json", soul_id=spec.soul_id)
 
     def list_cron_jobs(self, soul_id: str) -> list[tuple[CronJob, str | None]]:
         """List one soul's cron jobs and their originating session keys."""
@@ -684,6 +694,7 @@ class SoulSupervisor:
         )
         async def _on_cron_job(job: CronJob) -> str | None:
             session_key = cron_service.get_session_key(job.id) or f"{job.payload.channel or 'cli'}:{job.payload.to or 'direct'}"
+            delivery_metadata = cron_service.get_delivery_metadata(job.id)
             channel = job.payload.channel or "cli"
             chat_id = job.payload.to or "direct"
             fired_at = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
@@ -703,7 +714,10 @@ class SoulSupervisor:
                         sender_id="cron",
                         chat_id=f"{channel}:{chat_id}",
                         content=cron_content,
-                        metadata={"_system_session_key": session_key},
+                        metadata={
+                            "_system_session_key": session_key,
+                            **delivery_metadata,
+                        },
                     )
                 )
             finally:

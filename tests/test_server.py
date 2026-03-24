@@ -325,7 +325,7 @@ def test_server_lists_soul_cron_jobs(monkeypatch, tmp_path: Path) -> None:
     _write_json(tmp_path / "soulboard" / "config.json", {"souls": {"alpha": {}}})
 
     workspace = tmp_path / "soulboard" / "souls" / "alpha"
-    service = SoulCronService(workspace / "cron" / "jobs.json")
+    service = SoulCronService(workspace / "cron" / "jobs.json", soul_id="test-soul")
     service.add_job(
         name="Ping group",
         schedule=CronSchedule(kind="every", every_ms=60_000),

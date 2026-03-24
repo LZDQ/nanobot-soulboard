@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from nanobot.bus.events import InboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.config.schema import Config
 from nanobot.cron.types import CronSchedule
@@ -435,7 +436,7 @@ def test_start_soul_registers_cron_tool(tmp_path: Path) -> None:
 
 
 def test_soul_cron_service_persists_origin_session_key(tmp_path: Path) -> None:
-    service = SoulCronService(tmp_path / "cron" / "jobs.json")
+    service = SoulCronService(tmp_path / "cron" / "jobs.json", soul_id="test-soul")
 
     job = service.add_job(
         name="hello",
@@ -444,19 +445,84 @@ def test_soul_cron_service_persists_origin_session_key(tmp_path: Path) -> None:
         channel="napcat",
         to="42",
         session_key="napcat:42:topic",
+        delivery_metadata={"is_group": True},
     )
 
-    reloaded = SoulCronService(tmp_path / "cron" / "jobs.json")
+    reloaded = SoulCronService(tmp_path / "cron" / "jobs.json", soul_id="test-soul")
 
     assert reloaded.get_session_key(job.id) == "napcat:42:topic"
+    assert reloaded.get_delivery_metadata(job.id) == {"is_group": True}
     assert not (tmp_path / "cron" / "session-keys.json").exists()
     stored = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))
     assert stored["jobs"][0]["sessionKey"] == "napcat:42:topic"
+    assert stored["jobs"][0]["deliveryMetadata"] == {"is_group": True}
+
+
+def test_soul_agent_loop_system_message_preserves_delivery_metadata(tmp_path: Path) -> None:
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    provider.chat_with_retry = AsyncMock(return_value=LLMResponse(content="done", finish_reason="stop"))
+    loop = SoulAgentLoop(
+        soul_id="alpha",
+        bus=MessageBus(),
+        provider=provider,
+        workspace=tmp_path,
+        model="test-model",
+    )
+
+    result = asyncio.run(
+        loop._process_message(
+            InboundMessage(
+                channel="system",
+                sender_id="cron",
+                chat_id="napcat:42",
+                content="System: cron fired",
+                metadata={"_system_session_key": "napcat:42", "is_group": True},
+            )
+        )
+    )
+
+    assert result is not None
+    assert result.channel == "napcat"
+    assert result.chat_id == "42"
+    assert result.metadata == {"is_group": True}
+
+
+def test_soul_supervisor_cron_callback_restores_delivery_metadata_after_reload(tmp_path: Path) -> None:
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    provider_factory = MagicMock(return_value=provider)
+    supervisor = SoulSupervisor(
+        base_config=Config(),
+        nano_root=tmp_path,
+        soulboard_config=SoulboardConfig(souls={"alpha": SoulOverrides()}),
+        provider_factory=provider_factory,
+    )
+    service = SoulCronService(tmp_path / "soulboard" / "souls" / "alpha" / "cron" / "jobs.json", soul_id="alpha")
+    job = service.add_job(
+        name="morning",
+        schedule=CronSchedule(kind="every", every_ms=60_000),
+        message="早安",
+        channel="napcat",
+        to="238637176",
+        session_key="napcat:238637176",
+        delivery_metadata={"is_group": True},
+    )
+
+    running = supervisor._build_running_soul("alpha")
+    running.bus.publish_inbound = AsyncMock()  # type: ignore[method-assign]
+
+    asyncio.run(running.cron_service.on_job(job))
+
+    published = running.bus.publish_inbound.await_args.args[0]
+    assert published.chat_id == "napcat:238637176"
+    assert published.metadata["_system_session_key"] == "napcat:238637176"
+    assert published.metadata["is_group"] is True
 
 
 @pytest.mark.asyncio
 async def test_soul_cron_tool_lists_only_current_session_by_default(tmp_path: Path) -> None:
-    service = SoulCronService(tmp_path / "cron" / "jobs.json")
+    service = SoulCronService(tmp_path / "cron" / "jobs.json", soul_id="test-soul")
     service.add_job(
         name="job-a",
         schedule=CronSchedule(kind="every", every_ms=1_000),
@@ -485,7 +551,7 @@ async def test_soul_cron_tool_lists_only_current_session_by_default(tmp_path: Pa
 
 @pytest.mark.asyncio
 async def test_soul_cron_tool_can_list_all_sessions_jobs(tmp_path: Path) -> None:
-    service = SoulCronService(tmp_path / "cron" / "jobs.json")
+    service = SoulCronService(tmp_path / "cron" / "jobs.json", soul_id="test-soul")
     service.add_job(
         name="job-a",
         schedule=CronSchedule(kind="every", every_ms=1_000),
