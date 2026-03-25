@@ -514,6 +514,23 @@ label span {
   background: linear-gradient(135deg, rgba(255, 248, 232, 0.92), rgba(255, 239, 226, 0.92));
 }
 
+.message-head {
+  align-items: start;
+}
+
+.message-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-left: auto;
+}
+
+.message-copy-button {
+  padding: 0.38rem 0.8rem;
+  border-radius: 999px;
+  font-size: 0.82rem;
+}
+
 .message-card details {
   margin-bottom: 0.8rem;
 }
@@ -579,6 +596,42 @@ label span {
   border-radius: 18px;
   background: rgba(63, 37, 20, 0.92);
   color: #f8eee2;
+}
+
+.markdown-code-block {
+  position: relative;
+  width: 100%;
+}
+
+.markdown-code-block pre {
+  margin: 0 0 0.85rem;
+  width: 100%;
+  box-sizing: border-box;
+  padding-right: 5.6rem;
+}
+
+.markdown-code-copy {
+  position: absolute;
+  top: calc(0.85rem + 0.8rem);
+  right: 0.7rem;
+  z-index: 1;
+  padding: 0.34rem 0.72rem;
+  font-size: 0.78rem;
+  line-height: 1;
+  background: rgba(255, 255, 255, 0.14);
+  color: #f8eee2;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  max-width: calc(100% - 1.4rem);
+  transform: translateY(-50%);
+}
+
+.markdown-code-copy:hover {
+  transform: translateY(calc(-50% - 1px));
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.markdown-code-copy:disabled {
+  transform: translateY(-50%);
 }
 
 .markdown-content pre code {

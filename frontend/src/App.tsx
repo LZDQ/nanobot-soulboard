@@ -372,12 +372,40 @@ function MarkdownMessage({ content }: { content: string }) {
         remarkPlugins={[remarkGfm]}
         components={{
           a: ({ ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
+          pre: ({ children }) => {
+            const child = Array.isArray(children) ? children[0] : children;
+            const props = typeof child === "object" && child && "props" in child ? child.props : null;
+            const code = props && "children" in props ? String(props.children).replace(/\n$/, "") : "";
+            return (
+              <div className="markdown-code-block">
+                <button
+                  type="button"
+                  className="ghost markdown-code-copy"
+                  onClick={() => {
+                    void copyToClipboard(code).then(() => {
+                      toast.success("Copied code");
+                    }).catch((cause) => {
+                      notifyError(cause);
+                    });
+                  }}
+                  disabled={!code}
+                >
+                  Copy
+                </button>
+                <pre>{children}</pre>
+              </div>
+            );
+          },
         }}
       >
         {content}
       </ReactMarkdown>
     </div>
   );
+}
+
+async function copyToClipboard(text: string) {
+  await navigator.clipboard.writeText(text);
 }
 
 function renderOverrideValue(value: string | string[] | boolean | null | undefined): string {
@@ -2051,7 +2079,23 @@ export default function App() {
                 <div className="message-card streaming">
                   <div className="message-head">
                     <strong>assistant</strong>
-                    <span className="muted">streaming</span>
+                    <div className="message-head-actions">
+                      <span className="muted">streaming</span>
+                      <button
+                        type="button"
+                        className="ghost message-copy-button"
+                        onClick={() => {
+                          void copyToClipboard(chatContent).then(() => {
+                            toast.success("Copied response");
+                          }).catch((cause) => {
+                            notifyError(cause);
+                          });
+                        }}
+                        disabled={!chatContent}
+                      >
+                        Copy
+                      </button>
+                    </div>
                   </div>
                   {chatReasoning ? (
                     <details>
@@ -2073,7 +2117,24 @@ export default function App() {
                 <div key={`${role}-${index}`} className="message-card">
                   <div className="message-head">
                     <strong>{role}</strong>
-                    {toolCallId ? <code>{toolCallId}</code> : null}
+                    <div className="message-head-actions">
+                      {toolCallId ? <code>{toolCallId}</code> : null}
+                      {role === "assistant" ? (
+                        <button
+                          type="button"
+                          className="ghost message-copy-button"
+                          onClick={() => {
+                            void copyToClipboard(renderedContent).then(() => {
+                              toast.success("Copied response");
+                            }).catch((cause) => {
+                              notifyError(cause);
+                            });
+                          }}
+                        >
+                          Copy
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
                   {reasoning ? (
                     <details>
