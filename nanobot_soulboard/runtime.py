@@ -119,7 +119,7 @@ class SoulAgentLoop(AgentLoop):
     def _register_default_tools(self) -> None:
         super()._register_default_tools()
         if self.cron_service:
-            self.tools.register(SoulCronTool(self.cron_service))
+            self.tools.register(SoulCronTool(self.cron_service, default_timezone=self.context.timezone or "UTC"))
 
     def _set_tool_context(
         self,

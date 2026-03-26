@@ -235,8 +235,8 @@ class SoulCronService(CronService):
 class SoulCronTool(CronTool):
     """Cron tool variant that remembers which session scheduled the job."""
 
-    def __init__(self, cron_service: SoulCronService):
-        super().__init__(cron_service)
+    def __init__(self, cron_service: SoulCronService, default_timezone: str = "UTC"):
+        super().__init__(cron_service, default_timezone=default_timezone)
         self._cron: SoulCronService = cron_service
         self._session_key = ""
         self._delivery_metadata: dict[str, Any] = {}
@@ -309,12 +309,26 @@ class SoulCronTool(CronTool):
         if every_seconds:
             schedule = CronSchedule(kind="every", every_ms=every_seconds * 1000)
         elif cron_expr:
-            schedule = CronSchedule(kind="cron", expr=cron_expr, tz=tz)
+            effective_tz = tz or self._default_timezone
+            from zoneinfo import ZoneInfo
+
+            try:
+                ZoneInfo(effective_tz)
+            except (KeyError, Exception):
+                return f"Error: unknown timezone '{effective_tz}'"
+            schedule = CronSchedule(kind="cron", expr=cron_expr, tz=effective_tz)
         elif at:
+            from zoneinfo import ZoneInfo
+
             try:
                 dt = datetime.fromisoformat(at)
             except ValueError:
                 return f"Error: invalid ISO datetime format '{at}'. Expected format: YYYY-MM-DDTHH:MM:SS"
+            if dt.tzinfo is None:
+                try:
+                    dt = dt.replace(tzinfo=ZoneInfo(self._default_timezone))
+                except (KeyError, Exception):
+                    return f"Error: unknown timezone '{self._default_timezone}'"
             schedule = CronSchedule(kind="at", at_ms=int(dt.timestamp() * 1000))
             delete_after = True
         else:
@@ -367,6 +381,6 @@ class SoulCronTool(CronTool):
         for j in jobs:
             timing = self._format_timing(j.schedule)
             parts = [f"- {j.name} (id: {j.id}, {timing})"]
-            parts.extend(self._format_state(j.state))
+            parts.extend(self._format_state(j.state, j.schedule))
             lines.append("\n".join(parts))
         return "Scheduled jobs:\n" + "\n".join(lines)

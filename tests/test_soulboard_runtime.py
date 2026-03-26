@@ -1,9 +1,11 @@
 import asyncio
 import json
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from zoneinfo import ZoneInfo
 
 from nanobot.bus.events import InboundMessage
 from nanobot.bus.queue import MessageBus
@@ -324,6 +326,7 @@ def test_start_soul_registers_cron_tool(tmp_path: Path) -> None:
     running = supervisor._running_souls["alpha"]
 
     assert loop.tools.has("cron") is True
+    assert isinstance(loop.tools.get("cron"), SoulCronTool)
     assert running.cron_started is True
     assert running.cron_service.store_path == tmp_path / "soulboard" / "souls" / "alpha" / "cron" / "jobs.json"
 
@@ -437,7 +440,7 @@ async def test_soul_cron_tool_lists_only_current_session_by_default(tmp_path: Pa
 
     tool = SoulCronTool(service)
     tool.set_context("napcat", "42", "napcat:42")
-    tool._format_state = lambda _state: []
+    tool._format_state = lambda _state, _schedule: []
 
     result = await tool.execute(action="list")
 
@@ -467,9 +470,75 @@ async def test_soul_cron_tool_can_list_all_sessions_jobs(tmp_path: Path) -> None
 
     tool = SoulCronTool(service)
     tool.set_context("napcat", "42", "napcat:42")
-    tool._format_state = lambda _state: []
+    tool._format_state = lambda _state, _schedule: []
 
     result = await tool.execute(action="list", only_current_session=False)
 
     assert "job-a" in result
     assert "job-b" in result
+
+
+@pytest.mark.asyncio
+async def test_soul_cron_tool_list_uses_schedule_when_formatting_state(tmp_path: Path) -> None:
+    service = SoulCronService(tmp_path / "cron" / "jobs.json", soul_id="test-soul")
+    service.add_job(
+        name="job-a",
+        schedule=CronSchedule(kind="cron", expr="0 8 * * *", tz="Asia/Shanghai"),
+        message="a",
+        channel="napcat",
+        to="42",
+        session_key="napcat:42",
+    )
+
+    tool = SoulCronTool(service)
+    tool.set_context("napcat", "42", "napcat:42")
+
+    result = await tool.execute(action="list", only_current_session=False)
+
+    assert "Scheduled jobs:" in result
+    assert "cron: 0 8 * * * (Asia/Shanghai)" in result
+
+
+def test_soul_agent_loop_registers_cron_tool_with_configured_timezone(tmp_path: Path) -> None:
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    loop = SoulAgentLoop(
+        soul_id="alpha",
+        bus=MessageBus(),
+        provider=provider,
+        workspace=tmp_path,
+        model="test-model",
+        cron_service=SoulCronService(tmp_path / "cron" / "jobs.json", soul_id="alpha"),
+        timezone="Asia/Shanghai",
+    )
+
+    cron_tool = loop.tools.get("cron")
+
+    assert isinstance(cron_tool, SoulCronTool)
+    assert cron_tool._default_timezone == "Asia/Shanghai"
+
+
+@pytest.mark.asyncio
+async def test_soul_cron_tool_defaults_cron_timezone_to_tool_timezone(tmp_path: Path) -> None:
+    service = SoulCronService(tmp_path / "cron" / "jobs.json", soul_id="test-soul")
+    tool = SoulCronTool(service, default_timezone="Asia/Shanghai")
+    tool.set_context("napcat", "42", "napcat:42")
+
+    await tool.execute(action="add", message="hello", cron_expr="0 8 * * *")
+
+    jobs = service.list_jobs(include_disabled=True)
+    assert len(jobs) == 1
+    assert jobs[0].schedule.tz == "Asia/Shanghai"
+
+
+@pytest.mark.asyncio
+async def test_soul_cron_tool_applies_default_timezone_to_naive_at(tmp_path: Path) -> None:
+    service = SoulCronService(tmp_path / "cron" / "jobs.json", soul_id="test-soul")
+    tool = SoulCronTool(service, default_timezone="Asia/Shanghai")
+    tool.set_context("napcat", "42", "napcat:42")
+
+    await tool.execute(action="add", message="hello", at="2026-03-26T08:30:00")
+
+    job = service.list_jobs(include_disabled=True)[0]
+    expected = int(datetime(2026, 3, 26, 8, 30, 0, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp() * 1000)
+    assert job.schedule.at_ms == expected

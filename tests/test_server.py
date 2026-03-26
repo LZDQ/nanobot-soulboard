@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 from fastapi.testclient import TestClient
 
 from nanobot.cron.types import CronSchedule
+from nanobot.bus.events import OutboundMessage
 from nanobot_soulboard.server import create_app
 from nanobot_soulboard.cron import SoulCronService
 
@@ -20,7 +21,10 @@ def test_server_soul_lifecycle(monkeypatch, tmp_path: Path) -> None:
 
     monkeypatch.setattr("nanobot_soulboard.server.make_provider", lambda _config: provider)
     monkeypatch.setattr("nanobot_soulboard.server.sync_workspace_templates", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr("nanobot_soulboard.runtime.SoulAgentLoop.process_direct", AsyncMock(return_value="hello"))
+    monkeypatch.setattr(
+        "nanobot_soulboard.runtime.SoulAgentLoop.process_direct",
+        AsyncMock(return_value=OutboundMessage(channel="cli", chat_id="direct", content="hello")),
+    )
 
     _write_json(tmp_path / "config.json", {"providers": {"ollama": {"apiBase": "http://localhost:11434"}}})
     _write_json(tmp_path / "soulboard" / "config.json", {"souls": {}})

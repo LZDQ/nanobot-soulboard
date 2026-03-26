@@ -840,7 +840,7 @@ def create_app(
             channel=body.channel,
             chat_id=body.chat_id,
         )
-        return {"content": response}
+        return {"content": response.content if response is not None else ""}
 
     @app.websocket("/ws/souls/{soul_id}/chat")
     async def stream_chat(websocket: WebSocket, soul_id: str) -> None:
