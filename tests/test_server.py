@@ -47,8 +47,7 @@ def test_server_soul_lifecycle(monkeypatch, tmp_path: Path) -> None:
         assert [item["soul_id"] for item in listed.json()] == ["alpha"]
 
         updated = client.patch("/api/souls/alpha", json={"overrides": {"provider": "ollama"}})
-        assert updated.status_code == 200
-        assert updated.json()["overrides"]["provider"] == "ollama"
+        assert updated.status_code == 409
 
         chatted = client.post("/api/souls/alpha/chat", json={"content": "hi"})
         assert chatted.status_code == 200
@@ -57,6 +56,10 @@ def test_server_soul_lifecycle(monkeypatch, tmp_path: Path) -> None:
         stopped = client.post("/api/souls/alpha/stop")
         assert stopped.status_code == 200
         assert stopped.json()["running"] is False
+
+        updated = client.patch("/api/souls/alpha", json={"overrides": {"provider": "ollama"}})
+        assert updated.status_code == 200
+        assert updated.json()["overrides"]["provider"] == "ollama"
 
         deleted = client.delete("/api/souls/alpha")
         assert deleted.status_code == 204
@@ -197,75 +200,6 @@ def test_server_creates_empty_session(monkeypatch, tmp_path: Path) -> None:
             "title": "cli:new",
             "channel": "cli",
             "chat_id": "new",
-        }
-
-
-def test_server_reads_session_shell_state(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("nanobot_soulboard.server.make_provider", lambda _config: MagicMock())
-    monkeypatch.setattr("nanobot_soulboard.server.sync_workspace_templates", lambda *_args, **_kwargs: [])
-
-    _write_json(tmp_path / "config.json", {})
-    _write_json(tmp_path / "soulboard" / "config.json", {"souls": {"alpha": {}}})
-
-    session_dir = tmp_path / "soulboard" / "souls" / "alpha" / "sessions"
-    session_dir.mkdir(parents=True, exist_ok=True)
-    session_path = session_dir / "cli_direct.jsonl"
-    session_path.write_text(
-        json.dumps(
-            {
-                "_type": "metadata",
-                "key": "cli:direct",
-                "created_at": "2025-01-01T00:00:00",
-                "updated_at": "2025-01-01T00:00:00",
-                "metadata": {"cwd": "/tmp/demo", "env": {"DEBUG": "1", "HELLO": "world"}},
-                "last_consolidated": 0,
-            }
-        )
-        + "\n"
-        + json.dumps({"role": "user", "content": "hello", "timestamp": "2025-01-01T00:00:01"})
-        + "\n",
-        encoding="utf-8",
-    )
-
-    app = create_app(
-        nano_root=tmp_path,
-        base_config_path=tmp_path / "config.json",
-        soulboard_config_path=tmp_path / "soulboard" / "config.json",
-    )
-
-    with TestClient(app) as client:
-        shell_state = client.get("/api/souls/alpha/sessions/cli:direct/shell-state")
-        assert shell_state.status_code == 200
-        assert shell_state.json() == {
-            "cwd": "/tmp/demo",
-            "env": {"DEBUG": "1", "HELLO": "world"},
-        }
-
-
-def test_server_reads_live_session_shell_state_from_running_loop(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("nanobot_soulboard.server.make_provider", lambda _config: MagicMock())
-    monkeypatch.setattr("nanobot_soulboard.server.sync_workspace_templates", lambda *_args, **_kwargs: [])
-
-    _write_json(tmp_path / "config.json", {})
-    _write_json(tmp_path / "soulboard" / "config.json", {"souls": {"alpha": {}}})
-
-    app = create_app(
-        nano_root=tmp_path,
-        base_config_path=tmp_path / "config.json",
-        soulboard_config_path=tmp_path / "soulboard" / "config.json",
-    )
-
-    live_loop = MagicMock()
-    live_loop.get_cwd.return_value = Path("/tmp/live")
-    live_loop.get_env.return_value = {"LIVE": "1", "DEBUG": "true"}
-
-    with TestClient(app) as client:
-        client.app.state.soulboard.supervisor.get_agent_loop = MagicMock(return_value=live_loop)
-        shell_state = client.get("/api/souls/alpha/sessions/cli:direct/shell-state")
-        assert shell_state.status_code == 200
-        assert shell_state.json() == {
-            "cwd": "/tmp/live",
-            "env": {"LIVE": "1", "DEBUG": "true"},
         }
 
 

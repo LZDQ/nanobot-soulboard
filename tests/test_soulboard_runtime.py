@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -14,8 +13,7 @@ from nanobot.providers.base import LLMResponse, ToolCallRequest
 from nanobot_soulboard.config import SoulOverrides, SoulboardConfig, load_soulboard_config
 from nanobot_soulboard.cron import SoulCronService, SoulCronTool
 from nanobot_soulboard.context import SoulboardContextBuilder
-from nanobot_soulboard.runtime import SoulAgentLoop, SoulSession, SoulSessionManager, SoulSpec, SoulSupervisor, build_runtime_config, discover_soul_specs
-from nanobot_soulboard.shell_tools import CdTool, SetEnvTool
+from nanobot_soulboard.runtime import SoulAgentLoop, SoulSessionManager, SoulSpec, SoulSupervisor, build_runtime_config, discover_soul_specs
 
 
 def test_discover_soul_specs_uses_config_as_source_of_truth(tmp_path: Path) -> None:
@@ -95,11 +93,8 @@ def test_soul_agent_loop_swaps_in_soulboard_context(tmp_path: Path) -> None:
 
     assert isinstance(loop.context, SoulboardContextBuilder)
     assert loop.context.soul_id == "alpha"
-    assert loop.tools.has("cd") is True
-    assert loop.tools.has("set_env") is True
     assert loop.tools.has("exec") is True
-    assert "working_dir" not in loop.tools.get("exec").parameters["properties"]
-    assert loop.tools.has("source") is (os.name != "nt")
+    assert "working_dir" in loop.tools.get("exec").parameters["properties"]
 
 
 def test_soulboard_context_uses_workspace_system_md_verbatim(tmp_path: Path) -> None:
@@ -115,112 +110,21 @@ def test_soulboard_context_falls_back_to_local_default_prompt(tmp_path: Path) ->
 
     prompt = builder.build_system_prompt()
 
-    assert 'You are the active soul "alpha" running inside nanobot-soulboard.' in prompt
-    assert str(tmp_path.resolve()) in prompt
+    assert "You are the active soul 'alpha' running inside nanobot-soulboard." in prompt
+    assert "## Runtime" in prompt
     assert "AGENTS.md" not in prompt
 
 
-def test_cd_tool_updates_directory_and_enforces_workspace(tmp_path: Path) -> None:
-    current = {"cwd": None}
-    child = tmp_path / "child"
-    child.mkdir()
-    outside = tmp_path.parent / "outside"
-    outside.mkdir(exist_ok=True)
-    tool = CdTool(set_cwd=lambda path: current.__setitem__("cwd", path))
-
-    result = asyncio.run(tool.execute(str(child)))
-    assert result == str(child.resolve())
-    assert current["cwd"] == child.resolve()
-
-    moved = asyncio.run(tool.execute(str(outside)))
-    assert moved == str(outside.resolve())
-    assert current["cwd"] == outside.resolve()
-
-
-def test_set_env_tool_merges_values() -> None:
-    current = {"env": {"PATH": "/usr/bin"}}
-    tool = SetEnvTool(
-        get_env=lambda: dict(current["env"]),
-        set_env=lambda env: current.__setitem__("env", env),
-    )
-
-    result = asyncio.run(tool.execute({"HELLO": "world"}))
-
-    assert "HELLO" in result
-    assert current["env"]["PATH"] == "/usr/bin"
-    assert current["env"]["HELLO"] == "world"
-
-
-def test_soul_agent_loop_shell_state_is_lazy_and_persisted(tmp_path: Path) -> None:
-    provider = MagicMock()
-    provider.get_default_model.return_value = "test-model"
-    loop = SoulAgentLoop(
-        soul_id="alpha",
-        bus=MessageBus(),
-        provider=provider,
-        workspace=tmp_path,
-        model="test-model",
-    )
-    session = loop.sessions.get_or_create("cli:direct")
-
-    loop._restore_session_state(session)
-    assert loop._cwd is None
-    assert loop._env is None
-    assert loop.get_cwd() == tmp_path
-    assert "PATH" in loop.get_env()
-    assert session.metadata == {}
-
-    loop.set_cwd(tmp_path / "nested")
-    loop.set_env({"HELLO": "world"})
-    loop.sessions.save(session)
-    assert session.metadata["cwd"] == str((tmp_path / "nested"))
-    assert session.metadata["env"] == {"HELLO": "world"}
-
-    restored = SoulSession(
-        key="cli:second",
-        cwd=(tmp_path / "saved").resolve(),
-        env={"FOO": "bar"},
-    )
-    loop._restore_session_state(restored)
-    assert loop.get_cwd() == (tmp_path / "saved").resolve()
-    assert loop.get_env()["FOO"] == "bar"
-
-
-@pytest.mark.skipif(os.name == "nt", reason="source tool is unix-only")
-def test_source_tool_loads_environment(tmp_path: Path) -> None:
-    from nanobot_soulboard.shell_tools import SourceTool
-
-    current = {"cwd": tmp_path, "env": {"PATH": os.environ.get("PATH", "")}}
-    script = tmp_path / "activate.sh"
-    script.write_text('export SOULBOARD_TEST_VAR="hello"\n', encoding="utf-8")
-    tool = SourceTool(
-        get_cwd=lambda: current["cwd"],
-        get_env=lambda: dict(current["env"]),
-        set_env=lambda env: current.__setitem__("env", env),
-    )
-
-    result = asyncio.run(tool.execute("activate.sh"))
-
-    assert result == f"Sourced environment from {script.resolve()}"
-    assert current["env"]["SOULBOARD_TEST_VAR"] == "hello"
-
-
-def test_soul_session_manager_loads_and_saves_shell_state(tmp_path: Path) -> None:
-    manager = SoulSessionManager(
-        tmp_path,
-        get_cwd=lambda: (tmp_path / "cwd").resolve(),
-        get_env=lambda: {"FOO": "bar"},
-    )
+def test_soul_session_manager_round_trips_plain_metadata(tmp_path: Path) -> None:
+    manager = SoulSessionManager(tmp_path)
     session = manager.get_or_create("cli:direct")
-    assert session.cwd is None
-    assert session.env is None
+    session.metadata["title"] = "Direct chat"
 
     manager.save(session)
     reloaded = manager._load("cli:direct")
 
     assert reloaded is not None
-    assert reloaded.cwd == (tmp_path / "cwd").resolve()
-    assert reloaded.env == {"FOO": "bar"}
+    assert reloaded.metadata == {"title": "Direct chat"}
 
 
 def test_soul_agent_loop_persists_completed_tool_loops_incrementally(tmp_path: Path) -> None:
@@ -248,11 +152,7 @@ def test_soul_agent_loop_persists_completed_tool_loops_incrementally(tmp_path: P
                 finish_reason="tool_calls",
             )
         if call_index == 1:
-            reloaded = SoulSessionManager(
-                tmp_path,
-                get_cwd=lambda: None,
-                get_env=lambda: None,
-            )._load("cli:direct")
+            reloaded = SoulSessionManager(tmp_path)._load("cli:direct")
             assert reloaded is not None
             assert [message["role"] for message in reloaded.messages] == ["user", "assistant", "tool"]
             assert reloaded.messages[1]["tool_calls"][0]["id"] == "call_1"
@@ -269,8 +169,9 @@ def test_soul_agent_loop_persists_completed_tool_loops_incrementally(tmp_path: P
 
     result = asyncio.run(loop.process_direct("hello"))
 
-    assert result == "final answer"
-    reloaded = SoulSessionManager(tmp_path, get_cwd=lambda: None, get_env=lambda: None)._load("cli:direct")
+    assert result is not None
+    assert result.content == "final answer"
+    reloaded = SoulSessionManager(tmp_path)._load("cli:direct")
     assert reloaded is not None
     assert [message["role"] for message in reloaded.messages] == [
         "user",
@@ -315,7 +216,7 @@ def test_soul_agent_loop_preserves_completed_tool_loops_after_crash(tmp_path: Pa
     with pytest.raises(RuntimeError, match="boom"):
         asyncio.run(loop.process_direct("hello"))
 
-    reloaded = SoulSessionManager(tmp_path, get_cwd=lambda: None, get_env=lambda: None)._load("cli:direct")
+    reloaded = SoulSessionManager(tmp_path)._load("cli:direct")
     assert reloaded is not None
     assert [message["role"] for message in reloaded.messages] == ["user", "assistant", "tool"]
     history = reloaded.get_history(max_messages=0)
@@ -324,7 +225,7 @@ def test_soul_agent_loop_preserves_completed_tool_loops_after_crash(tmp_path: Pa
     assert history[2]["tool_call_id"] == "call_1"
 
 
-def test_soul_agent_loop_persists_final_response_once_and_keeps_shell_metadata(tmp_path: Path) -> None:
+def test_soul_agent_loop_persists_final_response_once(tmp_path: Path) -> None:
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
     loop = SoulAgentLoop(
@@ -336,19 +237,13 @@ def test_soul_agent_loop_persists_final_response_once_and_keeps_shell_metadata(t
     )
     provider.chat_with_retry = AsyncMock(return_value=LLMResponse(content="done", finish_reason="stop"))
 
-    session = loop.sessions.get_or_create("cli:direct")
-    loop.set_cwd((tmp_path / "nested").resolve())
-    loop.set_env({"HELLO": "world"})
-    loop.sessions.save(session)
-
     result = asyncio.run(loop.process_direct("hello"))
 
-    assert result == "done"
-    reloaded = SoulSessionManager(tmp_path, get_cwd=lambda: None, get_env=lambda: None)._load("cli:direct")
+    assert result is not None
+    assert result.content == "done"
+    reloaded = SoulSessionManager(tmp_path)._load("cli:direct")
     assert reloaded is not None
     assert [message["role"] for message in reloaded.messages] == ["user", "assistant"]
-    assert reloaded.metadata["cwd"] == str((tmp_path / "nested").resolve())
-    assert reloaded.metadata["env"] == {"HELLO": "world"}
 
 
 def test_modify_soul_rejects_running_soul(tmp_path: Path) -> None:
@@ -542,6 +437,7 @@ async def test_soul_cron_tool_lists_only_current_session_by_default(tmp_path: Pa
 
     tool = SoulCronTool(service)
     tool.set_context("napcat", "42", "napcat:42")
+    tool._format_state = lambda _state: []
 
     result = await tool.execute(action="list")
 
@@ -571,6 +467,7 @@ async def test_soul_cron_tool_can_list_all_sessions_jobs(tmp_path: Path) -> None
 
     tool = SoulCronTool(service)
     tool.set_context("napcat", "42", "napcat:42")
+    tool._format_state = lambda _state: []
 
     result = await tool.execute(action="list", only_current_session=False)
 

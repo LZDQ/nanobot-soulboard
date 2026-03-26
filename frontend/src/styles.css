@@ -277,36 +277,9 @@ pre {
 
 .soul-list,
 .session-list,
-.message-list,
-.shell-state-grid {
+.message-list {
   display: grid;
   gap: 0.75rem;
-}
-
-.shell-state-box {
-  display: grid;
-  gap: 0.75rem;
-  margin-top: 1rem;
-}
-
-.shell-state-grid {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.shell-env-card {
-  border: 1px solid rgba(85, 52, 25, 0.08);
-}
-
-.shell-env-card summary {
-  cursor: pointer;
-  color: var(--muted);
-  font-size: 0.85rem;
-  margin-bottom: 0.5rem;
-}
-
-.shell-env-card pre {
-  max-height: 18rem;
-  overflow: auto;
 }
 
 .soul-card,
