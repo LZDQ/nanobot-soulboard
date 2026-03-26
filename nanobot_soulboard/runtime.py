@@ -17,6 +17,7 @@ from nanobot.agent.tools.message import MessageTool
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.manager import ChannelManager
+from nanobot.command.router import CommandContext
 from nanobot.config.loader import save_config
 from nanobot.config.schema import Config, MCPServerConfig
 from nanobot.agent.tools.cron import CronTool
@@ -183,28 +184,68 @@ class SoulAgentLoop(AgentLoop):
         initial_messages: list[dict[str, Any]],
         persisted_until: int,
         on_progress: Callable[..., Awaitable[None]] | None = None,
+        on_stream: Callable[[str], Awaitable[None]] | None = None,
+        on_stream_end: Callable[..., Awaitable[None]] | None = None,
+        *,
+        channel: str = "cli",
+        chat_id: str = "direct",
+        message_id: str | None = None,
+        session_key: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> tuple[str | None, list[str], list[dict[str, Any]]]:
         """Run the agent loop and flush completed tool iterations incrementally."""
         messages = initial_messages
         iteration = 0
         final_content = None
         tools_used: list[str] = []
+        _raw_stream = on_stream
+        _stream_buf = ""
+
+        async def _filtered_stream(delta: str) -> None:
+            nonlocal _stream_buf
+            from nanobot.utils.helpers import strip_think
+
+            prev_clean = strip_think(_stream_buf)
+            _stream_buf += delta
+            new_clean = strip_think(_stream_buf)
+            incremental = new_clean[len(prev_clean):]
+            if incremental and _raw_stream:
+                await _raw_stream(incremental)
 
         while iteration < self.max_iterations:
             iteration += 1
 
             tool_defs = self.tools.get_definitions()
-            response = await self.provider.chat_with_retry(
-                messages=messages,
-                tools=tool_defs,
-                model=self.model,
-            )
+            if on_stream:
+                response = await self.provider.chat_stream_with_retry(
+                    messages=messages,
+                    tools=tool_defs,
+                    model=self.model,
+                    on_content_delta=_filtered_stream,
+                )
+            else:
+                response = await self.provider.chat_with_retry(
+                    messages=messages,
+                    tools=tool_defs,
+                    model=self.model,
+                )
+
+            usage = response.usage or {}
+            self._last_usage = {
+                "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
+                "completion_tokens": int(usage.get("completion_tokens", 0) or 0),
+            }
 
             if response.has_tool_calls:
+                if on_stream and on_stream_end:
+                    await on_stream_end(resuming=True)
+                    _stream_buf = ""
+
                 if on_progress:
-                    thought = self._strip_think(response.content)
-                    if thought:
-                        await on_progress(thought)
+                    if not on_stream:
+                        thought = self._strip_think(response.content)
+                        if thought:
+                            await on_progress(thought)
                     tool_hint = self._tool_hint(response.tool_calls)
                     tool_hint = self._strip_think(tool_hint)
                     await on_progress(tool_hint, tool_hint=True)
@@ -222,11 +263,25 @@ class SoulAgentLoop(AgentLoop):
                     tools_used.append(tool_call.name)
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info("Tool call: {}({})", tool_call.name, args_str[:200])
-                    result = await self.tools.execute(tool_call.name, tool_call.arguments)
+
+                self._set_tool_context(channel, chat_id, message_id, session_key, metadata)
+
+                results = await asyncio.gather(
+                    *(self.tools.execute(tool_call.name, tool_call.arguments) for tool_call in response.tool_calls),
+                    return_exceptions=True,
+                )
+
+                for tool_call, result in zip(response.tool_calls, results):
+                    if isinstance(result, BaseException):
+                        result = f"Error: {type(result).__name__}: {result}"
                     messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, result)
 
                 persisted_until = self._persist_turn_slice(session, messages, persisted_until)
                 continue
+
+            if on_stream and on_stream_end:
+                await on_stream_end(resuming=False)
+                _stream_buf = ""
 
             clean = self._strip_think(response.content)
             if response.finish_reason == "error":
@@ -261,7 +316,6 @@ class SoulAgentLoop(AgentLoop):
         on_stream=None,
         on_stream_end=None,
     ):
-        del on_stream, on_stream_end
         key = session_key or msg.session_key
         session = self.sessions.get_or_create(key)
         if msg.channel == "system":
@@ -287,6 +341,11 @@ class SoulAgentLoop(AgentLoop):
                 messages,
                 persisted_until,
                 on_progress=on_progress,
+                channel=channel,
+                chat_id=chat_id,
+                message_id=system_metadata.get("message_id"),
+                session_key=system_key,
+                metadata=system_metadata,
             )
             self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
             outbound_metadata = {key: value for key, value in system_metadata.items() if not key.startswith("_")}
@@ -300,26 +359,10 @@ class SoulAgentLoop(AgentLoop):
         preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
         logger.info("Processing message from {}:{}: {}", msg.channel, msg.sender_id, preview)
 
-        cmd = msg.content.strip().lower()
-        if cmd == "/new":
-            snapshot = session.messages[session.last_consolidated:]
-            session.clear()
-            self.sessions.save(session)
-            self.sessions.invalidate(session.key)
-
-            if snapshot:
-                self._schedule_background(self.memory_consolidator.archive_messages(snapshot))
-
-            return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="New session started.")
-        if cmd == "/help":
-            lines = [
-                "🐈 nanobot commands:",
-                "/new — Start a new conversation",
-                "/stop — Stop the current task",
-                "/restart — Restart the bot",
-                "/help — Show available commands",
-            ]
-            return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="\n".join(lines))
+        raw = msg.content.strip()
+        ctx = CommandContext(msg=msg, session=session, key=key, raw=raw, loop=self)
+        if result := await self.commands.dispatch(ctx):
+            return result
 
         await self.memory_consolidator.maybe_consolidate_by_tokens(session)
 
@@ -351,6 +394,13 @@ class SoulAgentLoop(AgentLoop):
             initial_messages,
             persisted_until,
             on_progress=on_progress or _bus_progress,
+            on_stream=on_stream,
+            on_stream_end=on_stream_end,
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            message_id=msg.metadata.get("message_id"),
+            session_key=key,
+            metadata=msg.metadata or {},
         )
 
         if final_content is None:
@@ -363,11 +413,14 @@ class SoulAgentLoop(AgentLoop):
 
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
+        meta = dict(msg.metadata or {})
+        if on_stream is not None:
+            meta["_streamed"] = True
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
             content=final_content,
-            metadata=msg.metadata or {},
+            metadata=meta,
         )
 
 

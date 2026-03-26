@@ -514,12 +514,26 @@ def test_server_websocket_streams_reset_and_chunks(monkeypatch, tmp_path: Path) 
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
 
-    async def _fake_process_direct(self, content, session_key="cli:direct", channel="cli", chat_id="direct", on_progress=None):
+    async def _fake_process_direct(
+        self,
+        content,
+        session_key="cli:direct",
+        channel="cli",
+        chat_id="direct",
+        on_progress=None,
+        on_stream=None,
+        on_stream_end=None,
+    ):
         assert content == "hi"
         assert session_key == "cli:direct"
         if on_progress is not None:
             await on_progress("thinking")
             await on_progress("read_file(\"x\")", tool_hint=True)
+        if on_stream is not None:
+            await on_stream("do")
+            await on_stream("ne")
+        if on_stream_end is not None:
+            await on_stream_end(resuming=False)
         session = self.sessions.get_or_create(session_key)
         session.messages.append(
             {
@@ -574,6 +588,12 @@ def test_server_websocket_streams_reset_and_chunks(monkeypatch, tmp_path: Path) 
 
             tool_hint = websocket.receive_json()
             assert tool_hint == {"type": "chunk", "content": 'read_file("x")', "reasoning_content": None}
+
+            content_a = websocket.receive_json()
+            assert content_a == {"type": "chunk", "content": "do", "reasoning_content": None}
+
+            content_b = websocket.receive_json()
+            assert content_b == {"type": "chunk", "content": "ne", "reasoning_content": None}
 
             finalized_tool_call = websocket.receive_json()
             assert finalized_tool_call["type"] == "finalized"

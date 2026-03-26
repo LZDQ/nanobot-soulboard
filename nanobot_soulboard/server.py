@@ -365,21 +365,30 @@ async def _stream_chat(
         stream.content = ""
         await _broadcast_json(stream, StreamResetResponse().model_dump())
 
-        async def _send_chunk(content: str, *, tool_hint: bool = False) -> None:
+        async def _send_progress(content: str, *, tool_hint: bool = False) -> None:
             if tool_hint:
-                stream.content += content
                 payload = StreamChunkResponse(content=content, reasoning_content=None)
             else:
                 stream.reasoning_content += content
                 payload = StreamChunkResponse(content=None, reasoning_content=content)
             await _broadcast_json(stream, payload.model_dump())
 
+        async def _send_stream(delta: str) -> None:
+            stream.content += delta
+            payload = StreamChunkResponse(content=delta, reasoning_content=None)
+            await _broadcast_json(stream, payload.model_dump())
+
+        async def _send_stream_end(*, resuming: bool = False) -> None:
+            del resuming
+
         await agent_loop.process_direct(
             content=body.content,
             session_key=body.session_key,
             channel=body.channel,
             chat_id=body.chat_id,
-            on_progress=_send_chunk,
+            on_progress=_send_progress,
+            on_stream=_send_stream,
+            on_stream_end=_send_stream_end,
         )
 
         for message in session.messages[before_count:]:
