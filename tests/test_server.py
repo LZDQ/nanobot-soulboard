@@ -69,6 +69,73 @@ def test_server_soul_lifecycle(monkeypatch, tmp_path: Path) -> None:
         assert deleted.status_code == 204
 
 
+def test_server_create_soul_does_not_scaffold_user_or_tools_prompt_files(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("nanobot_soulboard.server.make_provider", lambda _config: MagicMock())
+
+    _write_json(tmp_path / "config.json", {})
+    _write_json(tmp_path / "soulboard" / "config.json", {"souls": {}})
+
+    app = create_app(
+        nano_root=tmp_path,
+        base_config_path=tmp_path / "config.json",
+        soulboard_config_path=tmp_path / "soulboard" / "config.json",
+    )
+
+    with TestClient(app) as client:
+        created = client.post("/api/souls", json={"soul_id": "alpha", "overrides": {}})
+        assert created.status_code == 200
+
+    workspace = tmp_path / "soulboard" / "souls" / "alpha"
+    assert (workspace / "AGENTS.md").exists()
+    assert (workspace / "SOUL.md").exists()
+    assert (workspace / "memory" / "MEMORY.md").exists()
+    assert (workspace / "memory" / "history.jsonl").exists()
+    assert not (workspace / "USER.md").exists()
+    assert not (workspace / "TOOLS.md").exists()
+
+
+def test_server_returns_workspace_skills_in_soul_response(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("nanobot_soulboard.server.make_provider", lambda _config: MagicMock())
+    monkeypatch.setattr("nanobot_soulboard.server.sync_workspace_templates", lambda *_args, **_kwargs: [])
+
+    _write_json(tmp_path / "config.json", {})
+    _write_json(tmp_path / "soulboard" / "config.json", {"souls": {"alpha": {}}})
+
+    workspace = tmp_path / "soulboard" / "souls" / "alpha"
+    skill_dir = workspace / "skills" / "planner"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text("---\ndescription: Planning helper\n---\n", encoding="utf-8")
+    (workspace / "skills" / "notes.txt").write_text("ignore", encoding="utf-8")
+    (workspace / "skills" / "broken").mkdir(parents=True, exist_ok=True)
+
+    app = create_app(
+        nano_root=tmp_path,
+        base_config_path=tmp_path / "config.json",
+        soulboard_config_path=tmp_path / "soulboard" / "config.json",
+    )
+
+    with TestClient(app) as client:
+        listed = client.get("/api/souls")
+        assert listed.status_code == 200
+        assert listed.json()[0]["skills"] == [
+            {
+                "name": "planner",
+                "path": str(skill_dir / "SKILL.md"),
+                "content": "---\ndescription: Planning helper\n---\n",
+            }
+        ]
+
+        detail = client.get("/api/souls/alpha")
+        assert detail.status_code == 200
+        assert detail.json()["skills"] == [
+            {
+                "name": "planner",
+                "path": str(skill_dir / "SKILL.md"),
+                "content": "---\ndescription: Planning helper\n---\n",
+            }
+        ]
+
+
 def test_server_start_prunes_unknown_mcp_servers(monkeypatch, tmp_path: Path) -> None:
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
@@ -113,6 +180,188 @@ def test_server_start_prunes_unknown_mcp_servers(monkeypatch, tmp_path: Path) ->
 
         persisted = json.loads((tmp_path / "soulboard" / "config.json").read_text(encoding="utf-8"))
         assert persisted["souls"]["alpha"]["mcp_servers"] == ["filesystem"]
+
+
+def test_server_start_prunes_stale_mcp_http_header_overrides(monkeypatch, tmp_path: Path) -> None:
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+
+    monkeypatch.setattr("nanobot_soulboard.server.make_provider", lambda _config: provider)
+    monkeypatch.setattr("nanobot_soulboard.server.sync_workspace_templates", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("nanobot_soulboard.runtime.SoulAgentLoop.run", AsyncMock(return_value=None))
+
+    _write_json(
+        tmp_path / "config.json",
+        {
+            "tools": {
+                "mcpServers": {
+                    "shared": {
+                        "type": "streamableHttp",
+                        "url": "https://example.com/mcp",
+                        "headers": {"X-Base": "1"},
+                        "enabledTools": ["*"],
+                    }
+                }
+            }
+        },
+    )
+    _write_json(
+        tmp_path / "soulboard" / "config.json",
+        {
+            "souls": {
+                "alpha": {
+                    "mcp_servers": ["shared", "missing"],
+                    "mcp_http_headers": {
+                        "shared": {"Authorization": "Bearer alpha"},
+                        "missing": {"Authorization": "Bearer stale"},
+                    },
+                }
+            }
+        },
+    )
+
+    app = create_app(
+        nano_root=tmp_path,
+        base_config_path=tmp_path / "config.json",
+        soulboard_config_path=tmp_path / "soulboard" / "config.json",
+    )
+
+    with TestClient(app) as client:
+        started = client.post("/api/souls/alpha/start")
+        assert started.status_code == 200
+        assert started.json()["overrides"]["mcp_servers"] == ["shared"]
+        assert started.json()["overrides"]["mcp_http_headers"] == {
+            "shared": {"Authorization": "Bearer alpha"}
+        }
+
+        persisted = json.loads((tmp_path / "soulboard" / "config.json").read_text(encoding="utf-8"))
+        assert persisted["souls"]["alpha"]["mcp_servers"] == ["shared"]
+        assert persisted["souls"]["alpha"]["mcp_http_headers"] == {
+            "shared": {"Authorization": "Bearer alpha"}
+        }
+
+
+def test_server_create_and_start_soul_with_mcp_http_headers(monkeypatch, tmp_path: Path) -> None:
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+
+    captured_configs: list[object] = []
+
+    def _provider_factory(config):
+        captured_configs.append(config)
+        return provider
+
+    monkeypatch.setattr("nanobot_soulboard.server.make_provider", _provider_factory)
+    monkeypatch.setattr("nanobot_soulboard.server.sync_workspace_templates", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("nanobot_soulboard.runtime.SoulAgentLoop.run", AsyncMock(return_value=None))
+
+    _write_json(
+        tmp_path / "config.json",
+        {
+            "tools": {
+                "mcpServers": {
+                    "shared": {
+                        "type": "streamableHttp",
+                        "url": "https://example.com/mcp",
+                        "headers": {
+                            "Authorization": "Bearer base",
+                            "X-Shared": "1",
+                        },
+                        "enabledTools": ["*"],
+                    }
+                }
+            }
+        },
+    )
+    _write_json(tmp_path / "soulboard" / "config.json", {"souls": {}})
+
+    app = create_app(
+        nano_root=tmp_path,
+        base_config_path=tmp_path / "config.json",
+        soulboard_config_path=tmp_path / "soulboard" / "config.json",
+    )
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/souls",
+            json={
+                "soul_id": "alpha",
+                "overrides": {
+                    "mcp_servers": ["shared"],
+                    "mcp_http_headers": {
+                        "shared": {
+                            "Authorization": "Bearer alpha",
+                            "X-Soul": "alpha",
+                        }
+                    },
+                    "autostart": True,
+                },
+            },
+        )
+        assert created.status_code == 200
+        assert created.json()["overrides"]["mcp_http_headers"] == {
+            "shared": {
+                "Authorization": "Bearer alpha",
+                "X-Soul": "alpha",
+            }
+        }
+
+    assert len(captured_configs) == 1
+    assert captured_configs[0].tools.mcp_servers["shared"].headers == {
+        "Authorization": "Bearer alpha",
+        "X-Shared": "1",
+        "X-Soul": "alpha",
+    }
+
+
+def test_server_rejects_invalid_soul_mcp_http_header_override(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("nanobot_soulboard.server.make_provider", lambda _config: MagicMock())
+    monkeypatch.setattr("nanobot_soulboard.server.sync_workspace_templates", lambda *_args, **_kwargs: [])
+
+    _write_json(
+        tmp_path / "config.json",
+        {
+            "tools": {
+                "mcpServers": {
+                    "filesystem": {
+                        "type": "stdio",
+                        "command": "npx",
+                        "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+                        "env": {},
+                        "headers": {},
+                        "enabledTools": ["*"],
+                    }
+                }
+            }
+        },
+    )
+    _write_json(tmp_path / "soulboard" / "config.json", {"souls": {}})
+
+    app = create_app(
+        nano_root=tmp_path,
+        base_config_path=tmp_path / "config.json",
+        soulboard_config_path=tmp_path / "soulboard" / "config.json",
+    )
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/souls",
+            json={
+                "soul_id": "alpha",
+                "overrides": {
+                    "mcp_servers": ["filesystem"],
+                    "mcp_http_headers": {
+                        "filesystem": {
+                            "Authorization": "Bearer alpha"
+                        }
+                    },
+                },
+            },
+        )
+        assert created.status_code == 400
+        assert created.json()["detail"] == (
+            "MCP header overrides are only supported for HTTP MCP servers: filesystem"
+        )
 
 
 def test_server_lists_and_reads_sessions(monkeypatch, tmp_path: Path) -> None:
@@ -228,15 +477,14 @@ def test_server_reads_and_updates_soul_prompt_files(monkeypatch, tmp_path: Path)
     with TestClient(app) as client:
         listed = client.get("/api/souls/alpha/prompt-files")
         assert listed.status_code == 200
-        assert listed.json() == {
-            "files": [
-                {"name": "AGENTS.md", "exists": True, "content": "# Agent rules\n"},
-                {"name": "SOUL.md", "exists": False, "content": ""},
-                {"name": "USER.md", "exists": False, "content": ""},
-                {"name": "TOOLS.md", "exists": False, "content": ""},
-                {"name": "SYSTEM.md", "exists": True, "content": "# System prompt\n"},
-            ]
-        }
+        listed_files = listed.json()["files"]
+        assert listed_files[0] == {"name": "AGENTS.md", "exists": True, "content": "# Agent rules\n"}
+        assert listed_files[1]["name"] == "SOUL.md"
+        assert listed_files[1]["exists"] is True
+        assert listed_files[1]["content"]
+        assert listed_files[2] == {"name": "USER.md", "exists": False, "content": ""}
+        assert listed_files[3] == {"name": "TOOLS.md", "exists": False, "content": ""}
+        assert listed_files[4] == {"name": "SYSTEM.md", "exists": True, "content": "# System prompt\n"}
 
         updated = client.patch(
             "/api/souls/alpha/prompt-files",

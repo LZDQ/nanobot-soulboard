@@ -82,6 +82,129 @@ def test_build_runtime_config_rejects_unknown_mcp_server(tmp_path: Path) -> None
         build_runtime_config(base, spec)
 
 
+def test_build_runtime_config_merges_soul_mcp_http_headers(tmp_path: Path) -> None:
+    base = Config.model_validate(
+        {
+            "tools": {
+                "mcpServers": {
+                    "shared": {
+                        "type": "streamableHttp",
+                        "url": "https://example.com/mcp",
+                        "headers": {
+                            "Authorization": "Bearer base-token",
+                            "X-Shared": "1",
+                        },
+                    }
+                }
+            }
+        }
+    )
+    spec = SoulSpec(
+        soul_id="alpha",
+        workspace=tmp_path / "souls" / "alpha",
+        overrides=SoulOverrides(
+            mcp_servers=["shared"],
+            mcp_http_headers={
+                "shared": {
+                    "Authorization": "Bearer alpha-token",
+                    "X-Soul": "alpha",
+                }
+            },
+        ),
+    )
+
+    config = build_runtime_config(base, spec)
+
+    assert config.tools.mcp_servers["shared"].headers == {
+        "Authorization": "Bearer alpha-token",
+        "X-Shared": "1",
+        "X-Soul": "alpha",
+    }
+    assert base.tools.mcp_servers["shared"].headers == {
+        "Authorization": "Bearer base-token",
+        "X-Shared": "1",
+    }
+
+
+def test_build_runtime_config_rejects_unknown_mcp_http_header_override_server(tmp_path: Path) -> None:
+    base = Config.model_validate(
+        {
+            "tools": {
+                "mcpServers": {
+                    "shared": {
+                        "type": "streamableHttp",
+                        "url": "https://example.com/mcp",
+                    }
+                }
+            }
+        }
+    )
+    spec = SoulSpec(
+        soul_id="alpha",
+        workspace=tmp_path / "souls" / "alpha",
+        overrides=SoulOverrides(
+            mcp_servers=["shared"],
+            mcp_http_headers={"missing": {"Authorization": "Bearer token"}},
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Unknown MCP server\\(s\\) in soulboard MCP header overrides: missing"):
+        build_runtime_config(base, spec)
+
+
+def test_build_runtime_config_rejects_unselected_mcp_http_header_override_server(tmp_path: Path) -> None:
+    base = Config.model_validate(
+        {
+            "tools": {
+                "mcpServers": {
+                    "shared": {
+                        "type": "streamableHttp",
+                        "url": "https://example.com/mcp",
+                    }
+                }
+            }
+        }
+    )
+    spec = SoulSpec(
+        soul_id="alpha",
+        workspace=tmp_path / "souls" / "alpha",
+        overrides=SoulOverrides(
+            mcp_servers=[],
+            mcp_http_headers={"shared": {"Authorization": "Bearer token"}},
+        ),
+    )
+
+    with pytest.raises(ValueError, match="MCP header overrides require the server to be enabled for this soul: shared"):
+        build_runtime_config(base, spec)
+
+
+def test_build_runtime_config_rejects_stdio_mcp_http_header_override_server(tmp_path: Path) -> None:
+    base = Config.model_validate(
+        {
+            "tools": {
+                "mcpServers": {
+                    "filesystem": {
+                        "type": "stdio",
+                        "command": "npx",
+                        "args": ["filesystem"],
+                    }
+                }
+            }
+        }
+    )
+    spec = SoulSpec(
+        soul_id="alpha",
+        workspace=tmp_path / "souls" / "alpha",
+        overrides=SoulOverrides(
+            mcp_servers=["filesystem"],
+            mcp_http_headers={"filesystem": {"Authorization": "Bearer token"}},
+        ),
+    )
+
+    with pytest.raises(ValueError, match="MCP header overrides are only supported for HTTP MCP servers: filesystem"):
+        build_runtime_config(base, spec)
+
+
 def test_soul_agent_loop_swaps_in_soulboard_context(tmp_path: Path) -> None:
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
@@ -97,6 +220,8 @@ def test_soul_agent_loop_swaps_in_soulboard_context(tmp_path: Path) -> None:
     assert loop.context.soul_id == "alpha"
     assert loop.tools.has("exec") is True
     assert "working_dir" in loop.tools.get("exec").parameters["properties"]
+    assert loop._concurrency_gate is not None
+    assert loop._concurrency_gate._value == 10
 
 
 def test_soulboard_context_uses_workspace_system_md_verbatim(tmp_path: Path) -> None:
@@ -115,6 +240,41 @@ def test_soulboard_context_falls_back_to_local_default_prompt(tmp_path: Path) ->
     assert "You are the active soul 'alpha' running inside nanobot-soulboard." in prompt
     assert "## Runtime" in prompt
     assert "AGENTS.md" not in prompt
+
+
+def test_soulboard_context_includes_workspace_skill_summary(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skills" / "alpha-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: alpha-skill\ndescription: Workspace skill for alpha\n---\n\n# Alpha Skill\n",
+        encoding="utf-8",
+    )
+
+    builder = SoulboardContextBuilder(tmp_path, soul_id="alpha")
+
+    prompt = builder.build_system_prompt()
+
+    assert "# Skills" in prompt
+    assert "<name>alpha-skill</name>" in prompt
+    assert str(skill_dir / "SKILL.md") in prompt
+
+
+def test_soulboard_context_appends_workspace_skills_to_system_md(tmp_path: Path) -> None:
+    (tmp_path / "SYSTEM.md").write_text("# Custom system\n", encoding="utf-8")
+    skill_dir = tmp_path / "skills" / "alpha-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: alpha-skill\ndescription: Workspace skill for alpha\n---\n\n# Alpha Skill\n",
+        encoding="utf-8",
+    )
+
+    builder = SoulboardContextBuilder(tmp_path, soul_id="alpha")
+
+    prompt = builder.build_system_prompt()
+
+    assert prompt.startswith("# Custom system\n")
+    assert "# Skills" in prompt
+    assert "<name>alpha-skill</name>" in prompt
 
 
 def test_soul_session_manager_round_trips_plain_metadata(tmp_path: Path) -> None:

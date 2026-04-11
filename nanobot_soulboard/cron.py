@@ -1,7 +1,5 @@
 """Soulboard-local cron extensions."""
 
-from __future__ import annotations
-
 import json
 from datetime import datetime
 from pathlib import Path
@@ -10,7 +8,7 @@ from typing import Any
 from loguru import logger
 from nanobot.agent.tools.cron import CronTool
 from nanobot.cron.service import CronService
-from nanobot.cron.types import CronJob, CronJobState, CronPayload, CronRunRecord, CronSchedule, CronStore
+from nanobot.cron.types import CronJob, CronJobState, CronPayload, CronRunRecord, CronSchedule
 
 
 class SoulCronService(CronService):
@@ -19,35 +17,23 @@ class SoulCronService(CronService):
     def __init__(self, store_path: Path, soul_id: str):
         super().__init__(store_path)
         self._soul_id = soul_id
-        self._session_keys: dict[str, str] | None = None
-        self._delivery_metadata: dict[str, dict[str, Any]] | None = None
+        self._session_keys: dict[str, str] = {}
+        self._delivery_metadata: dict[str, dict[str, Any]] = {}
 
     async def start(self) -> None:
         await super().start()
         logger.info("Cron service started for soul '{}' with {} jobs", self._soul_id, len(self._store.jobs if self._store else []))
 
-    def _load_store(self) -> CronStore:
+    def _load_jobs(self) -> tuple[list[CronJob], int]:
         """Load jobs from disk, including soulboard-only session keys stored per job."""
-        if self._store and self.store_path.exists():
-            mtime = self.store_path.stat().st_mtime
-            if mtime != self._last_mtime:
-                logger.info("Cron: jobs.json modified externally, reloading")
-                self._store = None
-                self._session_keys = None
-                self._delivery_metadata = None
-        if self._store:
-            if self._session_keys is None:
-                self._session_keys = {}
-            if self._delivery_metadata is None:
-                self._delivery_metadata = {}
-            return self._store
-
         self._session_keys = {}
         self._delivery_metadata = {}
+        jobs: list[CronJob] = []
+        version = 1
         if self.store_path.exists():
             try:
                 data = json.loads(self.store_path.read_text(encoding="utf-8"))
-                jobs = []
+                version = data.get("version", 1)
                 for j in data.get("jobs", []):
                     job = CronJob(
                         id=j["id"],
@@ -93,18 +79,12 @@ class SoulCronService(CronService):
                     delivery_metadata = self._normalize_delivery_metadata(j.get("deliveryMetadata"))
                     if delivery_metadata:
                         self._delivery_metadata[job.id] = delivery_metadata
-                self._store = CronStore(jobs=jobs)
             except Exception as exc:
                 logger.warning("Failed to load cron store: {}", exc)
-                self._store = CronStore()
+                jobs = []
                 self._session_keys = {}
                 self._delivery_metadata = {}
-        else:
-            self._store = CronStore()
-            self._session_keys = {}
-            self._delivery_metadata = {}
-
-        return self._store
+        return jobs, version
 
     def _save_store(self) -> None:
         """Save jobs to disk, including soulboard-only session keys per job."""
@@ -112,8 +92,6 @@ class SoulCronService(CronService):
             return
 
         self.store_path.parent.mkdir(parents=True, exist_ok=True)
-        session_keys = self._session_keys or {}
-        delivery_metadata = self._delivery_metadata or {}
         data = {
             "version": self._store.version,
             "jobs": [
@@ -153,14 +131,13 @@ class SoulCronService(CronService):
                     "createdAtMs": job.created_at_ms,
                     "updatedAtMs": job.updated_at_ms,
                     "deleteAfterRun": job.delete_after_run,
-                    "sessionKey": session_keys.get(job.id),
-                    "deliveryMetadata": delivery_metadata.get(job.id),
+                    "sessionKey": self._session_keys.get(job.id),
+                    "deliveryMetadata": self._delivery_metadata.get(job.id),
                 }
                 for job in self._store.jobs
             ],
         }
         self.store_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        self._last_mtime = self.store_path.stat().st_mtime
 
     @staticmethod
     def _normalize_delivery_metadata(raw: Any) -> dict[str, Any]:
@@ -173,11 +150,11 @@ class SoulCronService(CronService):
 
     def get_session_key(self, job_id: str) -> str | None:
         self._load_store()
-        return (self._session_keys or {}).get(job_id)
+        return self._session_keys.get(job_id)
 
     def get_delivery_metadata(self, job_id: str) -> dict[str, Any]:
         self._load_store()
-        metadata = (self._delivery_metadata or {}).get(job_id, {})
+        metadata = self._delivery_metadata.get(job_id, {})
         return dict(metadata)
 
     def add_job(
@@ -203,33 +180,32 @@ class SoulCronService(CronService):
             delete_after_run=delete_after_run,
         )
         normalized_metadata = self._normalize_delivery_metadata(delivery_metadata)
-        if session_key or normalized_metadata:
-            self._load_store()
-            if session_key:
-                assert self._session_keys is not None
-                self._session_keys[job.id] = session_key
-            if normalized_metadata:
-                assert self._delivery_metadata is not None
-                self._delivery_metadata[job.id] = normalized_metadata
-            self._save_store()
-        return job
+        self._load_store()
+        stored_job = next((item for item in self._store.jobs if item.id == job.id), None)
+        if stored_job is None:
+            stored_job = job
+            self._store.jobs.append(stored_job)
+        if session_key:
+            self._session_keys[stored_job.id] = session_key
+        if normalized_metadata:
+            self._delivery_metadata[stored_job.id] = normalized_metadata
+        self._save_store()
+        return stored_job
 
     def remove_job(self, job_id: str) -> bool:
-        removed = super().remove_job(job_id)
-        if removed:
+        result = super().remove_job(job_id)
+        if result == "removed":
             self._load_store()
-            if self._session_keys is not None:
-                self._session_keys.pop(job_id, None)
-            if self._delivery_metadata is not None:
-                self._delivery_metadata.pop(job_id, None)
-                self._save_store()
-        return removed
+            self._session_keys.pop(job_id, None)
+            self._delivery_metadata.pop(job_id, None)
+            self._save_store()
+            return True
+        return False
 
     def list_jobs_with_session_keys(self, include_disabled: bool = False) -> list[tuple[CronJob, str | None]]:
         """List jobs paired with the session key that created them."""
         self._load_store()
-        session_keys = self._session_keys or {}
-        return [(job, session_keys.get(job.id)) for job in self.list_jobs(include_disabled=include_disabled)]
+        return [(job, self._session_keys.get(job.id)) for job in self.list_jobs(include_disabled=include_disabled)]
 
 
 class SoulCronTool(CronTool):

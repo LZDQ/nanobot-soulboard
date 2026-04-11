@@ -1,7 +1,5 @@
 """Run the soulboard FastAPI server."""
 
-from __future__ import annotations
-
 import uvicorn
 
 

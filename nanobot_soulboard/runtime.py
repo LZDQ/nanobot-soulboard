@@ -1,9 +1,8 @@
 """Single-process runtime management for nanobot-soulboard."""
 
-from __future__ import annotations
-
 import asyncio
 import json
+import os
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -93,6 +92,45 @@ def _apply_mcp_selection(config: Config, enabled_mcp_servers: list[str]) -> None
     config.tools.mcp_servers = selected
 
 
+def _validate_mcp_http_header_overrides(
+    available_servers: dict[str, MCPServerConfig],
+    overrides: SoulOverrides,
+) -> None:
+    if not overrides.mcp_http_headers:
+        return
+
+    unknown = sorted(name for name in overrides.mcp_http_headers if name not in available_servers)
+    if unknown:
+        unknown_str = ", ".join(unknown)
+        raise ValueError(f"Unknown MCP server(s) in soulboard MCP header overrides: {unknown_str}")
+
+    selected_servers = set(overrides.mcp_servers)
+    unselected = sorted(name for name in overrides.mcp_http_headers if name not in selected_servers)
+    if unselected:
+        unselected_str = ", ".join(unselected)
+        raise ValueError(
+            f"MCP header overrides require the server to be enabled for this soul: {unselected_str}"
+        )
+
+    for name in overrides.mcp_http_headers:
+        server = available_servers[name]
+        if server.type == "stdio" or (server.type is None and not server.url):
+            raise ValueError(
+                f"MCP header overrides are only supported for HTTP MCP servers: {name}"
+            )
+
+
+def _apply_mcp_http_header_overrides(config: Config, overrides: SoulOverrides) -> None:
+    if not overrides.mcp_http_headers:
+        return
+
+    for name, header_overrides in overrides.mcp_http_headers.items():
+        server = config.tools.mcp_servers[name]
+        config.tools.mcp_servers[name] = server.model_copy(
+            update={"headers": {**server.headers, **header_overrides}}
+        )
+
+
 def build_runtime_config(base_config: Config, spec: SoulSpec) -> Config:
     """Build an in-memory nanobot config for one soul runtime."""
     config = _copy_config(base_config)
@@ -102,7 +140,9 @@ def build_runtime_config(base_config: Config, spec: SoulSpec) -> Config:
     if spec.overrides.provider:
         config.agents.defaults.provider = spec.overrides.provider
     _apply_channel_selection(config, list(spec.overrides.channels))
+    _validate_mcp_http_header_overrides(base_config.tools.mcp_servers, spec.overrides)
     _apply_mcp_selection(config, list(spec.overrides.mcp_servers))
+    _apply_mcp_http_header_overrides(config, spec.overrides)
     return config
 
 
@@ -111,7 +151,10 @@ class SoulAgentLoop(AgentLoop):
 
     def __init__(self, *args, soul_id: str, **kwargs):
         session_manager = kwargs.pop("session_manager", None)
+        self.soul_id = soul_id
         super().__init__(*args, **kwargs)
+        if "NANOBOT_MAX_CONCURRENT_REQUESTS" not in os.environ:
+            self._concurrency_gate = asyncio.Semaphore(10)
         if session_manager is not None:
             self.sessions = session_manager
         self.context = SoulboardContextBuilder(self.workspace, soul_id=soul_id)
@@ -142,8 +185,8 @@ class SoulAgentLoop(AgentLoop):
             content = entry.get("content")
             if role == "assistant" and not content and not entry.get("tool_calls"):
                 continue
-            if role == "tool" and isinstance(content, str) and len(content) > self._TOOL_RESULT_MAX_CHARS:
-                entry["content"] = content[:self._TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
+            if role == "tool" and isinstance(content, str) and len(content) > self.max_tool_result_chars:
+                entry["content"] = content[:self.max_tool_result_chars] + "\n... (truncated)"
             elif role == "user":
                 if isinstance(content, str) and content.startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
                     parts = content.split("\n\n", 1)
@@ -324,7 +367,7 @@ class SoulAgentLoop(AgentLoop):
             system_metadata = dict(msg.metadata or {})
             system_key = str(system_metadata.get("_system_session_key") or f"{channel}:{chat_id}")
             session = self.sessions.get_or_create(system_key)
-            await self.memory_consolidator.maybe_consolidate_by_tokens(session)
+            await self.consolidator.maybe_consolidate_by_tokens(session)
             self._set_tool_context(channel, chat_id, system_metadata.get("message_id"), system_key, system_metadata)
             history = session.get_history(max_messages=0)
             current_role = "assistant" if msg.sender_id == "subagent" else "user"
@@ -347,7 +390,7 @@ class SoulAgentLoop(AgentLoop):
                 session_key=system_key,
                 metadata=system_metadata,
             )
-            self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
+            self._schedule_background(self.consolidator.maybe_consolidate_by_tokens(session))
             outbound_metadata = {key: value for key, value in system_metadata.items() if not key.startswith("_")}
             return OutboundMessage(
                 channel=channel,
@@ -364,7 +407,7 @@ class SoulAgentLoop(AgentLoop):
         if result := await self.commands.dispatch(ctx):
             return result
 
-        await self.memory_consolidator.maybe_consolidate_by_tokens(session)
+        await self.consolidator.maybe_consolidate_by_tokens(session)
 
         self._set_tool_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"), key, msg.metadata or {})
         if message_tool := self.tools.get("message"):
@@ -406,7 +449,7 @@ class SoulAgentLoop(AgentLoop):
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
 
-        self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
+        self._schedule_background(self.consolidator.maybe_consolidate_by_tokens(session))
 
         if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
             return None
@@ -481,13 +524,23 @@ class SoulSupervisor:
         overrides = self.soulboard_config.souls.get(soul_id)
         if overrides is None:
             raise KeyError(f"Unknown soul: {soul_id}")
-        if not overrides.mcp_servers:
+        if not overrides.mcp_servers and not overrides.mcp_http_headers:
             return
         known = set(self.base_config.tools.mcp_servers)
         filtered = [name for name in overrides.mcp_servers if name in known]
-        if filtered == overrides.mcp_servers:
+        filtered_headers = {
+            name: headers
+            for name, headers in overrides.mcp_http_headers.items()
+            if name in known and name in filtered
+        }
+        if filtered == overrides.mcp_servers and filtered_headers == overrides.mcp_http_headers:
             return
-        self.soulboard_config.souls[soul_id] = overrides.model_copy(update={"mcp_servers": filtered})
+        self.soulboard_config.souls[soul_id] = overrides.model_copy(
+            update={
+                "mcp_servers": filtered,
+                "mcp_http_headers": filtered_headers,
+            }
+        )
         save_soulboard_config(self.soulboard_config, self.config_path)
 
     def read_soul_prompt_files(self, soul_id: str) -> dict[str, str | None]:
@@ -518,6 +571,7 @@ class SoulSupervisor:
         if soul_id in self._running_souls:
             raise RuntimeError(f"Cannot modify running soul: {soul_id}")
         validate_soul_id(soul_id)
+        _validate_mcp_http_header_overrides(self.base_config.tools.mcp_servers, overrides)
         self.soulboard_config.souls[soul_id] = overrides
         save_soulboard_config(self.soulboard_config, self.config_path)
 
@@ -526,7 +580,9 @@ class SoulSupervisor:
         validate_soul_id(soul_id)
         if soul_id in self.soulboard_config.souls:
             raise ValueError(f"Soul already exists: {soul_id}")
-        self.soulboard_config.souls[soul_id] = overrides or SoulOverrides()
+        resolved_overrides = overrides or SoulOverrides()
+        _validate_mcp_http_header_overrides(self.base_config.tools.mcp_servers, resolved_overrides)
+        self.soulboard_config.souls[soul_id] = resolved_overrides
         save_soulboard_config(self.soulboard_config, self.config_path)
         return self.get_spec(soul_id)
 
@@ -614,8 +670,7 @@ class SoulSupervisor:
             model=config.agents.defaults.model,
             max_iterations=config.agents.defaults.max_tool_iterations,
             context_window_tokens=config.agents.defaults.context_window_tokens,
-            web_search_config=config.tools.web.search,
-            web_proxy=config.tools.web.proxy or None,
+            web_config=config.tools.web,
             exec_config=config.tools.exec,
             cron_service=cron_service,
             restrict_to_workspace=config.tools.restrict_to_workspace,
@@ -701,11 +756,13 @@ class SoulSupervisor:
             return
         running.agent_loop.stop()
         await running.agent_loop.close_mcp()
-        if running.agent_task:
+        current_loop = asyncio.get_running_loop()
+        if running.agent_task and running.agent_task.get_loop() is current_loop and not running.agent_task.get_loop().is_closed():
             await asyncio.gather(running.agent_task, return_exceptions=True)
         if running.channels_task:
             running.channels_task.cancel()
-            await asyncio.gather(running.channels_task, return_exceptions=True)
+            if running.channels_task.get_loop() is current_loop and not running.channels_task.get_loop().is_closed():
+                await asyncio.gather(running.channels_task, return_exceptions=True)
         await running.channel_manager.stop_all()
         if running.cron_started:
             running.cron_service.stop()

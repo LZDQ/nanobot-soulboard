@@ -34,5 +34,13 @@ include = [
     "pyproject.toml",
 ]
 
+[tool.hatch.build]
+include = [
+    "nanobot_soulboard/**/*.py",
+    "README.md",
+    "tests/",
+    "pyproject.toml",
+]
+
 [tool.uv.sources]
 nanobot-ai = { path = "nanobot", editable = true }

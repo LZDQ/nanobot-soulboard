@@ -5,6 +5,7 @@ After=default.target
 [Service]
 Type=oneshot
 WorkingDirectory=/home/claw/nanobot-soulboard
+ExecStartPre=/bin/bash -c 'while ! echo > /dev/tcp/127.0.0.1/7890; do sleep 1; done'
 ExecStart=/home/claw/nanobot-soulboard/recreate_tmux_session.sh --no-attach
 RemainAfterExit=yes
 

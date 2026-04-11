@@ -1,7 +1,5 @@
 """Configuration helpers for nanobot-soulboard."""
 
-from __future__ import annotations
-
 import json
 import re
 from pathlib import Path
@@ -35,6 +33,13 @@ class SoulOverrides(BaseModel):
     mcp_servers: list[str] = Field(
         default_factory=list,
         description="List of MCP server names selected from the base nanobot config.",
+    )
+    mcp_http_headers: dict[str, dict[str, str]] = Field(
+        default_factory=dict,
+        description=(
+            "Per-selected MCP server HTTP header overrides for this soul. "
+            "Headers are merged on top of the shared base MCP server definition."
+        ),
     )
     autostart: bool = Field(
         default=False,

@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import ReactMarkdown from "react-markdown";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import { Toaster, toast } from "sonner";
+import "katex/dist/katex.min.css";
+
+import { normalizeMathDelimiters } from "./markdown";
 
 type SoulOverrides = {
   workspace?: string | null;
@@ -9,6 +14,7 @@ type SoulOverrides = {
   provider?: string | null;
   channels: string[];
   mcp_servers: string[];
+  mcp_http_headers: Record<string, Record<string, string>>;
   autostart: boolean;
 };
 
@@ -28,9 +34,16 @@ type MCPServer = {
   config: MCPServerConfig;
 };
 
+type SoulSkill = {
+  name: string;
+  path: string;
+  content: string;
+};
+
 type Soul = {
   soul_id: string;
   workspace: string;
+  skills: SoulSkill[];
   running: boolean;
   overrides: SoulOverrides;
 };
@@ -117,6 +130,7 @@ type DraftOverrides = {
   provider: string;
   channels: string;
   mcp_servers: string[];
+  mcp_http_headers: Record<string, string>;
   autostart: boolean;
 };
 
@@ -188,6 +202,29 @@ function getWsBase(): string {
   return url.toString().replace(/\/$/, "");
 }
 
+function getFocusFromUrl(): { soulId: string; sessionKey: string | null } {
+  const params = new URLSearchParams(window.location.search);
+  return {
+    soulId: params.get("soul-id") ?? "",
+    sessionKey: params.get("session-key"),
+  };
+}
+
+function syncFocusToUrl(soulId: string, sessionKey: string | null): void {
+  const url = new URL(window.location.href);
+  if (soulId) {
+    url.searchParams.set("soul-id", soulId);
+  } else {
+    url.searchParams.delete("soul-id");
+  }
+  if (soulId && sessionKey) {
+    url.searchParams.set("session-key", sessionKey);
+  } else {
+    url.searchParams.delete("session-key");
+  }
+  window.history.replaceState({}, "", url);
+}
+
 function splitCsv(value: string): string[] {
   return value
     .split(",")
@@ -213,17 +250,60 @@ function overridesToDraft(overrides: SoulOverrides): DraftOverrides {
     provider: overrides.provider ?? "",
     channels: overrides.channels.join(", "),
     mcp_servers: [...overrides.mcp_servers],
+    mcp_http_headers: Object.fromEntries(
+      Object.entries(overrides.mcp_http_headers ?? {}).map(([name, headers]) => [
+        name,
+        JSON.stringify(headers, null, 2),
+      ]),
+    ),
     autostart: overrides.autostart,
   };
 }
 
+function normalizeSoulMcpHeaderDraft(
+  selectedServers: string[],
+  headerDraft: Record<string, string>,
+): Record<string, string> {
+  return Object.fromEntries(
+    selectedServers
+      .filter((name) => Object.prototype.hasOwnProperty.call(headerDraft, name))
+      .map((name) => [name, headerDraft[name] ?? "{}"]),
+  );
+}
+
+function updateSoulMcpSelection(
+  draft: DraftOverrides,
+  serverName: string,
+  checked: boolean,
+): DraftOverrides {
+  const nextServers = checked
+    ? draft.mcp_servers.includes(serverName)
+      ? draft.mcp_servers
+      : [...draft.mcp_servers, serverName]
+    : draft.mcp_servers.filter((name) => name !== serverName);
+  const nextHeaders = checked
+    ? { ...draft.mcp_http_headers, [serverName]: draft.mcp_http_headers[serverName] ?? "{}" }
+    : normalizeSoulMcpHeaderDraft(nextServers, draft.mcp_http_headers);
+  return {
+    ...draft,
+    mcp_servers: nextServers,
+    mcp_http_headers: nextHeaders,
+  };
+}
+
 function draftToOverrides(draft: DraftOverrides): SoulOverrides {
+  const mcpHttpHeaders = Object.fromEntries(
+    Object.entries(normalizeSoulMcpHeaderDraft(draft.mcp_servers, draft.mcp_http_headers)).map(
+      ([name, rawHeaders]) => [name, parseRecordInput(`mcp_http_headers.${name}`, rawHeaders)],
+    ),
+  );
   return {
     workspace: draft.workspace || null,
     model: draft.model || null,
     provider: draft.provider || null,
     channels: splitCsv(draft.channels),
     mcp_servers: [...draft.mcp_servers],
+    mcp_http_headers: mcpHttpHeaders,
     autostart: draft.autostart,
   };
 }
@@ -364,7 +444,8 @@ function MarkdownMessage({ content }: { content: string }) {
   return (
     <div className="markdown-content">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeKatex]}
         components={{
           a: ({ ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
           pre: ({ children }) => {
@@ -393,7 +474,7 @@ function MarkdownMessage({ content }: { content: string }) {
           },
         }}
       >
-        {content}
+        {normalizeMathDelimiters(content)}
       </ReactMarkdown>
     </div>
   );
@@ -418,6 +499,16 @@ function renderOverrideValue(value: string | string[] | boolean | null | undefin
 
 function renderEnabledList(values: string[]): string {
   return values.length ? values.join(", ") : "none enabled";
+}
+
+function renderHeaderOverrideSummary(headersByServer: Record<string, Record<string, string>>): string {
+  const serverNames = Object.keys(headersByServer);
+  if (!serverNames.length) {
+    return "none";
+  }
+  return serverNames
+    .map((name) => `${name} (${Object.keys(headersByServer[name] ?? {}).length})`)
+    .join(", ");
 }
 
 function promptFilesToDraft(files: SoulPromptFile[]): SoulPromptDraft {
@@ -491,8 +582,10 @@ function formatCronSchedule(schedule: CronJobSchedule): string {
 }
 
 export default function App() {
+  const initialFocusRef = useRef(getFocusFromUrl());
+
   const [souls, setSouls] = useState<Soul[]>([]);
-  const [selectedSoulId, setSelectedSoulId] = useState<string>("");
+  const [selectedSoulId, setSelectedSoulId] = useState<string>(initialFocusRef.current.soulId);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [mcpServers, setMcpServers] = useState<MCPServer[]>([]);
   const [promptFiles, setPromptFiles] = useState<SoulPromptFile[]>([]);
@@ -501,7 +594,7 @@ export default function App() {
   const [createMcpServerName, setCreateMcpServerName] = useState("");
   const [createSessionKey, setCreateSessionKey] = useState("");
   const [sessionDetail, setSessionDetail] = useState<SessionDetail | null>(null);
-  const [sessionKey, setSessionKey] = useState<string | null>(null);
+  const [sessionKey, setSessionKey] = useState<string | null>(initialFocusRef.current.sessionKey);
   const [socketEpoch, setSocketEpoch] = useState(0);
   const [chatInput, setChatInput] = useState("");
   const [chatReasoning, setChatReasoning] = useState("");
@@ -516,6 +609,7 @@ export default function App() {
     provider: "",
     channels: "",
     mcp_servers: [],
+    mcp_http_headers: {},
     autostart: false,
   });
   const [mcpDraft, setMcpDraft] = useState<MCPServerDraft>(getEmptyMcpDraft());
@@ -595,9 +689,10 @@ export default function App() {
     }
   }
 
-  async function refreshSessions(soulId: string): Promise<void> {
+  async function refreshSessions(soulId: string): Promise<SessionSummary[]> {
     const nextSessions = await api<SessionSummary[]>(`/api/souls/${encodeURIComponent(soulId)}/sessions`);
     setSessions(nextSessions);
+    return nextSessions;
   }
 
   async function refreshPromptFiles(soulId: string, resetDraft = false): Promise<void> {
@@ -658,6 +753,7 @@ export default function App() {
     if (!selectedSoul) {
       return;
     }
+    const pendingSessionKey = initialFocusRef.current.soulId === selectedSoul.soul_id ? initialFocusRef.current.sessionKey : null;
     setDraft(overridesToDraft(selectedSoul.overrides));
     setIsEditingSoul(false);
     setIsCreatingSoul(false);
@@ -668,23 +764,34 @@ export default function App() {
     setIsEditingPromptFiles(false);
     setSoulError("");
     setSessionDetail(null);
-    setSessionKey(null);
+    setSessionKey(pendingSessionKey);
     setChatContent("");
     setChatReasoning("");
     setFinalizedMessages([]);
     socketRef.current?.close();
     socketRef.current = null;
     setSocketState("closed");
-    void refreshSessions(selectedSoul.soul_id).catch((cause) => {
-      notifyError(cause);
-    });
+    void refreshSessions(selectedSoul.soul_id)
+      .then((nextSessions) => {
+        if (pendingSessionKey && nextSessions.some((session) => session.key === pendingSessionKey)) {
+          void loadSession(pendingSessionKey);
+        }
+      })
+      .catch((cause) => {
+        notifyError(cause);
+      });
     void refreshPromptFiles(selectedSoul.soul_id).catch((cause) => {
       notifyError(cause);
     });
     void refreshCronJobs(selectedSoul.soul_id).catch((cause) => {
       notifyError(cause);
     });
+    initialFocusRef.current = { soulId: "", sessionKey: null };
   }, [selectedSoul?.soul_id]);
+
+  useEffect(() => {
+    syncFocusToUrl(selectedSoulId, sessionKey);
+  }, [selectedSoulId, sessionKey]);
 
   useEffect(() => {
     const selected = mcpServers.find((server) => server.name === selectedMcpServerName);
@@ -1133,6 +1240,7 @@ export default function App() {
                   provider: "",
                   channels: "",
                   mcp_servers: [],
+                  mcp_http_headers: {},
                   autostart: false,
                 });
               }}
@@ -1221,12 +1329,7 @@ export default function App() {
                           type="checkbox"
                           checked={draft.mcp_servers.includes(server.name)}
                           onChange={(event) => {
-                            setDraft((current) => ({
-                              ...current,
-                              mcp_servers: event.target.checked
-                                ? [...current.mcp_servers, server.name]
-                                : current.mcp_servers.filter((name) => name !== server.name),
-                            }));
+                            setDraft((current) => updateSoulMcpSelection(current, server.name, event.target.checked));
                           }}
                         />
                         <span>{server.name}</span>
@@ -1235,6 +1338,30 @@ export default function App() {
                     {!mcpServers.length ? <p className="muted">No MCP server definitions available.</p> : null}
                   </div>
                 </label>
+                {draft.mcp_servers.length ? (
+                  <div className="field-grid">
+                    {draft.mcp_servers.map((serverName) => (
+                      <label key={serverName}>
+                        <span>MCP headers: {serverName}</span>
+                        <textarea
+                          value={draft.mcp_http_headers[serverName] ?? "{}"}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setDraft((current) => ({
+                              ...current,
+                              mcp_http_headers: {
+                                ...current.mcp_http_headers,
+                                [serverName]: value,
+                              },
+                            }));
+                          }}
+                          rows={6}
+                          spellCheck={false}
+                        />
+                      </label>
+                    ))}
+                  </div>
+                ) : null}
                 <label className="checkbox">
                   <input
                     type="checkbox"
@@ -1378,12 +1505,7 @@ export default function App() {
                                 type="checkbox"
                                 checked={draft.mcp_servers.includes(server.name)}
                                 onChange={(event) => {
-                                  setDraft((current) => ({
-                                    ...current,
-                                    mcp_servers: event.target.checked
-                                      ? [...current.mcp_servers, server.name]
-                                      : current.mcp_servers.filter((name) => name !== server.name),
-                                  }));
+                                  setDraft((current) => updateSoulMcpSelection(current, server.name, event.target.checked));
                                 }}
                               />
                               <span>{server.name}</span>
@@ -1392,6 +1514,30 @@ export default function App() {
                           {!mcpServers.length ? <p className="muted">No MCP server definitions available.</p> : null}
                         </div>
                       </label>
+                      {draft.mcp_servers.length ? (
+                        <div className="field-grid">
+                          {draft.mcp_servers.map((serverName) => (
+                            <label key={serverName}>
+                              <span>MCP headers: {serverName}</span>
+                              <textarea
+                                value={draft.mcp_http_headers[serverName] ?? "{}"}
+                                onChange={(event) => {
+                                  const value = event.target.value;
+                                  setDraft((current) => ({
+                                    ...current,
+                                    mcp_http_headers: {
+                                      ...current.mcp_http_headers,
+                                      [serverName]: value,
+                                    },
+                                  }));
+                                }}
+                                rows={6}
+                                spellCheck={false}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      ) : null}
                       <label className="checkbox">
                         <input
                           type="checkbox"
@@ -1411,6 +1557,43 @@ export default function App() {
                         <span>Resolved workspace</span>
                         <strong>{selectedSoul.workspace}</strong>
                       </article>
+                      <article className="override-card override-card-wide">
+                        <span>Skills</span>
+                        {selectedSoul.skills.length ? (
+                          <div className="skill-list">
+                            {selectedSoul.skills.map((skill) => (
+                              <details key={skill.path} className="skill-entry-details">
+                                <summary className="skill-entry-summary">
+                                  <strong>{skill.name}</strong>
+                                  <button
+                                    type="button"
+                                    className="ghost skill-path-button"
+                                    title={`Copy ${skill.path}`}
+                                    onClick={(event) => {
+                                      event.preventDefault();
+                                      void copyToClipboard(skill.path).then(() => {
+                                        toast.success(`Copied ${skill.name} path`);
+                                      });
+                                    }}
+                                  >
+                                    <code>{skill.path}</code>
+                                  </button>
+                                </summary>
+                                <div className="skill-content markdown-content">
+                                  <ReactMarkdown
+                                    remarkPlugins={[remarkGfm, remarkMath]}
+                                    rehypePlugins={[rehypeKatex]}
+                                  >
+                                    {normalizeMathDelimiters(skill.content)}
+                                  </ReactMarkdown>
+                                </div>
+                              </details>
+                            ))}
+                          </div>
+                        ) : (
+                          <strong>none</strong>
+                        )}
+                      </article>
                       <article className="override-card">
                         <span>Model override</span>
                         <strong>{renderOverrideValue(selectedSoul.overrides.model)}</strong>
@@ -1426,6 +1609,10 @@ export default function App() {
                       <article className="override-card">
                         <span>Enabled MCP servers</span>
                         <strong>{renderEnabledList(selectedSoul.overrides.mcp_servers)}</strong>
+                      </article>
+                      <article className="override-card">
+                        <span>MCP header overrides</span>
+                        <strong>{renderHeaderOverrideSummary(selectedSoul.overrides.mcp_http_headers ?? {})}</strong>
                       </article>
                       <article className="override-card">
                         <span>Autostart</span>
@@ -1610,7 +1797,7 @@ export default function App() {
                             ) : isEditingPromptFiles ? (
                               <p className="muted">Enable this file to edit and include it in the save payload.</p>
                             ) : exists ? (
-                              <pre>{content}</pre>
+                              <MarkdownMessage content={content} />
                             ) : (
                               <p className="muted">This file does not exist yet.</p>
                             )}

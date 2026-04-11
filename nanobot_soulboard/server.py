@@ -1,8 +1,7 @@
 """FastAPI server for nanobot-soulboard."""
 
-from __future__ import annotations
-
 import asyncio
+from importlib.resources import files as pkg_files
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,8 +17,7 @@ from nanobot.config.schema import MCPServerConfig
 from nanobot.cli.commands import _make_provider as make_provider
 from nanobot.cron.types import CronJob
 from nanobot.utils.helpers import sync_workspace_templates
-
-from nanobot_soulboard.config import SoulOverrides, load_soulboard_config
+from nanobot_soulboard.config import SoulOverrides, load_soulboard_config, save_soulboard_config
 from nanobot_soulboard.runtime import SOUL_PROMPT_FILES, SoulAgentLoop, SoulSessionManager, SoulSpec, SoulSupervisor
 
 
@@ -123,11 +121,20 @@ class StreamFinalizedMessageResponse(BaseModel):
     tool_call_id: str | None = None
 
 
+class SoulSkillResponse(BaseModel):
+    """One workspace skill visible to the soul."""
+
+    name: str
+    path: str
+    content: str
+
+
 class SoulResponse(BaseModel):
     """Soul summary returned by the API."""
 
     soul_id: str
     workspace: str
+    skills: list[SoulSkillResponse]
     running: bool
     overrides: SoulOverrides
 
@@ -250,11 +257,44 @@ class ErrorResponse(BaseModel):
 class AppState:
     """Typed app state."""
 
-    def __init__(self, supervisor: SoulSupervisor, nano_root: Path, base_config_path: Path, soulboard_config_path: Path):
+    def __init__(
+        self,
+        supervisor: SoulSupervisor,
+        nano_root: Path,
+        base_config_path: Path,
+        soulboard_config_path: Path,
+    ):
         self.supervisor = supervisor
         self.nano_root = nano_root
         self.base_config_path = base_config_path
         self.soulboard_config_path = soulboard_config_path
+
+
+def _sync_soul_workspace(spec: SoulSpec) -> None:
+    """Sync the soulboard workspace scaffold without default USER.md/TOOLS.md."""
+    try:
+        templates = pkg_files("nanobot") / "templates"
+    except Exception:
+        return
+    if not templates.is_dir():
+        return
+
+    excluded_root_files = {"USER.md", "TOOLS.md"}
+
+    def _write_if_missing(src, dest: Path) -> None:
+        if dest.exists():
+            return
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(src.read_text(encoding="utf-8") if src else "", encoding="utf-8")
+
+    for item in templates.iterdir():
+        if not item.name.endswith(".md") or item.name.startswith(".") or item.name in excluded_root_files:
+            continue
+        _write_if_missing(item, spec.workspace / item.name)
+
+    _write_if_missing(templates / "memory" / "MEMORY.md", spec.workspace / "memory" / "MEMORY.md")
+    _write_if_missing(None, spec.workspace / "memory" / "history.jsonl")
+    (spec.workspace / "skills").mkdir(parents=True, exist_ok=True)
 
 
 @dataclass
@@ -271,9 +311,26 @@ def _to_soul_response(supervisor: SoulSupervisor, spec: SoulSpec) -> SoulRespons
     return SoulResponse(
         soul_id=spec.soul_id,
         workspace=str(spec.workspace),
+        skills=_list_soul_skills(spec),
         running=supervisor.is_running(spec.soul_id),
         overrides=spec.overrides,
     )
+
+
+def _list_soul_skills(spec: SoulSpec) -> list[SoulSkillResponse]:
+    skills_root = spec.workspace / "skills"
+    if not skills_root.exists():
+        return []
+
+    skills: list[SoulSkillResponse] = []
+    for skill_dir in sorted(skills_root.iterdir(), key=lambda path: path.name):
+        if not skill_dir.is_dir():
+            continue
+        skill_path = skill_dir / "SKILL.md"
+        if not skill_path.exists():
+            continue
+        skills.append(SoulSkillResponse(name=skill_dir.name, path=str(skill_path), content=skill_path.read_text(encoding="utf-8")))
+    return skills
 
 
 def _get_state(request: Request) -> AppState:
@@ -416,6 +473,7 @@ def create_app(
     resolved_nano_root = (nano_root or (Path.home() / ".nanobot")).expanduser()
     resolved_base_config_path = base_config_path or (resolved_nano_root / "config.json")
     resolved_soulboard_config_path = soulboard_config_path or (resolved_nano_root / "soulboard" / "config.json")
+    initial_soulboard_config = load_soulboard_config(resolved_soulboard_config_path)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -437,7 +495,7 @@ def create_app(
         )
         app.state.streams = {}
         for spec in supervisor.list_specs():
-            sync_workspace_templates(spec.workspace, silent=True)
+            _sync_soul_workspace(spec)
         await supervisor.start_autostart_souls()
         try:
             yield
@@ -575,7 +633,7 @@ def create_app(
             spec = supervisor.create_soul(body.soul_id, body.overrides)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        sync_workspace_templates(spec.workspace, silent=True)
+        _sync_soul_workspace(spec)
         if spec.overrides.autostart:
             await supervisor.start_soul(spec.soul_id)
         return _to_soul_response(supervisor, spec)
@@ -676,7 +734,7 @@ def create_app(
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         spec = supervisor.get_spec(soul_id)
-        sync_workspace_templates(spec.workspace, silent=True)
+        _sync_soul_workspace(spec)
         return _to_soul_response(supervisor, spec)
 
     @app.delete(
@@ -712,7 +770,7 @@ def create_app(
         supervisor = _get_supervisor(request)
         try:
             spec = supervisor.get_spec(soul_id)
-            sync_workspace_templates(spec.workspace, silent=True)
+            _sync_soul_workspace(spec)
             await supervisor.start_soul(soul_id)
             spec = supervisor.get_spec(soul_id)
         except KeyError as exc:
