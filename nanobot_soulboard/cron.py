@@ -149,11 +149,9 @@ class SoulCronService(CronService):
         return metadata
 
     def get_session_key(self, job_id: str) -> str | None:
-        self._load_store()
         return self._session_keys.get(job_id)
 
     def get_delivery_metadata(self, job_id: str) -> dict[str, Any]:
-        self._load_store()
         metadata = self._delivery_metadata.get(job_id, {})
         return dict(metadata)
 

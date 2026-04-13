@@ -69,4 +69,5 @@ pnpm dev
       }
   ```
 
-  
+- [ ] Deepseek doesn't work if `apiBase` is not set.
+- [ ] Manually tune delivery metadata in cron jobs.

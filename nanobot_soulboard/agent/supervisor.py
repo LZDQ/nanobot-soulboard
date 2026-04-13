@@ -125,21 +125,6 @@ def _apply_mcp_http_header_overrides(config: Config, overrides: SoulOverrides) -
         )
 
 
-def _apply_provider_override(config: Config, provider_name: str) -> None:
-    config.agents.defaults.provider = provider_name
-    spec = find_by_name(provider_name)
-    if spec is None or not spec.default_api_base:
-        return
-    provider_config = getattr(config.providers, spec.name)
-    if provider_config.api_base:
-        return
-    setattr(
-        config.providers,
-        spec.name,
-        provider_config.model_copy(update={"api_base": spec.default_api_base}),
-    )
-
-
 def build_runtime_config(base_config: Config, spec: SoulSpec) -> Config:
     """Build an in-memory nanobot config for one soul runtime."""
     config = _copy_config(base_config)
@@ -147,7 +132,7 @@ def build_runtime_config(base_config: Config, spec: SoulSpec) -> Config:
     if spec.overrides.model:
         config.agents.defaults.model = spec.overrides.model
     if spec.overrides.provider:
-        _apply_provider_override(config, spec.overrides.provider)
+        config.agents.defaults.provider = spec.overrides.provider
     _apply_channel_selection(config, list(spec.overrides.channels))
     _validate_mcp_http_header_overrides(base_config.tools.mcp_servers, spec.overrides)
     _apply_mcp_selection(config, list(spec.overrides.mcp_servers))
