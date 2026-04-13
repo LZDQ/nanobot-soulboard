@@ -22,7 +22,7 @@ def test_server_soul_lifecycle(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("nanobot_soulboard.server.make_provider", lambda _config: provider)
     monkeypatch.setattr("nanobot_soulboard.server.sync_workspace_templates", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(
-        "nanobot_soulboard.runtime.SoulAgentLoop.process_direct",
+        "nanobot_soulboard.agent.loop.SoulAgentLoop.process_direct",
         AsyncMock(return_value=OutboundMessage(channel="cli", chat_id="direct", content="hello")),
     )
 
@@ -142,7 +142,7 @@ def test_server_start_prunes_unknown_mcp_servers(monkeypatch, tmp_path: Path) ->
 
     monkeypatch.setattr("nanobot_soulboard.server.make_provider", lambda _config: provider)
     monkeypatch.setattr("nanobot_soulboard.server.sync_workspace_templates", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr("nanobot_soulboard.runtime.SoulAgentLoop.run", AsyncMock(return_value=None))
+    monkeypatch.setattr("nanobot_soulboard.agent.loop.SoulAgentLoop.run", AsyncMock(return_value=None))
 
     _write_json(
         tmp_path / "config.json",
@@ -188,7 +188,7 @@ def test_server_start_prunes_stale_mcp_http_header_overrides(monkeypatch, tmp_pa
 
     monkeypatch.setattr("nanobot_soulboard.server.make_provider", lambda _config: provider)
     monkeypatch.setattr("nanobot_soulboard.server.sync_workspace_templates", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr("nanobot_soulboard.runtime.SoulAgentLoop.run", AsyncMock(return_value=None))
+    monkeypatch.setattr("nanobot_soulboard.agent.loop.SoulAgentLoop.run", AsyncMock(return_value=None))
 
     _write_json(
         tmp_path / "config.json",
@@ -253,7 +253,7 @@ def test_server_create_and_start_soul_with_mcp_http_headers(monkeypatch, tmp_pat
 
     monkeypatch.setattr("nanobot_soulboard.server.make_provider", _provider_factory)
     monkeypatch.setattr("nanobot_soulboard.server.sync_workspace_templates", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr("nanobot_soulboard.runtime.SoulAgentLoop.run", AsyncMock(return_value=None))
+    monkeypatch.setattr("nanobot_soulboard.agent.loop.SoulAgentLoop.run", AsyncMock(return_value=None))
 
     _write_json(
         tmp_path / "config.json",
@@ -815,7 +815,7 @@ def test_server_websocket_streams_reset_and_chunks(monkeypatch, tmp_path: Path) 
 
     monkeypatch.setattr("nanobot_soulboard.server.make_provider", lambda _config: provider)
     monkeypatch.setattr("nanobot_soulboard.server.sync_workspace_templates", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr("nanobot_soulboard.runtime.SoulAgentLoop.process_direct", _fake_process_direct)
+    monkeypatch.setattr("nanobot_soulboard.agent.loop.SoulAgentLoop.process_direct", _fake_process_direct)
 
     _write_json(tmp_path / "config.json", {"providers": {"ollama": {"apiBase": "http://localhost:11434"}}})
     _write_json(tmp_path / "soulboard" / "config.json", {"souls": {"alpha": {"autostart": True}}})

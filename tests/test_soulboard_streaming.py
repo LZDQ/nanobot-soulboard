@@ -4,7 +4,7 @@ import pytest
 
 from nanobot.bus.queue import MessageBus
 from nanobot.providers.base import LLMResponse
-from nanobot_soulboard.runtime import SoulAgentLoop
+from nanobot_soulboard.agent import SoulAgentLoop
 
 
 @pytest.mark.asyncio

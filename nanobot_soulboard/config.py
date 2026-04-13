@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
-_SOUL_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+_SOUL_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 
 
 class SoulOverrides(BaseModel):

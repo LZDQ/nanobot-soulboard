@@ -13,7 +13,8 @@ from nanobot_soulboard.config import (
 from nanobot_soulboard.cron import SoulCronService, SoulCronTool
 from nanobot_soulboard.context import SoulboardContextBuilder
 from nanobot.cli.commands import _make_provider as make_provider
-from nanobot_soulboard.runtime import (
+from nanobot_soulboard.agent import (
+    SOUL_PROMPT_FILES,
     SoulAgentLoop,
     SoulSpec,
     SoulSupervisor,
@@ -23,6 +24,7 @@ from nanobot_soulboard.runtime import (
 from nanobot_soulboard.server import create_app
 
 __all__ = [
+    "SOUL_PROMPT_FILES",
     "SoulAgentLoop",
     "SoulCronService",
     "SoulCronTool",

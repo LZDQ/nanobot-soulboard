@@ -12,10 +12,11 @@ from nanobot.bus.queue import MessageBus
 from nanobot.config.schema import Config
 from nanobot.cron.types import CronSchedule
 from nanobot.providers.base import LLMResponse, ToolCallRequest
+from nanobot.session.manager import SessionManager
 from nanobot_soulboard.config import SoulOverrides, SoulboardConfig, load_soulboard_config
 from nanobot_soulboard.cron import SoulCronService, SoulCronTool
 from nanobot_soulboard.context import SoulboardContextBuilder
-from nanobot_soulboard.runtime import SoulAgentLoop, SoulSessionManager, SoulSpec, SoulSupervisor, build_runtime_config, discover_soul_specs
+from nanobot_soulboard.agent import SoulAgentLoop, SoulSpec, SoulSupervisor, build_runtime_config, discover_soul_specs
 
 
 def test_discover_soul_specs_uses_config_as_source_of_truth(tmp_path: Path) -> None:
@@ -68,6 +69,34 @@ def test_build_runtime_config_applies_workspace_channel_and_mcp_filters(tmp_path
     assert channels["telegram"]["enabled"] is False
     assert channels["slack"]["enabled"] is True
     assert sorted(config.tools.mcp_servers) == ["filesystem"]
+
+
+def test_build_runtime_config_applies_default_api_base_for_provider_override(tmp_path: Path) -> None:
+    base = Config.model_validate(
+        {
+            "agents": {"defaults": {"workspace": "~/base-workspace", "model": "base-model"}},
+            "providers": {
+                "deepseek": {
+                    "apiKey": "deepseek-key",
+                    "apiBase": None,
+                }
+            },
+        }
+    )
+    spec = SoulSpec(
+        soul_id="alpha",
+        workspace=tmp_path / "souls" / "alpha",
+        overrides=SoulOverrides(
+            model="deepseek-reasoner",
+            provider="deepseek",
+        ),
+    )
+
+    config = build_runtime_config(base, spec)
+
+    assert config.agents.defaults.provider == "deepseek"
+    assert config.providers.deepseek.api_base == "https://api.deepseek.com"
+    assert base.providers.deepseek.api_base is None
 
 
 def test_build_runtime_config_rejects_unknown_mcp_server(tmp_path: Path) -> None:
@@ -278,7 +307,7 @@ def test_soulboard_context_appends_workspace_skills_to_system_md(tmp_path: Path)
 
 
 def test_soul_session_manager_round_trips_plain_metadata(tmp_path: Path) -> None:
-    manager = SoulSessionManager(tmp_path)
+    manager = SessionManager(tmp_path)
     session = manager.get_or_create("cli:direct")
     session.metadata["title"] = "Direct chat"
 
@@ -314,7 +343,7 @@ def test_soul_agent_loop_persists_completed_tool_loops_incrementally(tmp_path: P
                 finish_reason="tool_calls",
             )
         if call_index == 1:
-            reloaded = SoulSessionManager(tmp_path)._load("cli:direct")
+            reloaded = SessionManager(tmp_path)._load("cli:direct")
             assert reloaded is not None
             assert [message["role"] for message in reloaded.messages] == ["user", "assistant", "tool"]
             assert reloaded.messages[1]["tool_calls"][0]["id"] == "call_1"
@@ -333,7 +362,7 @@ def test_soul_agent_loop_persists_completed_tool_loops_incrementally(tmp_path: P
 
     assert result is not None
     assert result.content == "final answer"
-    reloaded = SoulSessionManager(tmp_path)._load("cli:direct")
+    reloaded = SessionManager(tmp_path)._load("cli:direct")
     assert reloaded is not None
     assert [message["role"] for message in reloaded.messages] == [
         "user",
@@ -378,7 +407,7 @@ def test_soul_agent_loop_preserves_completed_tool_loops_after_crash(tmp_path: Pa
     with pytest.raises(RuntimeError, match="boom"):
         asyncio.run(loop.process_direct("hello"))
 
-    reloaded = SoulSessionManager(tmp_path)._load("cli:direct")
+    reloaded = SessionManager(tmp_path)._load("cli:direct")
     assert reloaded is not None
     assert [message["role"] for message in reloaded.messages] == ["user", "assistant", "tool"]
     history = reloaded.get_history(max_messages=0)
@@ -403,7 +432,7 @@ def test_soul_agent_loop_persists_final_response_once(tmp_path: Path) -> None:
 
     assert result is not None
     assert result.content == "done"
-    reloaded = SoulSessionManager(tmp_path)._load("cli:direct")
+    reloaded = SessionManager(tmp_path)._load("cli:direct")
     assert reloaded is not None
     assert [message["role"] for message in reloaded.messages] == ["user", "assistant"]
 

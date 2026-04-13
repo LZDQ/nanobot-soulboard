@@ -16,9 +16,10 @@ from nanobot.config.loader import load_config
 from nanobot.config.schema import MCPServerConfig
 from nanobot.cli.commands import _make_provider as make_provider
 from nanobot.cron.types import CronJob
+from nanobot.session.manager import SessionManager
 from nanobot.utils.helpers import sync_workspace_templates
 from nanobot_soulboard.config import SoulOverrides, load_soulboard_config, save_soulboard_config
-from nanobot_soulboard.runtime import SOUL_PROMPT_FILES, SoulAgentLoop, SoulSessionManager, SoulSpec, SoulSupervisor
+from nanobot_soulboard.agent import SOUL_PROMPT_FILES, SoulAgentLoop, SoulSpec, SoulSupervisor
 
 
 class CreateSoulRequest(BaseModel):
@@ -349,16 +350,12 @@ def _error_detail(exc: Exception) -> str:
     return str(exc.args[0]) if exc.args else str(exc)
 
 
-def _build_session_manager(spec: SoulSpec) -> SoulSessionManager:
-    return SoulSessionManager(spec.workspace)
-
-
-def _get_session_manager(supervisor: SoulSupervisor, spec: SoulSpec) -> SoulSessionManager:
+def _get_session_manager(supervisor: SoulSupervisor, spec: SoulSpec) -> SessionManager:
     try:
         agent_loop: SoulAgentLoop = supervisor.get_agent_loop(spec.soul_id)
         return agent_loop.sessions
     except KeyError:
-        return _build_session_manager(spec)
+        return SessionManager(spec.workspace)
 
 
 def _build_prompt_files_response(files: dict[str, str | None]) -> SoulPromptFilesResponse:
