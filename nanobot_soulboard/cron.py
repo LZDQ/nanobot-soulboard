@@ -258,6 +258,7 @@ class SoulCronTool(CronTool):
 
     def _add_job(
         self,
+        name: str,
         message: str,
         every_seconds: int | None,
         cron_expr: str | None,
@@ -308,7 +309,7 @@ class SoulCronTool(CronTool):
             return "Error: either every_seconds, cron_expr, or at is required"
 
         job = self._cron.add_job(
-            name=message[:30],
+            name=name,
             schedule=schedule,
             message=message,
             deliver=True,
@@ -323,6 +324,7 @@ class SoulCronTool(CronTool):
     async def execute(
         self,
         action: str,
+        name: str | None = None,
         message: str = "",
         every_seconds: int | None = None,
         cron_expr: str | None = None,
@@ -335,7 +337,7 @@ class SoulCronTool(CronTool):
         if action == "add":
             if self._in_cron_context.get():
                 return "Error: cannot schedule new jobs from within a cron job execution"
-            return self._add_job(message, every_seconds, cron_expr, tz, at)
+            return self._add_job(name or message[:10], message, every_seconds, cron_expr, tz, at)
         if action == "list":
             return self._list_jobs(only_current_session=only_current_session)
         if action == "remove":
