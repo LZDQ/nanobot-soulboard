@@ -190,15 +190,14 @@ class SoulCronService(CronService):
         self._save_store()
         return stored_job
 
-    def remove_job(self, job_id: str) -> bool:
+    def remove_job(self, job_id: str):
         result = super().remove_job(job_id)
         if result == "removed":
             self._load_store()
             self._session_keys.pop(job_id, None)
             self._delivery_metadata.pop(job_id, None)
             self._save_store()
-            return True
-        return False
+        return result
 
     def list_jobs_with_session_keys(self, include_disabled: bool = False) -> list[tuple[CronJob, str | None]]:
         """List jobs paired with the session key that created them."""
