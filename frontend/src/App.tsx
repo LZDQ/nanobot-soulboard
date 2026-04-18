@@ -60,6 +60,9 @@ type SessionDetail = {
   updated_at: string;
   metadata: Record<string, unknown>;
   last_consolidated: number;
+  history_start: number;
+  history_end: number;
+  total_messages: number;
   messages: Array<Record<string, unknown>>;
 };
 
@@ -550,6 +553,33 @@ function appendMessages(
   };
 }
 
+function prependSessionWindow(
+  current: SessionDetail | null,
+  older: SessionDetail,
+): SessionDetail | null {
+  if (!current) {
+    return older;
+  }
+  if (older.history_end !== current.history_start) {
+    return {
+      ...older,
+      messages: [...older.messages, ...current.messages],
+      history_end: current.history_end,
+      total_messages: current.total_messages,
+    };
+  }
+  return {
+    ...current,
+    created_at: older.created_at,
+    updated_at: older.updated_at,
+    metadata: older.metadata,
+    last_consolidated: older.last_consolidated,
+    history_start: older.history_start,
+    total_messages: older.total_messages,
+    messages: [...older.messages, ...current.messages],
+  };
+}
+
 function renderMcpTypeLabel(value: string | null): string {
   if (value === "streamableHttp") {
     return "streamable HTTP";
@@ -595,6 +625,7 @@ export default function App() {
   const [createSessionKey, setCreateSessionKey] = useState("");
   const [sessionDetail, setSessionDetail] = useState<SessionDetail | null>(null);
   const [sessionKey, setSessionKey] = useState<string | null>(initialFocusRef.current.sessionKey);
+  const [olderMessagesPending, setOlderMessagesPending] = useState(false);
   const [socketEpoch, setSocketEpoch] = useState(0);
   const [chatInput, setChatInput] = useState("");
   const [chatReasoning, setChatReasoning] = useState("");
@@ -1011,6 +1042,27 @@ export default function App() {
     }
   }
 
+  async function fetchSessionWindow(
+    key: string,
+    options?: { before?: number; limit?: number },
+  ): Promise<SessionDetail> {
+    if (!selectedSoul) {
+      throw new Error("No soul selected");
+    }
+    const params = new URLSearchParams();
+    if (typeof options?.before === "number") {
+      params.set("before", String(options.before));
+    }
+    if (typeof options?.limit === "number") {
+      params.set("limit", String(options.limit));
+    }
+    const queryString = params.toString();
+    const query = queryString ? `?${queryString}` : "";
+    return api<SessionDetail>(
+      `/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/sessions/${encodeURIComponent(key)}${query}`,
+    );
+  }
+
   async function loadSession(key: string) {
     if (!selectedSoul) {
       return;
@@ -1020,11 +1072,10 @@ export default function App() {
         socketRef.current?.close();
         socketRef.current = null;
         setSocketState("closed");
-        const detail = await api<SessionDetail>(
-          `/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/sessions/${encodeURIComponent(key)}`,
-        );
+        const detail = await fetchSessionWindow(key);
         setSessionDetail(detail);
         setSessionKey(key);
+        setOlderMessagesPending(false);
         setChatContent("");
         setChatReasoning("");
         setFinalizedMessages([]);
@@ -1032,6 +1083,24 @@ export default function App() {
       });
     } catch (cause) {
       notifyError(cause);
+    }
+  }
+
+  async function loadOlderMessages() {
+    if (!sessionKey || !sessionDetail || !canLoadOlderMessages) {
+      return;
+    }
+    setOlderMessagesPending(true);
+    try {
+      const detail = await fetchSessionWindow(sessionKey, {
+        before: sessionDetail.history_start,
+        limit: 20,
+      });
+      setSessionDetail((current) => prependSessionWindow(current, detail));
+    } catch (cause) {
+      notifyError(cause);
+    } finally {
+      setOlderMessagesPending(false);
     }
   }
 
@@ -1149,6 +1218,7 @@ export default function App() {
   const runningCount = souls.filter((soul) => soul.running).length;
   const chatHistory = [...(sessionDetail?.messages ?? []), ...finalizedMessages] as Array<Record<string, unknown>>;
   const hasStreamingTurn = !!chatReasoning || !!chatContent;
+  const canLoadOlderMessages = !!sessionDetail && sessionDetail.history_start > 0;
   const selectedMcpServer = mcpServers.find((server) => server.name === selectedMcpServerName) ?? null;
   const activeMcpDraft = mcpMode === "create" ? createMcpDraft : mcpDraft;
 
@@ -2192,9 +2262,28 @@ export default function App() {
           <article className="finalized-box">
             <div className="panel-head">
               <h3>Message history</h3>
-              {sessionDetail ? <span className="muted">last consolidated {sessionDetail.last_consolidated}</span> : null}
+              {sessionDetail ? (
+                <span className="muted">
+                  last consolidated {sessionDetail.last_consolidated} · showing {sessionDetail.history_start}-{sessionDetail.history_end} of{" "}
+                  {sessionDetail.total_messages}
+                </span>
+              ) : null}
             </div>
             <div className="message-list">
+              {canLoadOlderMessages ? (
+                <div className="message-history-actions">
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => {
+                      void loadOlderMessages();
+                    }}
+                    disabled={olderMessagesPending}
+                  >
+                    {olderMessagesPending ? "Loading..." : "Load 20 older messages"}
+                  </button>
+                </div>
+              ) : null}
               {hasStreamingTurn ? (
                 <div className="message-card streaming">
                   <div className="message-head">

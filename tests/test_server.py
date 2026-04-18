@@ -382,7 +382,7 @@ def test_server_lists_and_reads_sessions(monkeypatch, tmp_path: Path) -> None:
                 "created_at": "2025-01-01T00:00:00",
                 "updated_at": "2025-01-01T00:00:00",
                 "metadata": {"title": "demo"},
-                "last_consolidated": 0,
+                "last_consolidated": 1,
             }
         )
         + "\n"
@@ -413,10 +413,28 @@ def test_server_lists_and_reads_sessions(monkeypatch, tmp_path: Path) -> None:
 
         detail = client.get("/api/souls/alpha/sessions/cli:direct")
         assert detail.status_code == 200
-        assert detail.json()["messages"][0]["content"] == "hello"
-        assert detail.json()["messages"][1]["reasoning_content"] == "private chain"
+        assert detail.json()["messages"] == [
+            {
+                "role": "assistant",
+                "content": "world",
+                "reasoning_content": "private chain",
+                "timestamp": "2025-01-01T00:00:02",
+            }
+        ]
+        assert detail.json()["history_start"] == 1
+        assert detail.json()["history_end"] == 2
+        assert detail.json()["total_messages"] == 2
         assert "soul_id" not in detail.json()
         assert "key" not in detail.json()
+
+        older = client.get("/api/souls/alpha/sessions/cli:direct?before=1&limit=20")
+        assert older.status_code == 200
+        assert older.json()["messages"] == [
+            {"role": "user", "content": "hello", "timestamp": "2025-01-01T00:00:01"}
+        ]
+        assert older.json()["history_start"] == 0
+        assert older.json()["history_end"] == 1
+        assert older.json()["total_messages"] == 2
 
 
 def test_server_creates_empty_session(monkeypatch, tmp_path: Path) -> None:
@@ -436,6 +454,9 @@ def test_server_creates_empty_session(monkeypatch, tmp_path: Path) -> None:
         created = client.post("/api/souls/alpha/sessions", json={"key": "cli:new"})
         assert created.status_code == 200
         assert created.json()["messages"] == []
+        assert created.json()["history_start"] == 0
+        assert created.json()["history_end"] == 0
+        assert created.json()["total_messages"] == 0
         assert created.json()["metadata"] == {
             "title": "cli:new",
             "channel": "cli",
@@ -449,11 +470,59 @@ def test_server_creates_empty_session(monkeypatch, tmp_path: Path) -> None:
         detail = client.get("/api/souls/alpha/sessions/cli:new")
         assert detail.status_code == 200
         assert detail.json()["messages"] == []
+        assert detail.json()["history_start"] == 0
+        assert detail.json()["history_end"] == 0
+        assert detail.json()["total_messages"] == 0
         assert detail.json()["metadata"] == {
             "title": "cli:new",
             "channel": "cli",
             "chat_id": "new",
         }
+
+
+def test_server_clamps_session_history_window(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("nanobot_soulboard.server.make_provider", lambda _config: MagicMock())
+    monkeypatch.setattr("nanobot_soulboard.server.sync_workspace_templates", lambda *_args, **_kwargs: [])
+
+    _write_json(tmp_path / "config.json", {})
+    _write_json(tmp_path / "soulboard" / "config.json", {"souls": {"alpha": {}}})
+
+    session_dir = tmp_path / "soulboard" / "souls" / "alpha" / "sessions"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    (session_dir / "cli_direct.jsonl").write_text(
+        json.dumps(
+            {
+                "_type": "metadata",
+                "key": "cli:direct",
+                "created_at": "2025-01-01T00:00:00",
+                "updated_at": "2025-01-01T00:00:00",
+                "metadata": {"title": "demo"},
+                "last_consolidated": 2,
+            }
+        )
+        + "\n"
+        + json.dumps({"role": "user", "content": "one"})
+        + "\n"
+        + json.dumps({"role": "assistant", "content": "two"})
+        + "\n"
+        + json.dumps({"role": "user", "content": "three"})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    app = create_app(
+        nano_root=tmp_path,
+        base_config_path=tmp_path / "config.json",
+        soulboard_config_path=tmp_path / "soulboard" / "config.json",
+    )
+
+    with TestClient(app) as client:
+        detail = client.get("/api/souls/alpha/sessions/cli:direct?before=99&limit=20")
+        assert detail.status_code == 200
+        assert [item["content"] for item in detail.json()["messages"]] == ["one", "two", "three"]
+        assert detail.json()["history_start"] == 0
+        assert detail.json()["history_end"] == 3
+        assert detail.json()["total_messages"] == 3
 
 
 def test_server_reads_and_updates_soul_prompt_files(monkeypatch, tmp_path: Path) -> None:

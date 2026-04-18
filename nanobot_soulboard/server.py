@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -156,7 +156,35 @@ class SessionDetailResponse(BaseModel):
     updated_at: str
     metadata: dict[str, Any]
     last_consolidated: int
+    history_start: int
+    history_end: int
+    total_messages: int
     messages: list[dict[str, Any]]
+
+
+def _build_session_detail_response(
+    session: Any,
+    *,
+    before: int | None = None,
+    limit: int | None = None,
+) -> SessionDetailResponse:
+    """Build one session detail response for the requested history window."""
+    total_messages = len(session.messages)
+    window_end = total_messages if before is None else max(0, min(before, total_messages))
+    if limit is None:
+        window_start = min(session.last_consolidated, window_end)
+    else:
+        window_start = max(0, window_end - max(limit, 0))
+    return SessionDetailResponse(
+        created_at=session.created_at.isoformat(),
+        updated_at=session.updated_at.isoformat(),
+        metadata=session.metadata,
+        last_consolidated=session.last_consolidated,
+        history_start=window_start,
+        history_end=window_end,
+        total_messages=total_messages,
+        messages=session.messages[window_start:window_end],
+    )
 
 
 class SoulPromptFileResponse(BaseModel):
@@ -835,13 +863,7 @@ def create_app(
         if not session.metadata:
             session.metadata = _build_session_metadata(body.key)
         manager.save(session)
-        return SessionDetailResponse(
-            created_at=session.created_at.isoformat(),
-            updated_at=session.updated_at.isoformat(),
-            metadata=session.metadata,
-            last_consolidated=session.last_consolidated,
-            messages=session.messages,
-        )
+        return _build_session_detail_response(session)
 
     @app.get(
         "/api/souls/{soul_id}/sessions/{session_key}",
@@ -849,11 +871,18 @@ def create_app(
         responses={404: {"model": ErrorResponse}},
         summary="Get Session Detail",
         description=(
-            "Load and return the full persisted contents of a single session from the selected soul's "
-            "workspace. The session key should match the key used by nanobot SessionManager."
+            "Load one persisted history window from a single session in the selected soul's workspace. "
+            "Without paging arguments, this returns all unconsolidated messages from the last consolidation "
+            "point onward. The session key should match the key used by nanobot SessionManager."
         ),
     )
-    def get_session(request: Request, soul_id: str, session_key: str) -> SessionDetailResponse:
+    def get_session(
+        request: Request,
+        soul_id: str,
+        session_key: str,
+        before: int | None = Query(default=None, ge=0),
+        limit: int | None = Query(default=None, ge=1),
+    ) -> SessionDetailResponse:
         supervisor = _get_supervisor(request)
         try:
             spec = supervisor.get_spec(soul_id)
@@ -864,13 +893,7 @@ def create_app(
         if session_key not in known:
             _raise_not_found(f"Unknown session: {session_key}")
         session = manager.get_or_create(session_key)
-        return SessionDetailResponse(
-            created_at=session.created_at.isoformat(),
-            updated_at=session.updated_at.isoformat(),
-            metadata=session.metadata,
-            last_consolidated=session.last_consolidated,
-            messages=session.messages,
-        )
+        return _build_session_detail_response(session, before=before, limit=limit)
 
     @app.post(
         "/api/souls/{soul_id}/chat",

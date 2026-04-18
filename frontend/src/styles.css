@@ -282,6 +282,11 @@ pre {
   gap: 0.75rem;
 }
 
+.message-history-actions {
+  display: flex;
+  justify-content: center;
+}
+
 .soul-card,
 .session-card,
 .message-card {
