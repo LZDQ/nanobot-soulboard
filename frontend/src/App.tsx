@@ -670,10 +670,12 @@ export default function App() {
     return cronJobs.filter((job) => job.session_key === sessionKey);
   }, [cronJobs, sessionKey, showOnlySelectedSessionCronJobs]);
 
-  async function refreshSouls(preferredSoulId?: string): Promise<void> {
+  async function refreshSouls(preferredSoulId?: string, reloadConfig = false): Promise<void> {
     let nextSouls: Soul[];
     try {
-      nextSouls = await api<Soul[]>("/api/souls");
+      nextSouls = reloadConfig
+        ? await api<Soul[]>("/api/souls/refresh", { method: "POST" })
+        : await api<Soul[]>("/api/souls");
     } catch {
       setSouls([]);
       setSelectedSoulId("");
@@ -1265,7 +1267,7 @@ export default function App() {
             <button
               className="ghost"
               onClick={() => {
-                void refreshSouls(selectedSoulId).catch((cause) => {
+                void refreshSouls(selectedSoulId, true).catch((cause) => {
                   notifyError(cause);
                 });
               }}

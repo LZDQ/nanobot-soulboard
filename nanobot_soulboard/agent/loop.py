@@ -15,6 +15,7 @@ from nanobot.bus.events import OutboundMessage
 from nanobot.command.router import CommandContext
 from nanobot.session.manager import Session, SessionManager
 
+from nanobot_soulboard.agent.shell import SoulExecTool
 from nanobot_soulboard.context import SoulboardContextBuilder
 from nanobot_soulboard.cron import SoulCronTool
 
@@ -32,6 +33,17 @@ class SoulAgentLoop(AgentLoop):
 
     def _register_default_tools(self) -> None:
         super()._register_default_tools()
+        if self.exec_config.enable:
+            self.tools.unregister("exec")
+            self.tools.register(SoulExecTool(
+                workspace=self.workspace,
+                timeout=self.exec_config.timeout,
+                restrict_to_workspace=self.restrict_to_workspace,
+                sandbox=self.exec_config.sandbox,
+                path_append=self.exec_config.path_append,
+                allowed_env_keys=self.exec_config.allowed_env_keys,
+            ))
+        self.tools.unregister("spawn")
         if self.cron_service:
             self.tools.register(SoulCronTool(self.cron_service, default_timezone=self.context.timezone))
 

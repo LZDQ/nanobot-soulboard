@@ -573,6 +573,21 @@ def create_app(
         supervisor = _get_supervisor(request)
         return [_to_soul_response(supervisor, spec) for spec in supervisor.list_specs()]
 
+    @app.post(
+        "/api/souls/refresh",
+        response_model=list[SoulResponse],
+        summary="Reload Souls Config",
+        description=(
+            "Reload soulboard config.json and base nanobot config.json from disk into the in-memory "
+            "supervisor, then return the refreshed soul list. Running souls keep their current runtime "
+            "config until manually restarted."
+        ),
+    )
+    def refresh_souls(request: Request) -> list[SoulResponse]:
+        supervisor = _get_supervisor(request)
+        supervisor.reload_config()
+        return [_to_soul_response(supervisor, spec) for spec in supervisor.list_specs()]
+
     @app.get(
         "/api/mcp-servers",
         response_model=list[MCPServerResponse],

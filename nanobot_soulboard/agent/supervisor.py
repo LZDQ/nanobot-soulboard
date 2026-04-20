@@ -11,7 +11,7 @@ from nanobot.agent.tools.cron import CronTool
 from nanobot.bus.events import InboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.manager import ChannelManager
-from nanobot.config.loader import save_config
+from nanobot.config.loader import load_config, save_config
 from nanobot.config.schema import Config, MCPServerConfig
 from nanobot.cron.types import CronJob
 from nanobot.providers.base import LLMProvider
@@ -24,6 +24,7 @@ from nanobot_soulboard.config import (
     SoulboardConfig,
     get_soulboard_config_path,
     get_souls_root,
+    load_soulboard_config,
     save_soulboard_config,
     validate_soul_id,
 )
@@ -179,7 +180,13 @@ class SoulSupervisor:
 
     def list_specs(self) -> list[SoulSpec]:
         """List all resolved soul specs."""
-        return discover_soul_specs(nano_root=self.nano_root, config=self.soulboard_config)
+        specs = {
+            spec.soul_id: spec
+            for spec in discover_soul_specs(nano_root=self.nano_root, config=self.soulboard_config)
+        }
+        for soul_id, running in self._running_souls.items():
+            specs.setdefault(soul_id, running.spec)
+        return sorted(specs.values(), key=lambda spec: spec.soul_id)
 
     def get_spec(self, soul_id: str) -> SoulSpec:
         """Return one soul spec or raise KeyError."""
@@ -211,6 +218,35 @@ class SoulSupervisor:
             }
         )
         save_soulboard_config(self.soulboard_config, self.config_path)
+
+    def reload_config(self) -> None:
+        """Reload persisted configs without disturbing running souls."""
+        self.soulboard_config = load_soulboard_config(self.config_path)
+        if self.base_config_path is not None:
+            self.base_config = load_config(self.base_config_path)
+        dirty = False
+        for soul_id in list(self.soulboard_config.souls):
+            overrides = self.soulboard_config.souls[soul_id]
+            if not overrides.mcp_servers and not overrides.mcp_http_headers:
+                continue
+            known = set(self.base_config.tools.mcp_servers)
+            filtered = [name for name in overrides.mcp_servers if name in known]
+            filtered_headers = {
+                name: headers
+                for name, headers in overrides.mcp_http_headers.items()
+                if name in known and name in filtered
+            }
+            if filtered == overrides.mcp_servers and filtered_headers == overrides.mcp_http_headers:
+                continue
+            self.soulboard_config.souls[soul_id] = overrides.model_copy(
+                update={
+                    "mcp_servers": filtered,
+                    "mcp_http_headers": filtered_headers,
+                }
+            )
+            dirty = True
+        if dirty:
+            save_soulboard_config(self.soulboard_config, self.config_path)
 
     def read_soul_prompt_files(self, soul_id: str) -> dict[str, str | None]:
         """Read the soul markdown prompt pack from its workspace."""

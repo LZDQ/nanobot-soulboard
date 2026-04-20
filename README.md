@@ -72,5 +72,5 @@ pnpm dev
 - [ ] Deepseek doesn't work if `apiBase` is not set.
 - [ ] Manually tune delivery metadata in cron jobs.
 - [ ] Napcat channel cannot send image to group, probably related to `is_group` metadata.
-- [ ] Remove `working_dir` in exec tool to avoid making GPT models confused.
-- [ ] Refreshing agents should also refresh config.
+- [x] Remove `working_dir` in exec tool to avoid making GPT models confused.
+- [x] Refreshing agents should also refresh config.
