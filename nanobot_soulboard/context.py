@@ -12,8 +12,8 @@ class SoulboardContextBuilder(ContextBuilder):
 
     SYSTEM_FILENAME = "SYSTEM.md"
 
-    def __init__(self, workspace: Path, soul_id: str):
-        super().__init__(workspace)
+    def __init__(self, workspace: Path, soul_id: str, timezone: str | None = None):
+        super().__init__(workspace, timezone=timezone)
         self.soul_id = soul_id
         self.workspace_skills = SkillsLoader(workspace, builtin_skills_dir=workspace / ".soulboard-no-builtin-skills")
 

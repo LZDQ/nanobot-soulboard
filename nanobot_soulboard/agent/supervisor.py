@@ -382,6 +382,7 @@ class SoulSupervisor:
             session_manager=session_manager,
             mcp_servers=config.tools.mcp_servers,
             channels_config=config.channels,
+            timezone=config.agents.defaults.timezone,
         )
         channel_manager = ChannelManager(config, bus)
         running = RunningSoul(

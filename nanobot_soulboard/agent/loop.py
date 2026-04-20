@@ -29,7 +29,11 @@ class SoulAgentLoop(AgentLoop):
     def __init__(self, *args, soul_id: str, **kwargs):
         self.soul_id = soul_id
         super().__init__(*args, **kwargs)
-        self.context = SoulboardContextBuilder(self.workspace, soul_id=soul_id)
+        self.context = SoulboardContextBuilder(
+            self.workspace,
+            soul_id=soul_id,
+            timezone=self.context.timezone,
+        )
 
     def _register_default_tools(self) -> None:
         super()._register_default_tools()
