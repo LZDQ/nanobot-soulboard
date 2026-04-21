@@ -166,6 +166,39 @@ pre {
   justify-content: flex-end;
 }
 
+.app-links-editor {
+  width: min(32rem, 100%);
+  display: grid;
+  gap: 0.7rem;
+  justify-items: stretch;
+}
+
+.app-links-editor-row {
+  display: flex;
+  gap: 0.7rem;
+}
+
+.app-links-editor-row input {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.app-links-editor-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.app-links-editor-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding: 0.65rem 0.8rem;
+  border-radius: 18px;
+  border: 1px solid var(--panel-border);
+  background: rgba(255, 255, 255, 0.45);
+}
+
 .button-link {
   display: inline-flex;
   align-items: center;

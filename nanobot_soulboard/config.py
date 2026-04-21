@@ -4,7 +4,7 @@ import json
 import re
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 _SOUL_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 
@@ -52,7 +52,30 @@ class SoulboardConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    app_links: list[str] = Field(default_factory=list)
     souls: dict[str, SoulOverrides] = Field(default_factory=dict)
+
+    @field_validator("app_links")
+    @classmethod
+    def validate_app_links(cls, value: list[str]) -> list[str]:
+        return _normalize_app_links(value)
+
+
+def _normalize_app_links(items: list[str]) -> list[str]:
+    """Normalize and validate top-bar app links."""
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in items:
+        item = raw.strip()
+        if not item:
+            continue
+        if not item.startswith("/"):
+            raise ValueError(f"Invalid app link '{raw}'. App links must start with '/'.")
+        if item in seen:
+            continue
+        normalized.append(item)
+        seen.add(item)
+    return normalized
 
 
 def validate_soul_id(soul_id: str) -> str:
@@ -96,6 +119,7 @@ def save_soulboard_config(config: SoulboardConfig, path: Path) -> None:
     """Persist soulboard config as formatted JSON."""
     for soul_id in config.souls:
         validate_soul_id(soul_id)
+    config.app_links = _normalize_app_links(config.app_links)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = config.model_dump(mode="json", exclude_none=True, by_alias=True)
     with open(path, "w", encoding="utf-8") as f:

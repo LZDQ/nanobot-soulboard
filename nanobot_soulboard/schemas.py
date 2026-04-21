@@ -76,6 +76,18 @@ class CreateSessionRequest(BaseModel):
     )
 
 
+class AppLinksResponse(BaseModel):
+    """Configured hero-bar app links."""
+
+    items: list[str]
+
+
+class UpdateAppLinksRequest(BaseModel):
+    """Replace the configured hero-bar app links."""
+
+    items: list[str]
+
+
 class StreamChunkResponse(BaseModel):
     """One streamed chunk sent from server to frontend."""
 

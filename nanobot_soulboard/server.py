@@ -17,6 +17,7 @@ from nanobot_soulboard.chat_streams import ChatStreamManager
 from nanobot_soulboard.config import load_soulboard_config
 from nanobot_soulboard.agent import SOUL_PROMPT_FILES, SoulAgentLoop, SoulSpec, SoulSupervisor
 from nanobot_soulboard.schemas import (
+    AppLinksResponse,
     ChatRequest,
     CreateMCPServerRequest,
     CreateSessionRequest,
@@ -34,6 +35,7 @@ from nanobot_soulboard.schemas import (
     SoulResponse,
     SoulSkillResponse,
     StreamInputMessage,
+    UpdateAppLinksRequest,
     UpdateMCPServerRequest,
     UpdateSoulPromptFilesRequest,
     UpdateSoulRequest,
@@ -271,6 +273,31 @@ def create_app(
             base_config_path=str(state.base_config_path),
             soulboard_config_path=str(state.soulboard_config_path),
         )
+
+    @app.get(
+        "/api/app-links",
+        response_model=AppLinksResponse,
+        summary="List App Links",
+        description="Return the configured hero-bar reverse-proxy app links stored in soulboard config.json.",
+    )
+    def get_app_links(request: Request) -> AppLinksResponse:
+        supervisor = _get_supervisor(request)
+        return AppLinksResponse(items=supervisor.list_app_links())
+
+    @app.patch(
+        "/api/app-links",
+        response_model=AppLinksResponse,
+        responses={400: {"model": ErrorResponse}},
+        summary="Update App Links",
+        description="Replace the configured hero-bar reverse-proxy app links stored in soulboard config.json.",
+    )
+    def update_app_links(request: Request, body: UpdateAppLinksRequest) -> AppLinksResponse:
+        supervisor = _get_supervisor(request)
+        try:
+            items = supervisor.update_app_links(body.items)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return AppLinksResponse(items=items)
 
     @app.get(
         "/api/souls",

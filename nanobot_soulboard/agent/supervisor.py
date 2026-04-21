@@ -248,6 +248,16 @@ class SoulSupervisor:
         if dirty:
             save_soulboard_config(self.soulboard_config, self.config_path)
 
+    def list_app_links(self) -> list[str]:
+        """Return configured top-bar app links."""
+        return list(self.soulboard_config.app_links)
+
+    def update_app_links(self, items: list[str]) -> list[str]:
+        """Replace configured top-bar app links."""
+        self.soulboard_config = self.soulboard_config.model_copy(update={"app_links": items})
+        save_soulboard_config(self.soulboard_config, self.config_path)
+        return list(self.soulboard_config.app_links)
+
     def read_soul_prompt_files(self, soul_id: str) -> dict[str, str | None]:
         """Read the soul markdown prompt pack from its workspace."""
         spec = self.get_spec(soul_id)

@@ -66,6 +66,10 @@ type SessionDetail = {
   messages: Array<Record<string, unknown>>;
 };
 
+type AppLinksResponse = {
+  items: string[];
+};
+
 type SoulPromptFile = {
   name: string;
   exists: boolean;
@@ -618,11 +622,13 @@ export default function App() {
   const [selectedSoulId, setSelectedSoulId] = useState<string>(initialFocusRef.current.soulId);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [mcpServers, setMcpServers] = useState<MCPServer[]>([]);
+  const [appLinks, setAppLinks] = useState<string[]>([]);
   const [promptFiles, setPromptFiles] = useState<SoulPromptFile[]>([]);
   const [cronJobs, setCronJobs] = useState<CronJob[] | null>(null);
   const [selectedMcpServerName, setSelectedMcpServerName] = useState<string>("");
   const [createMcpServerName, setCreateMcpServerName] = useState("");
   const [createSessionKey, setCreateSessionKey] = useState("");
+  const [newAppLink, setNewAppLink] = useState("");
   const [sessionDetail, setSessionDetail] = useState<SessionDetail | null>(null);
   const [sessionKey, setSessionKey] = useState<string | null>(initialFocusRef.current.sessionKey);
   const [olderMessagesPending, setOlderMessagesPending] = useState(false);
@@ -648,6 +654,7 @@ export default function App() {
   const [promptDraft, setPromptDraft] = useState<SoulPromptDraft>(getEmptyPromptDraft());
   const [promptSelection, setPromptSelection] = useState<Record<SoulPromptFileName, boolean>>(getEmptyPromptSelection());
   const [isEditingSoul, setIsEditingSoul] = useState(false);
+  const [isEditingAppLinks, setIsEditingAppLinks] = useState(false);
   const [isEditingPromptFiles, setIsEditingPromptFiles] = useState(false);
   const [isCreatingSoul, setIsCreatingSoul] = useState(false);
   const [showOnlySelectedSessionCronJobs, setShowOnlySelectedSessionCronJobs] = useState(true);
@@ -722,6 +729,11 @@ export default function App() {
     }
   }
 
+  async function refreshAppLinks(): Promise<void> {
+    const response = await api<AppLinksResponse>("/api/app-links");
+    setAppLinks(response.items);
+  }
+
   async function refreshSessions(soulId: string): Promise<SessionSummary[]> {
     const nextSessions = await api<SessionSummary[]>(`/api/souls/${encodeURIComponent(soulId)}/sessions`);
     setSessions(nextSessions);
@@ -775,6 +787,7 @@ export default function App() {
     void (async () => {
       try {
         await refreshSouls();
+        await refreshAppLinks();
         await refreshMcpServers();
       } catch (cause) {
         notifyError(cause);
@@ -1217,6 +1230,38 @@ export default function App() {
     setChatInput("");
   }
 
+  async function saveAppLinks(items: string[]) {
+    const normalized = items.map((item) => item.trim()).filter(Boolean);
+    await runAction("app-links", async () => {
+      const response = await api<AppLinksResponse>("/api/app-links", {
+        method: "PATCH",
+        body: JSON.stringify({ items: normalized }),
+      });
+      setAppLinks(response.items);
+      setIsEditingAppLinks(false);
+      setNewAppLink("");
+    }).catch((cause) => {
+      notifyError(cause);
+    });
+  }
+
+  async function addAppLink() {
+    const item = newAppLink.trim();
+    if (!item) {
+      notifyError("App link is required");
+      return;
+    }
+    if (!item.startsWith("/")) {
+      notifyError("App links must start with /");
+      return;
+    }
+    await saveAppLinks([...appLinks, item]);
+  }
+
+  async function deleteAppLink(item: string) {
+    await saveAppLinks(appLinks.filter((current) => current !== item));
+  }
+
   const runningCount = souls.filter((soul) => soul.running).length;
   const chatHistory = [...(sessionDetail?.messages ?? []), ...finalizedMessages] as Array<Record<string, unknown>>;
   const hasStreamingTurn = !!chatReasoning || !!chatContent;
@@ -1234,19 +1279,45 @@ export default function App() {
         </div>
         <div className="hero-side">
           <div className="app-links">
-            <a className="button-link ghost" href="/terminal/" target="_blank" rel="noreferrer">
-              Terminal
-            </a>
-            <a className="button-link ghost" href="/filebrowser/" target="_blank" rel="noreferrer">
-              Filebrowser
-            </a>
-            <a className="button-link ghost" href="/mihomo/" target="_blank" rel="noreferrer">
-              Mihomo
-            </a>
-            <a className="button-link ghost" href="/napcat/" target="_blank" rel="noreferrer">
-              NapCat
-            </a>
+            {appLinks.map((item) => (
+              <a key={item} className="button-link ghost" href={item} target="_blank" rel="noreferrer">
+                {item}
+              </a>
+            ))}
+            <button
+              type="button"
+              className="button-link ghost"
+              onClick={() => setIsEditingAppLinks((current) => !current)}
+              disabled={!!pending}
+            >
+              Edit
+            </button>
           </div>
+          {isEditingAppLinks ? (
+            <div className="app-links-editor">
+              <div className="app-links-editor-row">
+                <input
+                  value={newAppLink}
+                  onChange={(event) => setNewAppLink(event.target.value)}
+                  placeholder="/quant-arena"
+                  disabled={!!pending}
+                />
+                <button type="button" onClick={() => void addAppLink()} disabled={!!pending}>
+                  Add
+                </button>
+              </div>
+              <div className="app-links-editor-list">
+                {appLinks.length ? appLinks.map((item) => (
+                  <div key={item} className="app-links-editor-item">
+                    <code>{item}</code>
+                    <button type="button" className="ghost" onClick={() => void deleteAppLink(item)} disabled={!!pending}>
+                      Delete
+                    </button>
+                  </div>
+                )) : <p className="muted">No app links configured.</p>}
+              </div>
+            </div>
+          ) : null}
           <div className="hero-stats">
             <div className="stat-card">
               <span>souls</span>
@@ -1267,9 +1338,14 @@ export default function App() {
             <button
               className="ghost"
               onClick={() => {
-                void refreshSouls(selectedSoulId, true).catch((cause) => {
-                  notifyError(cause);
-                });
+                void (async () => {
+                  try {
+                    await refreshSouls(selectedSoulId, true);
+                    await refreshAppLinks();
+                  } catch (cause) {
+                    notifyError(cause);
+                  }
+                })();
               }}
               disabled={!!pending}
             >
