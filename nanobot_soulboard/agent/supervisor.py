@@ -258,6 +258,36 @@ class SoulSupervisor:
         save_soulboard_config(self.soulboard_config, self.config_path)
         return list(self.soulboard_config.app_links)
 
+    def list_prompt_link_dirs(self) -> list[str]:
+        """Return configured prompt-link source directories."""
+        return list(self.soulboard_config.prompt_link_dirs)
+
+    def update_prompt_link_dirs(self, items: list[str]) -> list[str]:
+        """Replace configured prompt-link source directories."""
+        self.soulboard_config = self.soulboard_config.model_copy(update={"prompt_link_dirs": items})
+        save_soulboard_config(self.soulboard_config, self.config_path)
+        return list(self.soulboard_config.prompt_link_dirs)
+
+    def _resolve_soul_workspace(self, soul_id: str, overrides: SoulOverrides) -> Path:
+        if overrides.workspace:
+            return Path(overrides.workspace).expanduser()
+        return get_souls_root(self.nano_root) / soul_id
+
+    def _link_prompt_files(self, spec: SoulSpec, source_dir: str) -> None:
+        configured = set(self.soulboard_config.prompt_link_dirs)
+        if source_dir not in configured:
+            raise ValueError(f"Unknown prompt link directory: {source_dir}")
+        source_root = Path(source_dir).expanduser()
+        spec.workspace.mkdir(parents=True, exist_ok=True)
+        for filename in SOUL_PROMPT_FILES:
+            source_path = source_root / filename
+            if not source_path.exists():
+                continue
+            target_path = spec.workspace / filename
+            if target_path.exists() or target_path.is_symlink():
+                raise ValueError(f"Cannot link prompt file because it already exists: {target_path}")
+            target_path.symlink_to(source_path)
+
     def read_soul_prompt_files(self, soul_id: str) -> dict[str, str | None]:
         """Read the soul markdown prompt pack from its workspace."""
         spec = self.get_spec(soul_id)
@@ -290,16 +320,28 @@ class SoulSupervisor:
         self.soulboard_config.souls[soul_id] = overrides
         save_soulboard_config(self.soulboard_config, self.config_path)
 
-    def create_soul(self, soul_id: str, overrides: SoulOverrides | None = None) -> SoulSpec:
+    def create_soul(
+        self,
+        soul_id: str,
+        overrides: SoulOverrides | None = None,
+        prompt_link_dir: str | None = None,
+    ) -> SoulSpec:
         """Create and persist a new soul definition."""
         validate_soul_id(soul_id)
         if soul_id in self.soulboard_config.souls:
             raise ValueError(f"Soul already exists: {soul_id}")
         resolved_overrides = overrides or SoulOverrides()
         _validate_mcp_http_header_overrides(self.base_config.tools.mcp_servers, resolved_overrides)
+        spec = SoulSpec(
+            soul_id=soul_id,
+            workspace=self._resolve_soul_workspace(soul_id, resolved_overrides),
+            overrides=resolved_overrides,
+        )
+        if prompt_link_dir:
+            self._link_prompt_files(spec, prompt_link_dir)
         self.soulboard_config.souls[soul_id] = resolved_overrides
         save_soulboard_config(self.soulboard_config, self.config_path)
-        return self.get_spec(soul_id)
+        return spec
 
     def delete_soul(self, soul_id: str) -> None:
         """Delete a soul definition unless it is currently running."""

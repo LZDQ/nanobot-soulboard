@@ -70,6 +70,20 @@ type AppLinksResponse = {
   items: string[];
 };
 
+type PromptLinkDirFileStatus = {
+  name: string;
+  exists: boolean;
+};
+
+type PromptLinkDir = {
+  path: string;
+  files: PromptLinkDirFileStatus[];
+};
+
+type PromptLinkDirsResponse = {
+  items: PromptLinkDir[];
+};
+
 type SoulPromptFile = {
   name: string;
   exists: boolean;
@@ -623,12 +637,14 @@ export default function App() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [mcpServers, setMcpServers] = useState<MCPServer[]>([]);
   const [appLinks, setAppLinks] = useState<string[]>([]);
+  const [promptLinkDirs, setPromptLinkDirs] = useState<PromptLinkDir[]>([]);
   const [promptFiles, setPromptFiles] = useState<SoulPromptFile[]>([]);
   const [cronJobs, setCronJobs] = useState<CronJob[] | null>(null);
   const [selectedMcpServerName, setSelectedMcpServerName] = useState<string>("");
   const [createMcpServerName, setCreateMcpServerName] = useState("");
   const [createSessionKey, setCreateSessionKey] = useState("");
   const [newAppLink, setNewAppLink] = useState("");
+  const [newPromptLinkDir, setNewPromptLinkDir] = useState("");
   const [sessionDetail, setSessionDetail] = useState<SessionDetail | null>(null);
   const [sessionKey, setSessionKey] = useState<string | null>(initialFocusRef.current.sessionKey);
   const [olderMessagesPending, setOlderMessagesPending] = useState(false);
@@ -655,8 +671,10 @@ export default function App() {
   const [promptSelection, setPromptSelection] = useState<Record<SoulPromptFileName, boolean>>(getEmptyPromptSelection());
   const [isEditingSoul, setIsEditingSoul] = useState(false);
   const [isEditingAppLinks, setIsEditingAppLinks] = useState(false);
+  const [isEditingPromptLinkDirs, setIsEditingPromptLinkDirs] = useState(false);
   const [isEditingPromptFiles, setIsEditingPromptFiles] = useState(false);
   const [isCreatingSoul, setIsCreatingSoul] = useState(false);
+  const [createSoulPromptLinkDir, setCreateSoulPromptLinkDir] = useState("");
   const [showOnlySelectedSessionCronJobs, setShowOnlySelectedSessionCronJobs] = useState(true);
   const [mcpMode, setMcpMode] = useState<"view" | "edit" | "create">("view");
   const [socketState, setSocketState] = useState<"closed" | "connecting" | "open">("closed");
@@ -734,6 +752,11 @@ export default function App() {
     setAppLinks(response.items);
   }
 
+  async function refreshPromptLinkDirs(): Promise<void> {
+    const response = await api<PromptLinkDirsResponse>("/api/prompt-link-dirs");
+    setPromptLinkDirs(response.items);
+  }
+
   async function refreshSessions(soulId: string): Promise<SessionSummary[]> {
     const nextSessions = await api<SessionSummary[]>(`/api/souls/${encodeURIComponent(soulId)}/sessions`);
     setSessions(nextSessions);
@@ -788,6 +811,7 @@ export default function App() {
       try {
         await refreshSouls();
         await refreshAppLinks();
+        await refreshPromptLinkDirs();
         await refreshMcpServers();
       } catch (cause) {
         notifyError(cause);
@@ -920,17 +944,19 @@ export default function App() {
     }
     try {
       await runAction("create", async () => {
-        const created = await api<Soul>("/api/souls", {
-          method: "POST",
-          body: JSON.stringify({
-            soul_id: createSoulId.trim(),
-            overrides: draftToOverrides(draft),
-          }),
-        });
-        setCreateSoulId("");
-        setIsCreatingSoul(false);
-        await refreshSouls(created.soul_id);
-        await refreshSessions(created.soul_id);
+      const created = await api<Soul>("/api/souls", {
+        method: "POST",
+        body: JSON.stringify({
+          soul_id: createSoulId.trim(),
+          overrides: draftToOverrides(draft),
+          prompt_link_dir: createSoulPromptLinkDir || null,
+        }),
+      });
+      setCreateSoulId("");
+      setCreateSoulPromptLinkDir("");
+      setIsCreatingSoul(false);
+      await refreshSouls(created.soul_id);
+      await refreshSessions(created.soul_id);
       });
     } catch (cause) {
       notifyError(cause);
@@ -1264,6 +1290,37 @@ export default function App() {
     await saveAppLinks(appLinks.filter((current) => current !== item));
   }
 
+  async function savePromptLinkDirs(items: string[]) {
+    const normalized = items.map((item) => item.trim()).filter(Boolean);
+    await runAction("prompt-link-dirs", async () => {
+      const response = await api<PromptLinkDirsResponse>("/api/prompt-link-dirs", {
+        method: "PATCH",
+        body: JSON.stringify({ items: normalized }),
+      });
+      setPromptLinkDirs(response.items);
+      setIsEditingPromptLinkDirs(false);
+      setNewPromptLinkDir("");
+      if (createSoulPromptLinkDir && !response.items.some((item) => item.path === createSoulPromptLinkDir)) {
+        setCreateSoulPromptLinkDir("");
+      }
+    }).catch((cause) => {
+      notifyError(cause);
+    });
+  }
+
+  async function addPromptLinkDir() {
+    const item = newPromptLinkDir.trim();
+    if (!item) {
+      notifyError("Prompt link directory is required");
+      return;
+    }
+    await savePromptLinkDirs([...promptLinkDirs.map((entry) => entry.path), item]);
+  }
+
+  async function deletePromptLinkDir(path: string) {
+    await savePromptLinkDirs(promptLinkDirs.map((entry) => entry.path).filter((item) => item !== path));
+  }
+
   const runningCount = souls.filter((soul) => soul.running).length;
   const chatHistory = [...(sessionDetail?.messages ?? []), ...finalizedMessages] as Array<Record<string, unknown>>;
   const hasStreamingTurn = !!chatReasoning || !!chatContent;
@@ -1344,6 +1401,7 @@ export default function App() {
                   try {
                     await refreshSouls(selectedSoulId, true);
                     await refreshAppLinks();
+                    await refreshPromptLinkDirs();
                   } catch (cause) {
                     notifyError(cause);
                   }
@@ -1384,6 +1442,7 @@ export default function App() {
                 setChatReasoning("");
                 setFinalizedMessages([]);
                 setSoulError("");
+                setCreateSoulPromptLinkDir("");
                 setDraft({
                   workspace: "",
                   model: "",
@@ -1398,6 +1457,61 @@ export default function App() {
             >
               New soul
             </button>
+          </div>
+
+          <div className="create-box">
+            <div className="panel-head">
+              <h3>Prompt sources</h3>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => setIsEditingPromptLinkDirs((current) => !current)}
+                disabled={!!pending}
+              >
+                {isEditingPromptLinkDirs ? "Done" : "Edit"}
+              </button>
+            </div>
+            {isEditingPromptLinkDirs ? (
+              <div className="app-links-editor">
+                <div className="app-links-editor-row">
+                  <input
+                    value={newPromptLinkDir}
+                    onChange={(event) => setNewPromptLinkDir(event.target.value)}
+                    placeholder="~/prompts/reviewer"
+                    disabled={!!pending}
+                  />
+                  <button type="button" onClick={() => void addPromptLinkDir()} disabled={!!pending}>
+                    Add
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            <div className="prompt-link-dir-list">
+              {promptLinkDirs.length ? promptLinkDirs.map((item) => (
+                <article key={item.path} className="prompt-link-dir-card">
+                  <div className="prompt-link-dir-head">
+                    <code>{item.path}</code>
+                    {isEditingPromptLinkDirs ? (
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => void deletePromptLinkDir(item.path)}
+                        disabled={!!pending}
+                      >
+                        Delete
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="prompt-link-file-pills">
+                    {item.files.map((file) => (
+                      <span key={`${item.path}:${file.name}`} className={`pill ${file.exists ? "live" : "idle"}`}>
+                        {file.name} {file.exists ? "present" : "missing"}
+                      </span>
+                    ))}
+                  </div>
+                </article>
+              )) : <p className="muted">No prompt source directories configured.</p>}
+            </div>
           </div>
         </section>
 
@@ -1436,6 +1550,20 @@ export default function App() {
               <label>
                 <span>Soul ID</span>
                 <input value={createSoulId} onChange={(event) => setCreateSoulId(event.target.value)} placeholder="reviewer" />
+              </label>
+              <label>
+                <span>Prompt source directory</span>
+                <select
+                  value={createSoulPromptLinkDir}
+                  onChange={(event) => setCreateSoulPromptLinkDir(event.target.value)}
+                >
+                  <option value="">None</option>
+                  {promptLinkDirs.map((item) => (
+                    <option key={item.path} value={item.path}>
+                      {item.path}
+                    </option>
+                  ))}
+                </select>
               </label>
               <div className="field-grid">
                 <label>

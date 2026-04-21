@@ -24,6 +24,13 @@ class CreateSoulRequest(BaseModel):
             "using the base nanobot setting."
         ),
     )
+    prompt_link_dir: str | None = Field(
+        default=None,
+        description=(
+            "Optional configured source directory whose markdown prompt files should be soft-linked into "
+            "the new soul workspace."
+        ),
+    )
 
 
 class UpdateSoulRequest(BaseModel):
@@ -84,6 +91,32 @@ class AppLinksResponse(BaseModel):
 
 class UpdateAppLinksRequest(BaseModel):
     """Replace the configured hero-bar app links."""
+
+    items: list[str]
+
+
+class PromptLinkDirFileStatusResponse(BaseModel):
+    """Markdown-file availability for one prompt-link source directory."""
+
+    name: str
+    exists: bool
+
+
+class PromptLinkDirResponse(BaseModel):
+    """One configured prompt-link source directory with file existence summary."""
+
+    path: str
+    files: list[PromptLinkDirFileStatusResponse]
+
+
+class PromptLinkDirsResponse(BaseModel):
+    """Configured prompt-link source directories."""
+
+    items: list[PromptLinkDirResponse]
+
+
+class UpdatePromptLinkDirsRequest(BaseModel):
+    """Replace the configured prompt-link source directory list."""
 
     items: list[str]
 

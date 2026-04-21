@@ -353,6 +353,15 @@ pre {
   color: var(--muted);
 }
 
+.session-card > strong,
+.session-card > span {
+  display: block;
+}
+
+.session-card > span {
+  margin-top: 0.45rem;
+}
+
 .pill {
   display: inline-flex;
   align-items: center;
@@ -378,6 +387,40 @@ pre {
   margin-top: 1rem;
   padding-top: 1rem;
   border-top: 1px solid var(--panel-border);
+}
+
+.prompt-link-dir-list {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.9rem;
+}
+
+.prompt-link-dir-card {
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.95rem 1rem;
+  border-radius: 22px;
+  border: 1px solid rgba(85, 52, 25, 0.08);
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.prompt-link-dir-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.prompt-link-dir-head code {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--muted);
+}
+
+.prompt-link-file-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
 }
 
 .details-stack {

@@ -53,12 +53,18 @@ class SoulboardConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     app_links: list[str] = Field(default_factory=list)
+    prompt_link_dirs: list[str] = Field(default_factory=list)
     souls: dict[str, SoulOverrides] = Field(default_factory=dict)
 
     @field_validator("app_links")
     @classmethod
     def validate_app_links(cls, value: list[str]) -> list[str]:
         return _normalize_app_links(value)
+
+    @field_validator("prompt_link_dirs")
+    @classmethod
+    def validate_prompt_link_dirs(cls, value: list[str]) -> list[str]:
+        return _normalize_prompt_link_dirs(value)
 
 
 def _normalize_app_links(items: list[str]) -> list[str]:
@@ -71,6 +77,21 @@ def _normalize_app_links(items: list[str]) -> list[str]:
             continue
         if not item.startswith("/"):
             raise ValueError(f"Invalid app link '{raw}'. App links must start with '/'.")
+        if item in seen:
+            continue
+        normalized.append(item)
+        seen.add(item)
+    return normalized
+
+
+def _normalize_prompt_link_dirs(items: list[str]) -> list[str]:
+    """Normalize configured prompt-link source directories."""
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in items:
+        item = raw.strip()
+        if not item:
+            continue
         if item in seen:
             continue
         normalized.append(item)
@@ -120,6 +141,7 @@ def save_soulboard_config(config: SoulboardConfig, path: Path) -> None:
     for soul_id in config.souls:
         validate_soul_id(soul_id)
     config.app_links = _normalize_app_links(config.app_links)
+    config.prompt_link_dirs = _normalize_prompt_link_dirs(config.prompt_link_dirs)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = config.model_dump(mode="json", exclude_none=True, by_alias=True)
     with open(path, "w", encoding="utf-8") as f:
