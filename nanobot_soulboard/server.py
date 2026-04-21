@@ -1,87 +1,43 @@
 """FastAPI server for nanobot-soulboard."""
 
-import asyncio
 from importlib.resources import files as pkg_files
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
-from pydantic import BaseModel, Field
 
 from nanobot.config.loader import load_config
-from nanobot.config.schema import MCPServerConfig
 from nanobot.cli.commands import _make_provider as make_provider
 from nanobot.cron.types import CronJob
 from nanobot.session.manager import SessionManager
-from nanobot.utils.helpers import sync_workspace_templates
-from nanobot_soulboard.config import SoulOverrides, load_soulboard_config, save_soulboard_config
+from nanobot_soulboard.chat_streams import ChatStreamManager
+from nanobot_soulboard.config import load_soulboard_config
 from nanobot_soulboard.agent import SOUL_PROMPT_FILES, SoulAgentLoop, SoulSpec, SoulSupervisor
-
-
-class CreateSoulRequest(BaseModel):
-    """Request body for creating a soul."""
-
-    soul_id: str = Field(
-        description=(
-            "Stable soul identifier. This becomes the key in soulboard config and, when no workspace "
-            "override is provided, the default workspace directory name under ~/.nanobot/soulboard/souls/."
-        )
-    )
-    overrides: SoulOverrides = Field(
-        default_factory=SoulOverrides,
-        description=(
-            "Per-soul overrides layered on top of the base nanobot config. Any field omitted here keeps "
-            "using the base nanobot setting."
-        ),
-    )
-
-
-class UpdateSoulRequest(BaseModel):
-    """Request body for replacing one soul definition."""
-
-    overrides: SoulOverrides = Field(
-        description=(
-            "Full replacement soul override object. This endpoint currently replaces the stored override set "
-            "for the soul instead of applying a partial merge."
-        )
-    )
-
-
-class ChatRequest(BaseModel):
-    """Direct chat request against a running soul."""
-
-    content: str = Field(
-        min_length=1,
-        description="User message content to send to the running soul through AgentLoop.process_direct().",
-    )
-    session_key: str = Field(
-        default="cli:direct",
-        description=(
-            "Session key used by nanobot SessionManager, typically in channel:chat_id form. This controls "
-            "which workspace session file receives the new turn."
-        ),
-    )
-    channel: str = Field(
-        default="cli",
-        description="Logical channel name passed to the agent loop for routing and context construction.",
-    )
-    chat_id: str = Field(
-        default="direct",
-        description="Channel-local chat identifier paired with channel when building runtime context.",
-    )
-
-
-class CreateSessionRequest(BaseModel):
-    """Request body for creating one empty persisted session."""
-
-    key: str = Field(
-        min_length=1,
-        description="Session key used by nanobot SessionManager, typically in channel:chat_id form.",
-    )
+from nanobot_soulboard.schemas import (
+    ChatRequest,
+    CreateMCPServerRequest,
+    CreateSessionRequest,
+    CreateSoulRequest,
+    CronJobResponse,
+    CronJobScheduleResponse,
+    CronJobStateResponse,
+    ErrorResponse,
+    MCPServerResponse,
+    PathsResponse,
+    SessionDetailResponse,
+    SessionSummaryResponse,
+    SoulPromptFileResponse,
+    SoulPromptFilesResponse,
+    SoulResponse,
+    SoulSkillResponse,
+    StreamInputMessage,
+    UpdateMCPServerRequest,
+    UpdateSoulPromptFilesRequest,
+    UpdateSoulRequest,
+)
 
 
 def _build_session_metadata(key: str) -> dict[str, str]:
@@ -94,73 +50,6 @@ def _build_session_metadata(key: str) -> dict[str, str]:
         if chat_id:
             metadata["chat_id"] = chat_id
     return metadata
-
-
-class StreamChunkResponse(BaseModel):
-    """One streamed chunk sent from server to frontend."""
-
-    type: str = "chunk"
-    content: str | None = None
-    reasoning_content: str | None = None
-
-
-class StreamResetResponse(BaseModel):
-    """Handshake or stream reset message sent from server to frontend."""
-
-    type: str = "reset"
-    content: str | None = None
-    reasoning_content: str | None = None
-
-
-class StreamFinalizedMessageResponse(BaseModel):
-    """Structured finalized message emitted after persistence."""
-
-    type: str = "finalized"
-    role: str
-    content: Any = None
-    tool_calls: list[dict[str, Any]] | None = None
-    tool_call_id: str | None = None
-
-
-class SoulSkillResponse(BaseModel):
-    """One workspace skill visible to the soul."""
-
-    name: str
-    path: str
-    content: str
-
-
-class SoulResponse(BaseModel):
-    """Soul summary returned by the API."""
-
-    soul_id: str
-    workspace: str
-    skills: list[SoulSkillResponse]
-    running: bool
-    overrides: SoulOverrides
-
-
-class SessionSummaryResponse(BaseModel):
-    """Session summary for one soul workspace."""
-
-    key: str
-    created_at: str | None = None
-    updated_at: str | None = None
-    path: str
-
-
-class SessionDetailResponse(BaseModel):
-    """Expanded session contents."""
-
-    created_at: str
-    updated_at: str
-    metadata: dict[str, Any]
-    last_consolidated: int
-    history_start: int
-    history_end: int
-    total_messages: int
-    messages: list[dict[str, Any]]
-
 
 def _build_session_detail_response(
     session: Any,
@@ -185,103 +74,6 @@ def _build_session_detail_response(
         total_messages=total_messages,
         messages=session.messages[window_start:window_end],
     )
-
-
-class SoulPromptFileResponse(BaseModel):
-    """One editable markdown file from a soul workspace."""
-
-    name: str
-    exists: bool
-    content: str
-
-
-class SoulPromptFilesResponse(BaseModel):
-    """Ordered soul markdown prompt pack."""
-
-    files: list[SoulPromptFileResponse]
-
-
-class CronJobScheduleResponse(BaseModel):
-    """One cron schedule definition."""
-
-    kind: str
-    at_ms: int | None = None
-    every_ms: int | None = None
-    expr: str | None = None
-    tz: str | None = None
-
-
-class CronJobStateResponse(BaseModel):
-    """One cron job runtime state snapshot."""
-
-    next_run_at_ms: int | None = None
-    last_run_at_ms: int | None = None
-    last_status: str | None = None
-    last_error: str | None = None
-
-
-class CronJobResponse(BaseModel):
-    """One soul cron job."""
-
-    id: str
-    name: str
-    enabled: bool
-    delete_after_run: bool
-    message: str
-    deliver: bool
-    channel: str | None = None
-    chat_id: str | None = None
-    session_key: str | None = None
-    schedule: CronJobScheduleResponse
-    state: CronJobStateResponse
-
-
-class UpdateSoulPromptFileRequest(BaseModel):
-    """One prompt file replacement."""
-
-    name: str
-    content: str
-
-
-class UpdateSoulPromptFilesRequest(BaseModel):
-    """Replace one or more soul prompt files."""
-
-    files: list[UpdateSoulPromptFileRequest]
-
-
-class PathsResponse(BaseModel):
-    """Resolved config paths used by the server."""
-
-    nano_root: str
-    base_config_path: str
-    soulboard_config_path: str
-
-
-class MCPServerResponse(BaseModel):
-    """Named MCP server definition from base nanobot config."""
-
-    name: str
-    config: MCPServerConfig
-
-
-class CreateMCPServerRequest(BaseModel):
-    """Request body for creating one MCP server definition."""
-
-    name: str = Field(description="Unique MCP server name stored under tools.mcpServers in nanobot config.")
-    config: MCPServerConfig
-
-
-class UpdateMCPServerRequest(BaseModel):
-    """Request body for replacing one MCP server definition."""
-
-    config: MCPServerConfig
-
-
-class ErrorResponse(BaseModel):
-    """Simple structured error body."""
-
-    detail: str
-
 
 class AppState:
     """Typed app state."""
@@ -324,18 +116,6 @@ def _sync_soul_workspace(spec: SoulSpec) -> None:
     _write_if_missing(templates / "memory" / "MEMORY.md", spec.workspace / "memory" / "MEMORY.md")
     _write_if_missing(None, spec.workspace / "memory" / "history.jsonl")
     (spec.workspace / "skills").mkdir(parents=True, exist_ok=True)
-
-
-@dataclass
-class StreamState:
-    """Current streaming snapshot for one websocket chat session."""
-
-    reasoning_content: str = ""
-    content: str = ""
-    websockets: set[WebSocket] = field(default_factory=set)
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-
-
 def _to_soul_response(supervisor: SoulSupervisor, spec: SoulSpec) -> SoulResponse:
     return SoulResponse(
         soul_id=spec.soul_id,
@@ -420,74 +200,6 @@ def _to_cron_job_response(job: CronJob, session_key: str | None) -> CronJobRespo
             last_error=job.state.last_error,
         ),
     )
-
-
-async def _broadcast_json(stream: StreamState, payload: dict[str, Any]) -> None:
-    """Send one payload to all connected listeners for a stream."""
-    dead: list[WebSocket] = []
-    for websocket in list(stream.websockets):
-        try:
-            await websocket.send_json(payload)
-        except RuntimeError:
-            dead.append(websocket)
-    for websocket in dead:
-        stream.websockets.discard(websocket)
-
-
-async def _stream_chat(
-    stream: StreamState,
-    agent_loop,
-    body: ChatRequest,
-) -> None:
-    """Run one streamed chat turn over an accepted websocket."""
-    async with stream.lock:
-        session = agent_loop.sessions.get_or_create(body.session_key)
-        before_count = len(session.messages)
-        stream.reasoning_content = ""
-        stream.content = ""
-        await _broadcast_json(stream, StreamResetResponse().model_dump())
-
-        async def _send_progress(content: str, *, tool_hint: bool = False) -> None:
-            if tool_hint:
-                payload = StreamChunkResponse(content=content, reasoning_content=None)
-            else:
-                stream.reasoning_content += content
-                payload = StreamChunkResponse(content=None, reasoning_content=content)
-            await _broadcast_json(stream, payload.model_dump())
-
-        async def _send_stream(delta: str) -> None:
-            stream.content += delta
-            payload = StreamChunkResponse(content=delta, reasoning_content=None)
-            await _broadcast_json(stream, payload.model_dump())
-
-        async def _send_stream_end(*, resuming: bool = False) -> None:
-            del resuming
-
-        await agent_loop.process_direct(
-            content=body.content,
-            session_key=body.session_key,
-            channel=body.channel,
-            chat_id=body.chat_id,
-            on_progress=_send_progress,
-            on_stream=_send_stream,
-            on_stream_end=_send_stream_end,
-        )
-
-        for message in session.messages[before_count:]:
-            await _broadcast_json(
-                stream,
-                StreamFinalizedMessageResponse(
-                    role=message["role"],
-                    content=message.get("content"),
-                    tool_calls=message.get("tool_calls"),
-                    tool_call_id=message.get("tool_call_id"),
-                ).model_dump(),
-            )
-
-        stream.reasoning_content = ""
-        stream.content = ""
-
-
 def create_app(
     *,
     nano_root: Path | None = None,
@@ -518,7 +230,7 @@ def create_app(
             base_config_path=resolved_base_config_path,
             soulboard_config_path=resolved_soulboard_config_path,
         )
-        app.state.streams = {}
+        app.state.chat_streams = ChatStreamManager()
         for spec in supervisor.list_specs():
             _sync_soul_workspace(spec)
         await supervisor.start_autostart_souls()
@@ -939,50 +651,37 @@ def create_app(
     async def stream_chat(websocket: WebSocket, soul_id: str) -> None:
         await websocket.accept()
         supervisor = websocket.app.state.soulboard.supervisor
+        chat_streams: ChatStreamManager = websocket.app.state.chat_streams
         session_key = websocket.query_params.get("session_key", "cli:direct")
         channel = websocket.query_params.get("channel", "cli")
         chat_id = websocket.query_params.get("chat_id", "direct")
         logger.info("WebSocket connected: soul={} session_key={} channel={} chat_id={}", soul_id, session_key, channel, chat_id)
         stream_key = (soul_id, session_key, channel, chat_id)
-        streams: dict[tuple[str, str, str, str], StreamState] = websocket.app.state.streams
-        stream = streams.setdefault(stream_key, StreamState())
-        stream.websockets.add(websocket)
         try:
             agent_loop = supervisor.get_agent_loop(soul_id)
         except KeyError:
-            await websocket.send_json(StreamResetResponse().model_dump())
             await websocket.close(code=4404, reason=f"Soul is not running or does not exist: {soul_id}")
-            stream.websockets.discard(websocket)
             return
-
-        await websocket.send_json(
-            StreamResetResponse(
-                content=stream.content or None,
-                reasoning_content=stream.reasoning_content or None,
-            ).model_dump()
-        )
+        await chat_streams.connect(stream_key, websocket)
 
         while True:
             try:
                 payload = await websocket.receive_json()
             except WebSocketDisconnect:
                 logger.info("WebSocket disconnected: soul={} session_key={} channel={} chat_id={}", soul_id, session_key, channel, chat_id)
-                stream.websockets.discard(websocket)
-                if not stream.websockets and not stream.reasoning_content and not stream.content:
-                    streams.pop(stream_key, None)
+                await chat_streams.disconnect(stream_key, websocket)
                 break
 
-            body = ChatRequest(
-                content=payload["content"],
-                session_key=session_key,
-                channel=channel,
-                chat_id=chat_id,
+            body = StreamInputMessage.model_validate(payload)
+            await chat_streams.enqueue(
+                stream_key,
+                agent_loop,
+                ChatRequest(
+                    content=body.content,
+                    session_key=session_key,
+                    channel=channel,
+                    chat_id=chat_id,
+                ),
             )
-            try:
-                await _stream_chat(stream, agent_loop, body)
-            except WebSocketDisconnect:
-                logger.info("WebSocket disconnected during stream: soul={} session_key={} channel={} chat_id={}", soul_id, session_key, channel, chat_id)
-                stream.websockets.discard(websocket)
-                break
 
     return app

@@ -74,3 +74,4 @@ pnpm dev
 - [ ] Napcat channel cannot send image to group, probably related to `is_group` metadata.
 - [x] Remove `working_dir` in exec tool to avoid making GPT models confused.
 - [x] Refreshing agents should also refresh config.
+- [ ] Switching souls in frontend makes the agent stop working. It is related to websocket binding
