@@ -575,6 +575,19 @@ label span {
   color: var(--text);
 }
 
+.cron-job-card {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.cron-job-meta-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
 .message-card.streaming {
   border: 1px solid rgba(183, 77, 18, 0.22);
   background: linear-gradient(135deg, rgba(255, 248, 232, 0.92), rgba(255, 239, 226, 0.92));

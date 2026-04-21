@@ -892,6 +892,8 @@ export default function App() {
         }
         return;
       }
+      setChatContent("");
+      setChatReasoning("");
       setFinalizedMessages((current) => [...current, message]);
       void refreshSessions(soulId).catch(() => {});
     };
@@ -1810,15 +1812,19 @@ export default function App() {
                   ) : visibleCronJobs.length ? (
                     <div className="session-list">
                       {visibleCronJobs.map((job) => (
-                        <article key={job.id} className="session-card">
-                          <strong>{job.name}</strong>
-                          <span>{formatCronSchedule(job.schedule)}</span>
+                        <article key={job.id} className="session-card cron-job-card">
+                          <div className="cron-job-meta-row">
+                            <strong>{job.name}</strong>
+                            <span>{formatCronSchedule(job.schedule)}</span>
+                          </div>
                           <code>{job.session_key || "no session"}</code>
-                          <span>
-                            {job.enabled ? "enabled" : "disabled"}
-                            {job.state.last_status ? ` · last ${job.state.last_status}` : ""}
-                          </span>
-                          <span>next {formatTimestampMs(job.state.next_run_at_ms)}</span>
+                          <div className="cron-job-meta-row">
+                            <span>
+                              {job.enabled ? "enabled" : "disabled"}
+                              {job.state.last_status ? ` · last ${job.state.last_status}` : ""}
+                            </span>
+                            <span>next {formatTimestampMs(job.state.next_run_at_ms)}</span>
+                          </div>
                           <p>{job.message}</p>
                         </article>
                       ))}
@@ -2362,37 +2368,6 @@ export default function App() {
                   </button>
                 </div>
               ) : null}
-              {hasStreamingTurn ? (
-                <div className="message-card streaming">
-                  <div className="message-head">
-                    <strong>assistant</strong>
-                    <div className="message-head-actions">
-                      <span className="muted">streaming</span>
-                      <button
-                        type="button"
-                        className="ghost message-copy-button"
-                        onClick={() => {
-                          void copyToClipboard(chatContent).then(() => {
-                            toast.success("Copied response");
-                          }).catch((cause) => {
-                            notifyError(cause);
-                          });
-                        }}
-                        disabled={!chatContent}
-                      >
-                        Copy
-                      </button>
-                    </div>
-                  </div>
-                  {chatReasoning ? (
-                    <details>
-                      <summary>Reasoning</summary>
-                      <pre>{chatReasoning}</pre>
-                    </details>
-                  ) : null}
-                  {chatContent ? <MarkdownMessage content={chatContent} /> : <pre>(waiting for content)</pre>}
-                </div>
-              ) : null}
               {chatHistory.map((message, index) => {
                 const role = typeof message.role === "string" ? message.role : "unknown";
                 const toolCallId = typeof message.tool_call_id === "string" ? message.tool_call_id : null;
@@ -2448,6 +2423,37 @@ export default function App() {
                 </div>
                 );
               })}
+              {hasStreamingTurn ? (
+                <div className="message-card streaming">
+                  <div className="message-head">
+                    <strong>assistant</strong>
+                    <div className="message-head-actions">
+                      <span className="muted">streaming</span>
+                      <button
+                        type="button"
+                        className="ghost message-copy-button"
+                        onClick={() => {
+                          void copyToClipboard(chatContent).then(() => {
+                            toast.success("Copied response");
+                          }).catch((cause) => {
+                            notifyError(cause);
+                          });
+                        }}
+                        disabled={!chatContent}
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+                  {chatReasoning ? (
+                    <details>
+                      <summary>Reasoning</summary>
+                      <pre>{chatReasoning}</pre>
+                    </details>
+                  ) : null}
+                  {chatContent ? <MarkdownMessage content={chatContent} /> : <pre>(waiting for content)</pre>}
+                </div>
+              ) : null}
               {!chatHistory.length ? <p className="muted">Open a session to load its message history.</p> : null}
             </div>
           </article>
