@@ -12,10 +12,20 @@ class SoulboardContextBuilder(ContextBuilder):
 
     SYSTEM_FILENAME = "SYSTEM.md"
 
-    def __init__(self, workspace: Path, soul_id: str, timezone: str | None = None):
-        super().__init__(workspace, timezone=timezone)
+    def __init__(
+        self,
+        workspace: Path,
+        soul_id: str,
+        timezone: str | None = None,
+        disabled_skills: list[str] | None = None,
+    ):
+        super().__init__(workspace, timezone=timezone, disabled_skills=disabled_skills)
         self.soul_id = soul_id
-        self.workspace_skills = SkillsLoader(workspace, builtin_skills_dir=workspace / ".soulboard-no-builtin-skills")
+        self.workspace_skills = SkillsLoader(
+            workspace,
+            builtin_skills_dir=workspace / ".soulboard-no-builtin-skills",
+            disabled_skills=set(disabled_skills) if disabled_skills else None,
+        )
 
     def build_system_prompt(
         self,

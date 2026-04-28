@@ -427,6 +427,9 @@ class SoulSupervisor:
             model=config.agents.defaults.model,
             max_iterations=config.agents.defaults.max_tool_iterations,
             context_window_tokens=config.agents.defaults.context_window_tokens,
+            context_block_limit=config.agents.defaults.context_block_limit,
+            max_tool_result_chars=config.agents.defaults.max_tool_result_chars,
+            provider_retry_mode=config.agents.defaults.provider_retry_mode,
             web_config=config.tools.web,
             exec_config=config.tools.exec,
             cron_service=cron_service,
@@ -435,6 +438,11 @@ class SoulSupervisor:
             mcp_servers=config.tools.mcp_servers,
             channels_config=config.channels,
             timezone=config.agents.defaults.timezone,
+            session_ttl_minutes=config.agents.defaults.session_ttl_minutes,
+            consolidation_ratio=config.agents.defaults.consolidation_ratio,
+            unified_session=config.agents.defaults.unified_session,
+            disabled_skills=config.agents.defaults.disabled_skills,
+            tools_config=config.tools,
         )
         channel_manager = ChannelManager(config, bus)
         running = RunningSoul(
@@ -470,8 +478,8 @@ class SoulSupervisor:
                         sender_id="cron",
                         chat_id=f"{channel}:{chat_id}",
                         content=cron_content,
+                        session_key_override=session_key,
                         metadata={
-                            "_system_session_key": session_key,
                             **delivery_metadata,
                         },
                     )
