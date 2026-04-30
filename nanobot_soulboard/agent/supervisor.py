@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Literal
 
+from loguru import logger
 from nanobot.agent.tools.cron import CronTool
 from nanobot.bus.events import InboundMessage
 from nanobot.bus.queue import MessageBus
@@ -16,7 +17,6 @@ from nanobot.config.loader import load_config, save_config
 from nanobot.config.schema import Config, MCPServerConfig
 from nanobot.cron.types import CronJob
 from nanobot.providers.base import LLMProvider
-from nanobot.providers.registry import find_by_name
 from nanobot.session.manager import SessionManager
 
 from nanobot_soulboard.agent.loop import SoulAgentLoop
@@ -29,7 +29,7 @@ from nanobot_soulboard.config import (
     save_soulboard_config,
     validate_soul_id,
 )
-from nanobot_soulboard.cron import SoulCronService
+from nanobot_soulboard.cron import SoulCronPayload, SoulCronService
 
 SOUL_PROMPT_FILES = ("AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "SYSTEM.md")
 
@@ -543,10 +543,49 @@ class SoulSupervisor:
         )
 
         async def _on_cron_job(job: CronJob) -> str | None:
-            session_key = cron_service.get_session_key(job.id) or f"{job.payload.channel or 'cli'}:{job.payload.to or 'direct'}"
+            payload = job.payload
+            assert isinstance(payload, SoulCronPayload), (
+                f"SoulCronService payload must be SoulCronPayload, got {type(payload).__name__}"
+            )
+            recurring_format = payload.recurring_session_key_format
+            rendered_session_key: str | None = None
+            if recurring_format:
+                try:
+                    rendered_session_key = datetime.now().strftime(recurring_format)
+                except (ValueError, TypeError) as exc:
+                    logger.warning(
+                        "Cron job '{}' ({}) recurring_session_key_format {!r} "
+                        "failed to render, falling back to stored session_key: {}",
+                        job.name,
+                        job.id,
+                        recurring_format,
+                        exc,
+                    )
+            session_key = (
+                rendered_session_key
+                or payload.session_key
+                or f"{payload.channel or 'cli'}:{payload.to or 'direct'}"
+            )
+            session = session_manager.get_or_create(session_key)
+            if not session_manager._get_session_path(session_key).exists():
+                if not session.metadata:
+                    session.metadata = {"title": session_key}
+                    if ":" in session_key:
+                        ch_part, chat_part = session_key.split(":", 1)
+                        if ch_part:
+                            session.metadata["channel"] = ch_part
+                        if chat_part:
+                            session.metadata["chat_id"] = chat_part
+                session_manager.save(session)
+                logger.info(
+                    "Cron: created session {!r} for job '{}' ({})",
+                    session_key,
+                    job.name,
+                    job.id,
+                )
             delivery_metadata = cron_service.get_delivery_metadata(job.id)
-            channel = job.payload.channel or "cli"
-            chat_id = job.payload.to or "direct"
+            channel = payload.channel or "cli"
+            chat_id = payload.to or "direct"
             fired_at = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
             cron_content = (
                 f"System: cron job {job.name!r} fired. "

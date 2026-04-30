@@ -1,12 +1,89 @@
 """Soulboard-local cron extensions."""
 
+import json
+import time
+import uuid
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 from nanobot.agent.tools.cron import CronTool
-from nanobot.cron.service import CronService
-from nanobot.cron.types import CronJob
+from nanobot.cron.service import CronService, _compute_next_run, _validate_schedule_for_add
+from nanobot.cron.types import (
+    CronJob,
+    CronJobState,
+    CronPayload,
+    CronRunRecord,
+    CronSchedule,
+)
+
+
+@dataclass
+class SoulCronPayload(CronPayload):
+    """CronPayload extended with soulboard-specific fields.
+
+    ``recurring_session_key_format`` — when set to a strftime-style format
+    (e.g. ``"%Y-%m-%d"``), the runtime renders the effective session_key by
+    formatting the firing-time datetime instead of using the stored
+    ``session_key``. The rendered session is created on disk on demand.
+    Validation is intentionally omitted; an invalid format surfaces only when
+    the job fires, and is logged and falls back to ``session_key``.
+    """
+
+    recurring_session_key_format: str | None = None
+
+
+def _payload_from_persisted(payload: dict) -> SoulCronPayload:
+    """Build a SoulCronPayload from the camelCase form written to jobs.json."""
+    return SoulCronPayload(
+        kind=payload.get("kind", "agent_turn"),
+        message=payload.get("message", ""),
+        deliver=payload.get("deliver", False),
+        channel=payload.get("channel"),
+        to=payload.get("to"),
+        channel_meta=(
+            payload.get("channelMeta") or payload.get("channel_meta") or {}
+        ),
+        session_key=payload.get("sessionKey") or payload.get("session_key"),
+        recurring_session_key_format=(
+            payload.get("recurringSessionKeyFormat")
+            or payload.get("recurring_session_key_format")
+        ),
+    )
+
+
+def _payload_to_persisted(payload: SoulCronPayload) -> dict:
+    """Serialize a SoulCronPayload to its jobs.json form."""
+    return {
+        "kind": payload.kind,
+        "message": payload.message,
+        "deliver": payload.deliver,
+        "channel": payload.channel,
+        "to": payload.to,
+        "channelMeta": payload.channel_meta,
+        "sessionKey": payload.session_key,
+        "recurringSessionKeyFormat": payload.recurring_session_key_format,
+    }
+
+
+def _payload_from_action_params(payload: dict) -> SoulCronPayload:
+    """Build a SoulCronPayload from snake_case asdict-shaped action params."""
+    return SoulCronPayload(
+        kind=payload.get("kind", "agent_turn"),
+        message=payload.get("message", ""),
+        deliver=payload.get("deliver", False),
+        channel=payload.get("channel"),
+        to=payload.get("to"),
+        channel_meta=(
+            payload.get("channel_meta") or payload.get("channelMeta") or {}
+        ),
+        session_key=payload.get("session_key") or payload.get("sessionKey"),
+        recurring_session_key_format=(
+            payload.get("recurring_session_key_format")
+            or payload.get("recurringSessionKeyFormat")
+        ),
+    )
 
 
 class SoulCronService(CronService):
@@ -32,6 +109,212 @@ class SoulCronService(CronService):
         if "is_group" in raw:
             metadata["is_group"] = bool(raw["is_group"])
         return metadata
+
+    def _load_jobs(self) -> tuple[list[CronJob], int]:
+        """Override parent loader so SoulCronPayload fields survive a round-trip."""
+        jobs: list[CronJob] = []
+        version = 1
+        if self.store_path.exists():
+            try:
+                data = json.loads(self.store_path.read_text(encoding="utf-8"))
+                version = data.get("version", 1)
+                for j in data.get("jobs", []):
+                    jobs.append(CronJob(
+                        id=j["id"],
+                        name=j["name"],
+                        enabled=j.get("enabled", True),
+                        schedule=CronSchedule(
+                            kind=j["schedule"]["kind"],
+                            at_ms=j["schedule"].get("atMs"),
+                            every_ms=j["schedule"].get("everyMs"),
+                            expr=j["schedule"].get("expr"),
+                            tz=j["schedule"].get("tz"),
+                        ),
+                        payload=_payload_from_persisted(j.get("payload", {})),
+                        state=CronJobState(
+                            next_run_at_ms=j.get("state", {}).get("nextRunAtMs"),
+                            last_run_at_ms=j.get("state", {}).get("lastRunAtMs"),
+                            last_status=j.get("state", {}).get("lastStatus"),
+                            last_error=j.get("state", {}).get("lastError"),
+                            run_history=[
+                                CronRunRecord(
+                                    run_at_ms=r["runAtMs"],
+                                    status=r["status"],
+                                    duration_ms=r.get("durationMs", 0),
+                                    error=r.get("error"),
+                                )
+                                for r in j.get("state", {}).get("runHistory", [])
+                            ],
+                        ),
+                        created_at_ms=j.get("createdAtMs", 0),
+                        updated_at_ms=j.get("updatedAtMs", 0),
+                        delete_after_run=j.get("deleteAfterRun", False),
+                    ))
+            except Exception as e:
+                logger.warning("Failed to load cron store: {}", e)
+        return jobs, version
+
+    def _save_store(self) -> None:
+        """Override parent saver to persist SoulCronPayload fields."""
+        if not self._store:
+            return
+
+        self.store_path.parent.mkdir(parents=True, exist_ok=True)
+
+        data = {
+            "version": self._store.version,
+            "jobs": [
+                {
+                    "id": j.id,
+                    "name": j.name,
+                    "enabled": j.enabled,
+                    "schedule": {
+                        "kind": j.schedule.kind,
+                        "atMs": j.schedule.at_ms,
+                        "everyMs": j.schedule.every_ms,
+                        "expr": j.schedule.expr,
+                        "tz": j.schedule.tz,
+                    },
+                    "payload": _payload_to_persisted(j.payload),
+                    "state": {
+                        "nextRunAtMs": j.state.next_run_at_ms,
+                        "lastRunAtMs": j.state.last_run_at_ms,
+                        "lastStatus": j.state.last_status,
+                        "lastError": j.state.last_error,
+                        "runHistory": [
+                            {
+                                "runAtMs": r.run_at_ms,
+                                "status": r.status,
+                                "durationMs": r.duration_ms,
+                                "error": r.error,
+                            }
+                            for r in j.state.run_history
+                        ],
+                    },
+                    "createdAtMs": j.created_at_ms,
+                    "updatedAtMs": j.updated_at_ms,
+                    "deleteAfterRun": j.delete_after_run,
+                }
+                for j in self._store.jobs
+            ],
+        }
+
+        self.store_path.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+
+    def _merge_action(self) -> None:
+        """Override parent so action.jsonl entries reconstruct SoulCronPayload."""
+        if not self._action_path.exists() or self._store is None:
+            return
+
+        jobs_map = {j.id: j for j in self._store.jobs}
+
+        with self._lock:
+            with open(self._action_path, "r", encoding="utf-8") as f:
+                changed = False
+                for line in f:
+                    try:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        action = json.loads(line)
+                        if "action" not in action:
+                            continue
+                        params = action.get("params", {})
+                        if action["action"] == "del":
+                            if job_id := params.get("job_id"):
+                                jobs_map.pop(job_id, None)
+                        else:
+                            j = self._job_from_action_params(params)
+                            jobs_map[j.id] = j
+                        changed = True
+                    except Exception as exp:
+                        logger.debug(f"load action line error: {exp}")
+                        continue
+            self._store.jobs = list(jobs_map.values())
+            if self._running and changed:
+                self._action_path.write_text("", encoding="utf-8")
+                self._save_store()
+
+    @staticmethod
+    def _job_from_action_params(params: dict) -> CronJob:
+        """Mirror CronJob.from_dict but route payload through SoulCronPayload.
+
+        ``_append_action`` writes ``asdict(job)`` (snake_case), so we read with
+        snake_case keys here.
+        """
+        kwargs = dict(params)
+        state_kwargs = dict(kwargs.get("state", {}))
+        state_kwargs["run_history"] = [
+            r if isinstance(r, CronRunRecord) else CronRunRecord(**r)
+            for r in state_kwargs.get("run_history", [])
+        ]
+        kwargs["schedule"] = CronSchedule(**kwargs.get("schedule", {"kind": "every"}))
+        kwargs["payload"] = _payload_from_action_params(kwargs.get("payload", {}))
+        kwargs["state"] = CronJobState(**state_kwargs)
+        return CronJob(**kwargs)
+
+    def add_job(
+        self,
+        name: str,
+        schedule: CronSchedule,
+        message: str,
+        deliver: bool = False,
+        channel: str | None = None,
+        to: str | None = None,
+        delete_after_run: bool = False,
+        channel_meta: dict | None = None,
+        session_key: str | None = None,
+        recurring_session_key_format: str | None = None,
+    ) -> CronJob:
+        """Add a new job whose payload is always a SoulCronPayload."""
+        _validate_schedule_for_add(schedule)
+        now = int(time.time() * 1000)
+        job = CronJob(
+            id=str(uuid.uuid4())[:8],
+            name=name,
+            enabled=True,
+            schedule=schedule,
+            payload=SoulCronPayload(
+                kind="agent_turn",
+                message=message,
+                deliver=deliver,
+                channel=channel,
+                to=to,
+                channel_meta=channel_meta or {},
+                session_key=session_key,
+                recurring_session_key_format=recurring_session_key_format,
+            ),
+            state=CronJobState(next_run_at_ms=_compute_next_run(schedule, now)),
+            created_at_ms=now,
+            updated_at_ms=now,
+            delete_after_run=delete_after_run,
+        )
+        if self._running:
+            store = self._load_store()
+            store.jobs.append(job)
+            self._save_store()
+            self._arm_timer()
+        else:
+            self._append_action("add", asdict(job))
+        logger.info("Cron: added job '{}' ({})", name, job.id)
+        return job
+
+    def register_system_job(self, job: CronJob) -> CronJob:
+        """Promote payload to SoulCronPayload before delegating to parent."""
+        if not isinstance(job.payload, SoulCronPayload):
+            base = job.payload
+            job.payload = SoulCronPayload(
+                kind=base.kind,
+                message=base.message,
+                deliver=base.deliver,
+                channel=base.channel,
+                to=base.to,
+                channel_meta=base.channel_meta,
+                session_key=base.session_key,
+            )
+        return super().register_system_job(job)
 
     def get_session_key(self, job_id: str) -> str | None:
         store = self._load_store()
