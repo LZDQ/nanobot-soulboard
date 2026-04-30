@@ -47,6 +47,25 @@ class SoulOverrides(BaseModel):
     )
 
 
+class CronJobRegistryEntry(BaseModel):
+    """A predefined cron job template in the global registry."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(description="Unique identifier for this registry entry.")
+    label: str | None = Field(default=None, description="Optional human-readable display name.")
+    cron_expr: str | None = Field(default=None, description="Cron expression (e.g. '0 9 * * 1-5').")
+    every_seconds: int | None = Field(default=None, description="Fixed repeat interval in seconds.")
+    tz: str | None = Field(default=None, description="Timezone for cron_expr schedules (e.g. 'America/New_York').")
+    message: str = Field(default="", description="Message injected into the agent loop when this job fires.")
+    deliver: bool = Field(default=False)
+    channel: str | None = Field(default=None)
+    recurring_session_key_format: str | None = Field(
+        default=None,
+        description="strftime format rendered at fire-time to produce a dynamic session key (e.g. '%Y-%m-%d').",
+    )
+
+
 class SoulboardConfig(BaseModel):
     """Root soulboard config file, normally stored at ~/.nanobot/soulboard/config.json."""
 
@@ -59,6 +78,13 @@ class SoulboardConfig(BaseModel):
         description=(
             "Global registry of skill directory paths (each containing a SKILL.md). Souls can pick from "
             "this list when adding a skill, materialized as either a soft link or a copy."
+        ),
+    )
+    cron_job_registry: list[CronJobRegistryEntry] = Field(
+        default_factory=list,
+        description=(
+            "Global registry of predefined cron job templates. Souls can pick from this list to schedule "
+            "recurring tasks, including those with dynamic session keys via recurring_session_key_format."
         ),
     )
     souls: dict[str, SoulOverrides] = Field(default_factory=dict)
@@ -77,6 +103,11 @@ class SoulboardConfig(BaseModel):
     @classmethod
     def validate_skill_registry(cls, value: list[str]) -> list[str]:
         return _normalize_skill_registry(value)
+
+    @field_validator("cron_job_registry")
+    @classmethod
+    def validate_cron_job_registry(cls, value: list[CronJobRegistryEntry]) -> list[CronJobRegistryEntry]:
+        return _normalize_cron_job_registry(value)
 
 
 def _normalize_app_links(items: list[str]) -> list[str]:
@@ -123,6 +154,19 @@ def _normalize_skill_registry(items: list[str]) -> list[str]:
             continue
         normalized.append(item)
         seen.add(item)
+    return normalized
+
+
+def _normalize_cron_job_registry(entries: list[CronJobRegistryEntry]) -> list[CronJobRegistryEntry]:
+    """Deduplicate by name; drop entries with empty names."""
+    normalized: list[CronJobRegistryEntry] = []
+    seen: set[str] = set()
+    for entry in entries:
+        name = entry.name.strip()
+        if not name or name in seen:
+            continue
+        normalized.append(entry)
+        seen.add(name)
     return normalized
 
 

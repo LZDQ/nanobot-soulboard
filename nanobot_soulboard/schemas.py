@@ -5,7 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from nanobot.config.schema import MCPServerConfig
-from nanobot_soulboard.config import SoulOverrides
+from nanobot_soulboard.config import CronJobRegistryEntry, SoulOverrides
 
 
 class CreateSoulRequest(BaseModel):
@@ -38,6 +38,13 @@ class CreateSoulRequest(BaseModel):
             "'symlink' creates soft links so edits in the source directory are reflected live (default, "
             "preserves prior behavior). 'copy' copies the files so the soul workspace owns its own "
             "independent copy that can drift from the source."
+        ),
+    )
+    cron_job_registry_names: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Names of global cron job registry entries to add to the soul at creation time. Each name "
+            "must exist in the soulboard cron_job_registry."
         ),
     )
 
@@ -293,8 +300,27 @@ class CronJobResponse(BaseModel):
     channel: str | None = None
     chat_id: str | None = None
     session_key: str | None = None
+    recurring_session_key_format: str | None = None
     schedule: CronJobScheduleResponse
     state: CronJobStateResponse
+
+
+class CronJobRegistryResponse(BaseModel):
+    """Global cron job registry."""
+
+    items: list[CronJobRegistryEntry]
+
+
+class UpdateCronJobRegistryRequest(BaseModel):
+    """Replace the global cron job registry."""
+
+    items: list[CronJobRegistryEntry]
+
+
+class AddSoulCronJobsFromRegistryRequest(BaseModel):
+    """Add selected registry cron jobs to a soul."""
+
+    names: list[str] = Field(description="Registry entry names to schedule in the soul.")
 
 
 class UpdateSoulPromptFileRequest(BaseModel):

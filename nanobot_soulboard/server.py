@@ -12,17 +12,20 @@ from loguru import logger
 from nanobot.config.loader import load_config
 from nanobot.cli.commands import _make_provider as make_provider
 from nanobot.cron.types import CronJob
+from nanobot_soulboard.cron import SoulCronPayload
 from nanobot.session.manager import SessionManager
 from nanobot_soulboard.chat_streams import ChatStreamManager
 from nanobot_soulboard.config import load_soulboard_config
 from nanobot_soulboard.agent import SOUL_PROMPT_FILES, SoulAgentLoop, SoulSpec, SoulSupervisor
 from nanobot_soulboard.schemas import (
+    AddSoulCronJobsFromRegistryRequest,
     AddSoulSkillRequest,
     AppLinksResponse,
     ChatRequest,
     CreateMCPServerRequest,
     CreateSessionRequest,
     CreateSoulRequest,
+    CronJobRegistryResponse,
     CronJobResponse,
     CronJobScheduleResponse,
     CronJobStateResponse,
@@ -42,6 +45,7 @@ from nanobot_soulboard.schemas import (
     SoulSkillResponse,
     StreamInputMessage,
     UpdateAppLinksRequest,
+    UpdateCronJobRegistryRequest,
     UpdateMCPServerRequest,
     UpdatePromptLinkDirsRequest,
     UpdateSkillRegistryRequest,
@@ -235,6 +239,7 @@ def _build_prompt_link_dirs_response(supervisor: SoulSupervisor) -> PromptLinkDi
 
 
 def _to_cron_job_response(job: CronJob, session_key: str | None) -> CronJobResponse:
+    assert isinstance(job.payload, SoulCronPayload)
     return CronJobResponse(
         id=job.id,
         name=job.name,
@@ -245,6 +250,7 @@ def _to_cron_job_response(job: CronJob, session_key: str | None) -> CronJobRespo
         channel=job.payload.channel,
         chat_id=job.payload.to,
         session_key=session_key,
+        recurring_session_key_format=job.payload.recurring_session_key_format,
         schedule=CronJobScheduleResponse(
             kind=job.schedule.kind,
             at_ms=job.schedule.at_ms,
@@ -420,6 +426,40 @@ def create_app(
         return _build_skill_registry_response(supervisor)
 
     @app.get(
+        "/api/cron-job-registry",
+        response_model=CronJobRegistryResponse,
+        summary="List Global Cron Job Registry",
+        description=(
+            "Return the configured global cron job registry: predefined cron job templates that souls can "
+            "schedule, including optional recurring_session_key_format for dynamic session keys."
+        ),
+    )
+    def get_cron_job_registry(request: Request) -> CronJobRegistryResponse:
+        supervisor = _get_supervisor(request)
+        return CronJobRegistryResponse(items=supervisor.list_cron_job_registry())
+
+    @app.patch(
+        "/api/cron-job-registry",
+        response_model=CronJobRegistryResponse,
+        responses={400: {"model": ErrorResponse}},
+        summary="Update Global Cron Job Registry",
+        description=(
+            "Replace the configured global cron job registry. Each entry must have a unique name and at "
+            "least one of cron_expr or every_seconds. Registry changes do not affect already-scheduled "
+            "soul cron jobs."
+        ),
+    )
+    def update_cron_job_registry(
+        request: Request, body: UpdateCronJobRegistryRequest
+    ) -> CronJobRegistryResponse:
+        supervisor = _get_supervisor(request)
+        try:
+            supervisor.update_cron_job_registry(body.items)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return CronJobRegistryResponse(items=supervisor.list_cron_job_registry())
+
+    @app.get(
         "/api/souls",
         response_model=list[SoulResponse],
         summary="List Souls",
@@ -538,6 +578,13 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         _sync_soul_workspace(spec)
+        if body.cron_job_registry_names:
+            try:
+                supervisor.add_cron_jobs_to_soul_from_registry(
+                    body.soul_id, body.cron_job_registry_names
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         if spec.overrides.autostart:
             await supervisor.start_soul(spec.soul_id)
         return _to_soul_response(supervisor, spec)
@@ -595,6 +642,28 @@ def create_app(
         except KeyError as exc:
             _raise_not_found(_error_detail(exc))
         return [_to_cron_job_response(job, session_key) for job, session_key in jobs]
+
+    @app.post(
+        "/api/souls/{soul_id}/cron-jobs-from-registry",
+        response_model=list[CronJobResponse],
+        responses={404: {"model": ErrorResponse}, 400: {"model": ErrorResponse}},
+        summary="Add Cron Jobs From Registry",
+        description=(
+            "Schedule one or more global cron job registry entries as cron jobs in the selected soul. "
+            "Works whether the soul is running or stopped. Each name must exist in the global registry."
+        ),
+    )
+    def add_soul_cron_jobs_from_registry(
+        request: Request, soul_id: str, body: AddSoulCronJobsFromRegistryRequest
+    ) -> list[CronJobResponse]:
+        supervisor = _get_supervisor(request)
+        try:
+            added = supervisor.add_cron_jobs_to_soul_from_registry(soul_id, body.names)
+        except KeyError as exc:
+            _raise_not_found(_error_detail(exc))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return [_to_cron_job_response(job, job.payload.session_key) for job in added]
 
     @app.patch(
         "/api/souls/{soul_id}/prompt-files",

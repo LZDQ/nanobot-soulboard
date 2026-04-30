@@ -15,12 +15,13 @@ from nanobot.bus.queue import MessageBus
 from nanobot.channels.manager import ChannelManager
 from nanobot.config.loader import load_config, save_config
 from nanobot.config.schema import Config, MCPServerConfig
-from nanobot.cron.types import CronJob
+from nanobot.cron.types import CronJob, CronSchedule
 from nanobot.providers.base import LLMProvider
 from nanobot.session.manager import SessionManager
 
 from nanobot_soulboard.agent.loop import SoulAgentLoop
 from nanobot_soulboard.config import (
+    CronJobRegistryEntry,
     SoulOverrides,
     SoulboardConfig,
     get_soulboard_config_path,
@@ -342,6 +343,60 @@ class SoulSupervisor:
         if not target_path.is_dir():
             raise ValueError(f"Skill path is not a directory or symlink: {name}")
         shutil.rmtree(target_path)
+
+    def list_cron_job_registry(self) -> list[CronJobRegistryEntry]:
+        """Return the configured global cron job registry entries."""
+        return list(self.soulboard_config.cron_job_registry)
+
+    def update_cron_job_registry(
+        self, entries: list[CronJobRegistryEntry]
+    ) -> list[CronJobRegistryEntry]:
+        """Replace the global cron job registry and persist."""
+        self.soulboard_config = self.soulboard_config.model_copy(
+            update={"cron_job_registry": entries}
+        )
+        save_soulboard_config(self.soulboard_config, self.config_path)
+        return list(self.soulboard_config.cron_job_registry)
+
+    def add_cron_jobs_to_soul_from_registry(
+        self,
+        soul_id: str,
+        names: list[str],
+    ) -> list[CronJob]:
+        """Schedule selected registry entries as cron jobs in a soul.
+
+        Works whether the soul is running or stopped.
+        """
+        registry_by_name = {e.name: e for e in self.soulboard_config.cron_job_registry}
+        spec = self.get_spec(soul_id)
+        running = self._running_souls.get(soul_id)
+        cron_service = (
+            running.cron_service if running is not None else self._build_cron_service(spec)
+        )
+        added: list[CronJob] = []
+        for name in names:
+            entry = registry_by_name.get(name)
+            if entry is None:
+                raise ValueError(f"Unknown cron job registry entry: {name!r}")
+            if entry.cron_expr:
+                schedule = CronSchedule(kind="cron", expr=entry.cron_expr, tz=entry.tz)
+            elif entry.every_seconds:
+                schedule = CronSchedule(kind="every", every_ms=entry.every_seconds * 1000)
+            else:
+                raise ValueError(
+                    f"Cron job registry entry {name!r} has no schedule "
+                    "(set cron_expr or every_seconds)"
+                )
+            job = cron_service.add_job(
+                name=entry.label or entry.name,
+                schedule=schedule,
+                message=entry.message,
+                deliver=entry.deliver,
+                channel=entry.channel,
+                recurring_session_key_format=entry.recurring_session_key_format,
+            )
+            added.append(job)
+        return added
 
     def _resolve_soul_workspace(self, soul_id: str, overrides: SoulOverrides) -> Path:
         if overrides.workspace:

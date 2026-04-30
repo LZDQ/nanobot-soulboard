@@ -132,8 +132,37 @@ type CronJob = {
   channel: string | null;
   chat_id: string | null;
   session_key: string | null;
+  recurring_session_key_format: string | null;
   schedule: CronJobSchedule;
   state: CronJobState;
+};
+
+type CronJobRegistryEntry = {
+  name: string;
+  label: string | null;
+  cron_expr: string | null;
+  every_seconds: number | null;
+  tz: string | null;
+  message: string;
+  deliver: boolean;
+  channel: string | null;
+  recurring_session_key_format: string | null;
+};
+
+type CronJobRegistryResponse = {
+  items: CronJobRegistryEntry[];
+};
+
+type CronJobRegistryEntryDraft = {
+  name: string;
+  label: string;
+  cron_expr: string;
+  every_seconds: string;
+  tz: string;
+  message: string;
+  deliver: boolean;
+  channel: string;
+  recurring_session_key_format: string;
 };
 
 type StreamResetMessage = {
@@ -652,6 +681,7 @@ export default function App() {
   const [appLinks, setAppLinks] = useState<string[]>([]);
   const [promptLinkDirs, setPromptLinkDirs] = useState<PromptLinkDir[]>([]);
   const [skillRegistry, setSkillRegistry] = useState<SkillRegistryEntry[]>([]);
+  const [cronJobRegistry, setCronJobRegistry] = useState<CronJobRegistryEntry[]>([]);
   const [promptFiles, setPromptFiles] = useState<SoulPromptFile[]>([]);
   const [cronJobs, setCronJobs] = useState<CronJob[] | null>(null);
   const [selectedMcpServerName, setSelectedMcpServerName] = useState<string>("");
@@ -688,6 +718,13 @@ export default function App() {
   const [isEditingAppLinks, setIsEditingAppLinks] = useState(false);
   const [isEditingPromptLinkDirs, setIsEditingPromptLinkDirs] = useState(false);
   const [isEditingSkillRegistry, setIsEditingSkillRegistry] = useState(false);
+  const [isEditingCronJobRegistry, setIsEditingCronJobRegistry] = useState(false);
+  const [cronJobRegistryDraft, setCronJobRegistryDraft] = useState<CronJobRegistryEntryDraft>({
+    name: "", label: "", cron_expr: "", every_seconds: "", tz: "", message: "",
+    deliver: false, channel: "", recurring_session_key_format: "",
+  });
+  const [addCronJobRegistrySelection, setAddCronJobRegistrySelection] = useState("");
+  const [createSoulCronJobNames, setCreateSoulCronJobNames] = useState<string[]>([]);
   const [addSkillSelection, setAddSkillSelection] = useState("");
   const [addSkillMode, setAddSkillMode] = useState<"symlink" | "copy">("symlink");
   const [addSkillTargetName, setAddSkillTargetName] = useState("");
@@ -782,6 +819,77 @@ export default function App() {
     setSkillRegistry(response.items);
   }
 
+  async function refreshCronJobRegistry(): Promise<void> {
+    const response = await api<CronJobRegistryResponse>("/api/cron-job-registry");
+    setCronJobRegistry(response.items);
+  }
+
+  async function saveCronJobRegistry(items: CronJobRegistryEntry[]) {
+    await runAction("cron-job-registry", async () => {
+      const response = await api<CronJobRegistryResponse>("/api/cron-job-registry", {
+        method: "PATCH",
+        body: JSON.stringify({ items }),
+      });
+      setCronJobRegistry(response.items);
+      setIsEditingCronJobRegistry(false);
+      setCronJobRegistryDraft({
+        name: "", label: "", cron_expr: "", every_seconds: "", tz: "", message: "",
+        deliver: false, channel: "", recurring_session_key_format: "",
+      });
+      if (addCronJobRegistrySelection && !response.items.some((e) => e.name === addCronJobRegistrySelection)) {
+        setAddCronJobRegistrySelection("");
+      }
+    }).catch((cause) => {
+      notifyError(cause);
+    });
+  }
+
+  async function addCronJobRegistryEntry() {
+    const name = cronJobRegistryDraft.name.trim();
+    if (!name) { notifyError("Entry name is required"); return; }
+    if (!cronJobRegistryDraft.cron_expr.trim() && !cronJobRegistryDraft.every_seconds.trim()) {
+      notifyError("Provide cron_expr or every_seconds");
+      return;
+    }
+    const everySeconds = cronJobRegistryDraft.every_seconds.trim()
+      ? parseInt(cronJobRegistryDraft.every_seconds.trim(), 10)
+      : null;
+    if (cronJobRegistryDraft.every_seconds.trim() && (isNaN(everySeconds!) || everySeconds! <= 0)) {
+      notifyError("every_seconds must be a positive integer");
+      return;
+    }
+    const entry: CronJobRegistryEntry = {
+      name,
+      label: cronJobRegistryDraft.label.trim() || null,
+      cron_expr: cronJobRegistryDraft.cron_expr.trim() || null,
+      every_seconds: everySeconds,
+      tz: cronJobRegistryDraft.tz.trim() || null,
+      message: cronJobRegistryDraft.message,
+      deliver: cronJobRegistryDraft.deliver,
+      channel: cronJobRegistryDraft.channel.trim() || null,
+      recurring_session_key_format: cronJobRegistryDraft.recurring_session_key_format.trim() || null,
+    };
+    await saveCronJobRegistry([...cronJobRegistry, entry]);
+  }
+
+  async function deleteCronJobRegistryEntry(name: string) {
+    await saveCronJobRegistry(cronJobRegistry.filter((e) => e.name !== name));
+  }
+
+  async function addSoulCronJobsFromRegistry() {
+    if (!selectedSoul || !addCronJobRegistrySelection) return;
+    await runAction("cron-from-registry", async () => {
+      await api<CronJob[]>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/cron-jobs-from-registry`, {
+        method: "POST",
+        body: JSON.stringify({ names: [addCronJobRegistrySelection] }),
+      });
+      setAddCronJobRegistrySelection("");
+      await refreshCronJobs(selectedSoul.soul_id);
+    }).catch((cause) => {
+      notifyError(cause);
+    });
+  }
+
   async function refreshSessions(soulId: string): Promise<SessionSummary[]> {
     const nextSessions = await api<SessionSummary[]>(`/api/souls/${encodeURIComponent(soulId)}/sessions`);
     setSessions(nextSessions);
@@ -838,6 +946,7 @@ export default function App() {
         await refreshAppLinks();
         await refreshPromptLinkDirs();
         await refreshSkillRegistry();
+        await refreshCronJobRegistry();
         await refreshMcpServers();
       } catch (cause) {
         notifyError(cause);
@@ -977,11 +1086,13 @@ export default function App() {
           overrides: draftToOverrides(draft),
           prompt_link_dir: createSoulPromptLinkDir || null,
           prompt_link_mode: createSoulPromptLinkMode,
+          cron_job_registry_names: createSoulCronJobNames,
         }),
       });
       setCreateSoulId("");
       setCreateSoulPromptLinkDir("");
       setCreateSoulPromptLinkMode("symlink");
+      setCreateSoulCronJobNames([]);
       setIsCreatingSoul(false);
       await refreshSouls(created.soul_id);
       await refreshSessions(created.soul_id);
@@ -1682,6 +1793,138 @@ export default function App() {
               )) : <p className="muted">No skills registered.</p>}
             </div>
           </div>
+
+          <div className="create-box">
+            <div className="panel-head">
+              <h3>Cron job registry</h3>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => setIsEditingCronJobRegistry((current) => !current)}
+                disabled={!!pending}
+              >
+                {isEditingCronJobRegistry ? "Done" : "Edit"}
+              </button>
+            </div>
+            {isEditingCronJobRegistry ? (
+              <div className="app-links-editor">
+                <div className="details-stack" style={{ gap: "0.5rem" }}>
+                  <label>
+                    <span>Name (unique ID)</span>
+                    <input
+                      value={cronJobRegistryDraft.name}
+                      onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, name: e.target.value }))}
+                      placeholder="daily-digest"
+                      disabled={!!pending}
+                    />
+                  </label>
+                  <label>
+                    <span>Label (display name)</span>
+                    <input
+                      value={cronJobRegistryDraft.label}
+                      onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, label: e.target.value }))}
+                      placeholder="Daily digest"
+                      disabled={!!pending}
+                    />
+                  </label>
+                  <label>
+                    <span>Cron expr</span>
+                    <input
+                      value={cronJobRegistryDraft.cron_expr}
+                      onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, cron_expr: e.target.value }))}
+                      placeholder="0 9 * * 1-5"
+                      disabled={!!pending}
+                    />
+                  </label>
+                  <label>
+                    <span>Every (seconds)</span>
+                    <input
+                      type="number"
+                      value={cronJobRegistryDraft.every_seconds}
+                      onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, every_seconds: e.target.value }))}
+                      placeholder="3600"
+                      disabled={!!pending}
+                    />
+                  </label>
+                  <label>
+                    <span>Timezone</span>
+                    <input
+                      value={cronJobRegistryDraft.tz}
+                      onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, tz: e.target.value }))}
+                      placeholder="America/New_York"
+                      disabled={!!pending}
+                    />
+                  </label>
+                  <label>
+                    <span>Message</span>
+                    <input
+                      value={cronJobRegistryDraft.message}
+                      onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, message: e.target.value }))}
+                      placeholder="Run the daily summary"
+                      disabled={!!pending}
+                    />
+                  </label>
+                  <label>
+                    <span>Channel</span>
+                    <input
+                      value={cronJobRegistryDraft.channel}
+                      onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, channel: e.target.value }))}
+                      placeholder="whatsapp"
+                      disabled={!!pending}
+                    />
+                  </label>
+                  <label>
+                    <span>Recurring session key format</span>
+                    <input
+                      value={cronJobRegistryDraft.recurring_session_key_format}
+                      onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, recurring_session_key_format: e.target.value }))}
+                      placeholder="%Y-%m-%d"
+                      disabled={!!pending}
+                    />
+                  </label>
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={cronJobRegistryDraft.deliver}
+                      onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, deliver: e.target.checked }))}
+                      disabled={!!pending}
+                    />
+                    <span>Deliver response</span>
+                  </label>
+                  <button type="button" onClick={() => void addCronJobRegistryEntry()} disabled={!!pending}>
+                    Add entry
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            <div className="prompt-link-dir-list">
+              {cronJobRegistry.length ? cronJobRegistry.map((entry) => (
+                <article key={entry.name} className="prompt-link-dir-card">
+                  <div className="prompt-link-dir-head">
+                    <code>{entry.name}</code>
+                    {isEditingCronJobRegistry ? (
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => void deleteCronJobRegistryEntry(entry.name)}
+                        disabled={!!pending}
+                      >
+                        Remove
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="prompt-link-file-pills">
+                    {entry.label ? <span className="pill live">{entry.label}</span> : null}
+                    {entry.cron_expr ? <span className="pill idle">{entry.cron_expr}{entry.tz ? ` (${entry.tz})` : ""}</span> : null}
+                    {entry.every_seconds ? <span className="pill idle">every {entry.every_seconds}s</span> : null}
+                    {entry.recurring_session_key_format ? <span className="pill live">session: {entry.recurring_session_key_format}</span> : null}
+                    {entry.channel ? <span className="pill idle">{entry.channel}</span> : null}
+                  </div>
+                  {entry.message ? <p className="muted skill-registry-desc">{entry.message}</p> : null}
+                </article>
+              )) : <p className="muted">No cron job templates registered.</p>}
+            </div>
+          </div>
         </section>
 
         <section className="panel sessions-panel">
@@ -1845,6 +2088,29 @@ export default function App() {
                   <span>Autostart on server boot</span>
                 </label>
               </div>
+              {cronJobRegistry.length > 0 ? (
+                <div>
+                  <h4 style={{ margin: "0.5rem 0 0.25rem" }}>Cron jobs from registry</h4>
+                  <div className="prompt-link-file-pills" style={{ flexDirection: "column", gap: "0.25rem" }}>
+                    {cronJobRegistry.map((entry) => (
+                      <label key={entry.name} className="checkbox">
+                        <input
+                          type="checkbox"
+                          checked={createSoulCronJobNames.includes(entry.name)}
+                          onChange={(event) => {
+                            setCreateSoulCronJobNames((current) =>
+                              event.target.checked
+                                ? [...current, entry.name]
+                                : current.filter((n) => n !== entry.name)
+                            );
+                          }}
+                        />
+                        <span>{entry.label ?? entry.name}{entry.cron_expr ? ` — ${entry.cron_expr}` : entry.every_seconds ? ` — every ${entry.every_seconds}s` : ""}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               <button onClick={() => void createSoul()} disabled={!!pending}>
                 Create soul
               </button>
@@ -2217,6 +2483,11 @@ export default function App() {
                             <span>{formatCronSchedule(job.schedule)}</span>
                           </div>
                           <code>{job.session_key || "no session"}</code>
+                          {job.recurring_session_key_format ? (
+                            <div className="prompt-link-file-pills">
+                              <span className="pill live">session fmt: {job.recurring_session_key_format}</span>
+                            </div>
+                          ) : null}
                           <div className="cron-job-meta-row">
                             <span>
                               {job.enabled ? "enabled" : "disabled"}
@@ -2235,6 +2506,32 @@ export default function App() {
                         : "No cron jobs found for this soul."}
                     </p>
                   )}
+                  {cronJobRegistry.length > 0 ? (
+                    <div className="create-box" style={{ marginTop: "0.75rem" }}>
+                      <h4>Add from registry</h4>
+                      <div className="app-links-editor-row">
+                        <select
+                          value={addCronJobRegistrySelection}
+                          onChange={(e) => setAddCronJobRegistrySelection(e.target.value)}
+                          disabled={!!pending}
+                        >
+                          <option value="">Add from registry…</option>
+                          {cronJobRegistry.map((entry) => (
+                            <option key={entry.name} value={entry.name}>
+                              {entry.label ?? entry.name}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => void addSoulCronJobsFromRegistry()}
+                          disabled={!!pending || !addCronJobRegistrySelection}
+                        >
+                          Add
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
                 </section>
 
                 <section className="subpanel">
