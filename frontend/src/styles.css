@@ -423,6 +423,71 @@ pre {
   gap: 0.55rem;
 }
 
+.prompt-link-mode {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0.7rem 0.9rem;
+  border-radius: 18px;
+  border: 1px solid var(--panel-border);
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.prompt-link-mode[disabled] {
+  opacity: 0.55;
+}
+
+.prompt-link-mode legend {
+  padding: 0 0.4rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.prompt-link-mode-option {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  cursor: pointer;
+}
+
+.prompt-link-mode-option input[type="radio"] {
+  margin: 0;
+}
+
+.skill-registry-desc {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.skill-entry-desc {
+  margin: 0.4rem 0 0.2rem;
+  font-size: 0.85rem;
+}
+
+.skill-entry-target {
+  margin: 0.2rem 0 0.6rem;
+  font-size: 0.8rem;
+}
+
+.skill-delete-button {
+  margin-left: auto;
+}
+
+.skill-add-form {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.9rem;
+  padding: 0.7rem 0.85rem;
+  border-radius: 18px;
+  border: 1px dashed var(--panel-border);
+  background: rgba(255, 255, 255, 0.4);
+}
+
+.skill-add-form select,
+.skill-add-form input {
+  width: 100%;
+}
+
 .details-stack {
   display: grid;
   gap: 1rem;

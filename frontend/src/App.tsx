@@ -38,6 +38,19 @@ type SoulSkill = {
   name: string;
   path: string;
   content: string;
+  description: string | null;
+  link_target: string | null;
+};
+
+type SkillRegistryEntry = {
+  path: string;
+  exists: boolean;
+  name: string | null;
+  description: string | null;
+};
+
+type SkillRegistryResponse = {
+  items: SkillRegistryEntry[];
 };
 
 type Soul = {
@@ -638,6 +651,7 @@ export default function App() {
   const [mcpServers, setMcpServers] = useState<MCPServer[]>([]);
   const [appLinks, setAppLinks] = useState<string[]>([]);
   const [promptLinkDirs, setPromptLinkDirs] = useState<PromptLinkDir[]>([]);
+  const [skillRegistry, setSkillRegistry] = useState<SkillRegistryEntry[]>([]);
   const [promptFiles, setPromptFiles] = useState<SoulPromptFile[]>([]);
   const [cronJobs, setCronJobs] = useState<CronJob[] | null>(null);
   const [selectedMcpServerName, setSelectedMcpServerName] = useState<string>("");
@@ -645,6 +659,7 @@ export default function App() {
   const [createSessionKey, setCreateSessionKey] = useState("");
   const [newAppLink, setNewAppLink] = useState("");
   const [newPromptLinkDir, setNewPromptLinkDir] = useState("");
+  const [newSkillRegistryPath, setNewSkillRegistryPath] = useState("");
   const [sessionDetail, setSessionDetail] = useState<SessionDetail | null>(null);
   const [sessionKey, setSessionKey] = useState<string | null>(initialFocusRef.current.sessionKey);
   const [olderMessagesPending, setOlderMessagesPending] = useState(false);
@@ -672,9 +687,14 @@ export default function App() {
   const [isEditingSoul, setIsEditingSoul] = useState(false);
   const [isEditingAppLinks, setIsEditingAppLinks] = useState(false);
   const [isEditingPromptLinkDirs, setIsEditingPromptLinkDirs] = useState(false);
+  const [isEditingSkillRegistry, setIsEditingSkillRegistry] = useState(false);
+  const [addSkillSelection, setAddSkillSelection] = useState("");
+  const [addSkillMode, setAddSkillMode] = useState<"symlink" | "copy">("symlink");
+  const [addSkillTargetName, setAddSkillTargetName] = useState("");
   const [isEditingPromptFiles, setIsEditingPromptFiles] = useState(false);
   const [isCreatingSoul, setIsCreatingSoul] = useState(false);
   const [createSoulPromptLinkDir, setCreateSoulPromptLinkDir] = useState("");
+  const [createSoulPromptLinkMode, setCreateSoulPromptLinkMode] = useState<"symlink" | "copy">("symlink");
   const [showOnlySelectedSessionCronJobs, setShowOnlySelectedSessionCronJobs] = useState(true);
   const [mcpMode, setMcpMode] = useState<"view" | "edit" | "create">("view");
   const [socketState, setSocketState] = useState<"closed" | "connecting" | "open">("closed");
@@ -757,6 +777,11 @@ export default function App() {
     setPromptLinkDirs(response.items);
   }
 
+  async function refreshSkillRegistry(): Promise<void> {
+    const response = await api<SkillRegistryResponse>("/api/skill-registry");
+    setSkillRegistry(response.items);
+  }
+
   async function refreshSessions(soulId: string): Promise<SessionSummary[]> {
     const nextSessions = await api<SessionSummary[]>(`/api/souls/${encodeURIComponent(soulId)}/sessions`);
     setSessions(nextSessions);
@@ -812,6 +837,7 @@ export default function App() {
         await refreshSouls();
         await refreshAppLinks();
         await refreshPromptLinkDirs();
+        await refreshSkillRegistry();
         await refreshMcpServers();
       } catch (cause) {
         notifyError(cause);
@@ -950,10 +976,12 @@ export default function App() {
           soul_id: createSoulId.trim(),
           overrides: draftToOverrides(draft),
           prompt_link_dir: createSoulPromptLinkDir || null,
+          prompt_link_mode: createSoulPromptLinkMode,
         }),
       });
       setCreateSoulId("");
       setCreateSoulPromptLinkDir("");
+      setCreateSoulPromptLinkMode("symlink");
       setIsCreatingSoul(false);
       await refreshSouls(created.soul_id);
       await refreshSessions(created.soul_id);
@@ -1321,6 +1349,88 @@ export default function App() {
     await savePromptLinkDirs(promptLinkDirs.map((entry) => entry.path).filter((item) => item !== path));
   }
 
+  async function saveSkillRegistry(items: string[]) {
+    const normalized = items.map((item) => item.trim()).filter(Boolean);
+    await runAction("skill-registry", async () => {
+      const response = await api<SkillRegistryResponse>("/api/skill-registry", {
+        method: "PATCH",
+        body: JSON.stringify({ items: normalized }),
+      });
+      setSkillRegistry(response.items);
+      setIsEditingSkillRegistry(false);
+      setNewSkillRegistryPath("");
+      if (addSkillSelection && !response.items.some((item) => item.path === addSkillSelection)) {
+        setAddSkillSelection("");
+      }
+    }).catch((cause) => {
+      notifyError(cause);
+    });
+  }
+
+  async function addSkillRegistryEntry() {
+    const item = newSkillRegistryPath.trim();
+    if (!item) {
+      notifyError("Skill path is required");
+      return;
+    }
+    await saveSkillRegistry([...skillRegistry.map((entry) => entry.path), item]);
+  }
+
+  async function deleteSkillRegistryEntry(path: string) {
+    await saveSkillRegistry(skillRegistry.map((entry) => entry.path).filter((item) => item !== path));
+  }
+
+  async function addSoulSkill() {
+    if (!selectedSoul) return;
+    const registry_path = addSkillSelection;
+    if (!registry_path) {
+      notifyError("Pick a skill from the registry");
+      return;
+    }
+    const targetName = addSkillTargetName.trim();
+    await runAction("soul-skill-add", async () => {
+      const response = await api<SoulSkill[]>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/skills`, {
+        method: "POST",
+        body: JSON.stringify({
+          registry_path,
+          name: targetName || null,
+          mode: addSkillMode,
+        }),
+      });
+      setSouls((current) => current.map((soul) => (
+        soul.soul_id === selectedSoul.soul_id ? { ...soul, skills: response } : soul
+      )));
+      setAddSkillSelection("");
+      setAddSkillTargetName("");
+      setAddSkillMode("symlink");
+    }).catch((cause) => {
+      notifyError(cause);
+    });
+  }
+
+  async function deleteSoulSkill(name: string) {
+    if (!selectedSoul) return;
+    const skill = selectedSoul.skills.find((entry) => entry.name === name);
+    const isLink = !!skill?.link_target;
+    const message = isLink
+      ? `Remove the soft link "${name}" from this soul? The global registry source will be untouched.`
+      : `Permanently delete the soul-specific skill "${name}"? Its workspace files will be removed.`;
+    if (!window.confirm(message)) {
+      return;
+    }
+    await runAction("soul-skill-delete", async () => {
+      await api<void>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/skills/${encodeURIComponent(name)}`, {
+        method: "DELETE",
+      });
+      const response = await api<SoulSkill[]>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/skills`);
+      setSouls((current) => current.map((soul) => (
+        soul.soul_id === selectedSoul.soul_id ? { ...soul, skills: response } : soul
+      )));
+    }).catch((cause) => {
+      notifyError(cause);
+    });
+  }
+
   const runningCount = souls.filter((soul) => soul.running).length;
   const chatHistory = [...(sessionDetail?.messages ?? []), ...finalizedMessages] as Array<Record<string, unknown>>;
   const hasStreamingTurn = !!chatReasoning || !!chatContent;
@@ -1402,6 +1512,7 @@ export default function App() {
                     await refreshSouls(selectedSoulId, true);
                     await refreshAppLinks();
                     await refreshPromptLinkDirs();
+                    await refreshSkillRegistry();
                   } catch (cause) {
                     notifyError(cause);
                   }
@@ -1443,6 +1554,7 @@ export default function App() {
                 setFinalizedMessages([]);
                 setSoulError("");
                 setCreateSoulPromptLinkDir("");
+                setCreateSoulPromptLinkMode("symlink");
                 setDraft({
                   workspace: "",
                   model: "",
@@ -1513,6 +1625,63 @@ export default function App() {
               )) : <p className="muted">No prompt source directories configured.</p>}
             </div>
           </div>
+
+          <div className="create-box">
+            <div className="panel-head">
+              <h3>Skill registry</h3>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => setIsEditingSkillRegistry((current) => !current)}
+                disabled={!!pending}
+              >
+                {isEditingSkillRegistry ? "Done" : "Edit"}
+              </button>
+            </div>
+            {isEditingSkillRegistry ? (
+              <div className="app-links-editor">
+                <div className="app-links-editor-row">
+                  <input
+                    value={newSkillRegistryPath}
+                    onChange={(event) => setNewSkillRegistryPath(event.target.value)}
+                    placeholder="~/skills/my-skill"
+                    disabled={!!pending}
+                  />
+                  <button type="button" onClick={() => void addSkillRegistryEntry()} disabled={!!pending}>
+                    Add
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            <div className="prompt-link-dir-list">
+              {skillRegistry.length ? skillRegistry.map((item) => (
+                <article key={item.path} className="prompt-link-dir-card">
+                  <div className="prompt-link-dir-head">
+                    <code>{item.path}</code>
+                    {isEditingSkillRegistry ? (
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => void deleteSkillRegistryEntry(item.path)}
+                        disabled={!!pending}
+                      >
+                        Remove
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="prompt-link-file-pills">
+                    <span className={`pill ${item.exists ? "live" : "idle"}`}>
+                      {item.exists ? "SKILL.md present" : "missing"}
+                    </span>
+                    {item.name ? <span className="pill live">{item.name}</span> : null}
+                  </div>
+                  {item.description ? (
+                    <p className="muted skill-registry-desc">{item.description}</p>
+                  ) : null}
+                </article>
+              )) : <p className="muted">No skills registered.</p>}
+            </div>
+          </div>
         </section>
 
         <section className="panel sessions-panel">
@@ -1565,6 +1734,33 @@ export default function App() {
                   ))}
                 </select>
               </label>
+              <fieldset className="prompt-link-mode" disabled={!createSoulPromptLinkDir}>
+                <legend>Prompt source mode</legend>
+                <label className="prompt-link-mode-option">
+                  <input
+                    type="radio"
+                    name="prompt-link-mode"
+                    value="symlink"
+                    checked={createSoulPromptLinkMode === "symlink"}
+                    onChange={() => setCreateSoulPromptLinkMode("symlink")}
+                  />
+                  <span>
+                    <strong>Soft link</strong> &mdash; soul tracks the source directory live
+                  </span>
+                </label>
+                <label className="prompt-link-mode-option">
+                  <input
+                    type="radio"
+                    name="prompt-link-mode"
+                    value="copy"
+                    checked={createSoulPromptLinkMode === "copy"}
+                    onChange={() => setCreateSoulPromptLinkMode("copy")}
+                  />
+                  <span>
+                    <strong>Copy</strong> &mdash; soul gets its own independent copy
+                  </span>
+                </label>
+              </fieldset>
               <div className="field-grid">
                 <label>
                   <span>Workspace override</span>
@@ -1843,6 +2039,9 @@ export default function App() {
                               <details key={skill.path} className="skill-entry-details">
                                 <summary className="skill-entry-summary">
                                   <strong>{skill.name}</strong>
+                                  <span className={`pill ${skill.link_target ? "live" : "idle"}`}>
+                                    {skill.link_target ? "soft link" : "copy"}
+                                  </span>
                                   <button
                                     type="button"
                                     className="ghost skill-path-button"
@@ -1856,7 +2055,26 @@ export default function App() {
                                   >
                                     <code>{skill.path}</code>
                                   </button>
+                                  <button
+                                    type="button"
+                                    className="ghost skill-delete-button"
+                                    onClick={(event) => {
+                                      event.preventDefault();
+                                      void deleteSoulSkill(skill.name);
+                                    }}
+                                    disabled={!!pending}
+                                  >
+                                    Delete
+                                  </button>
                                 </summary>
+                                {skill.description ? (
+                                  <p className="muted skill-entry-desc">{skill.description}</p>
+                                ) : null}
+                                {skill.link_target ? (
+                                  <p className="muted skill-entry-target">
+                                    soft link → <code>{skill.link_target}</code>
+                                  </p>
+                                ) : null}
                                 <div className="skill-content markdown-content">
                                   <ReactMarkdown
                                     remarkPlugins={[remarkGfm, remarkMath]}
@@ -1871,6 +2089,59 @@ export default function App() {
                         ) : (
                           <strong>none</strong>
                         )}
+                        <div className="skill-add-form">
+                          <select
+                            value={addSkillSelection}
+                            onChange={(event) => setAddSkillSelection(event.target.value)}
+                            disabled={!skillRegistry.length || !!pending}
+                          >
+                            <option value="">
+                              {skillRegistry.length ? "Add from registry…" : "No registry entries"}
+                            </option>
+                            {skillRegistry.map((entry) => (
+                              <option key={entry.path} value={entry.path} disabled={!entry.exists}>
+                                {entry.name || entry.path}
+                                {entry.exists ? "" : " (missing)"}
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            value={addSkillTargetName}
+                            onChange={(event) => setAddSkillTargetName(event.target.value)}
+                            placeholder="rename (optional)"
+                            disabled={!addSkillSelection || !!pending}
+                          />
+                          <fieldset className="prompt-link-mode" disabled={!addSkillSelection || !!pending}>
+                            <legend>Mode</legend>
+                            <label className="prompt-link-mode-option">
+                              <input
+                                type="radio"
+                                name="add-skill-mode"
+                                value="symlink"
+                                checked={addSkillMode === "symlink"}
+                                onChange={() => setAddSkillMode("symlink")}
+                              />
+                              <span><strong>Soft link</strong> &mdash; track the registry source live</span>
+                            </label>
+                            <label className="prompt-link-mode-option">
+                              <input
+                                type="radio"
+                                name="add-skill-mode"
+                                value="copy"
+                                checked={addSkillMode === "copy"}
+                                onChange={() => setAddSkillMode("copy")}
+                              />
+                              <span><strong>Copy</strong> &mdash; soul-specific writable copy</span>
+                            </label>
+                          </fieldset>
+                          <button
+                            type="button"
+                            onClick={() => void addSoulSkill()}
+                            disabled={!addSkillSelection || !!pending}
+                          >
+                            Add skill
+                          </button>
+                        </div>
                       </article>
                       <article className="override-card">
                         <span>Model override</span>

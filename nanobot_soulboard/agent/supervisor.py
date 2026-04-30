@@ -1,11 +1,12 @@
 """Soulboard runtime supervision and per-soul config assembly."""
 
 import asyncio
+import shutil
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 
 from nanobot.agent.tools.cron import CronTool
 from nanobot.bus.events import InboundMessage
@@ -268,15 +269,96 @@ class SoulSupervisor:
         save_soulboard_config(self.soulboard_config, self.config_path)
         return list(self.soulboard_config.prompt_link_dirs)
 
+    def list_skill_registry(self) -> list[str]:
+        """Return the configured global skill registry paths."""
+        return list(self.soulboard_config.skill_registry)
+
+    def update_skill_registry(self, items: list[str]) -> list[str]:
+        """Replace the configured global skill registry paths."""
+        self.soulboard_config = self.soulboard_config.model_copy(update={"skill_registry": items})
+        save_soulboard_config(self.soulboard_config, self.config_path)
+        return list(self.soulboard_config.skill_registry)
+
+    def resolve_skill_registry_entry(self, raw_path: str) -> Path:
+        """Resolve and validate one configured registry entry.
+
+        Raises ValueError if the path is not in the registry, missing on disk,
+        or does not contain a SKILL.md.
+        """
+        registered = set(self.soulboard_config.skill_registry)
+        if raw_path not in registered:
+            raise ValueError(f"Unknown skill registry entry: {raw_path}")
+        skill_dir = Path(raw_path).expanduser()
+        if not skill_dir.is_dir():
+            raise ValueError(f"Skill registry entry is not a directory: {raw_path}")
+        if not (skill_dir / "SKILL.md").is_file():
+            raise ValueError(f"Skill registry entry has no SKILL.md: {raw_path}")
+        return skill_dir
+
+    def add_soul_skill_from_registry(
+        self,
+        soul_id: str,
+        registry_path: str,
+        target_name: str | None = None,
+        mode: Literal["symlink", "copy"] = "symlink",
+    ) -> Path:
+        """Materialize a registry skill into a soul's workspace skills/ dir.
+
+        Returns the resulting skill directory path inside the soul workspace.
+        """
+        if mode not in ("symlink", "copy"):
+            raise ValueError(f"Unknown skill add mode: {mode}")
+        spec = self.get_spec(soul_id)
+        skill_dir = self.resolve_skill_registry_entry(registry_path)
+        name = (target_name or skill_dir.name).strip()
+        if not name or "/" in name or name in (".", ".."):
+            raise ValueError(f"Invalid target skill name: {name!r}")
+        soul_skills_root = spec.workspace / "skills"
+        soul_skills_root.mkdir(parents=True, exist_ok=True)
+        target_path = soul_skills_root / name
+        if target_path.exists() or target_path.is_symlink():
+            raise ValueError(f"Skill already exists in soul workspace: {name}")
+        if mode == "symlink":
+            target_path.symlink_to(skill_dir)
+        else:
+            shutil.copytree(skill_dir, target_path, symlinks=False)
+        return target_path
+
+    def delete_soul_skill(self, soul_id: str, name: str) -> None:
+        """Remove a skill from a soul's workspace skills/ directory.
+
+        For symlinks, only the link is removed (registry source is untouched).
+        For directories, the entire skill directory is removed.
+        """
+        if not name or "/" in name or name in (".", ".."):
+            raise ValueError(f"Invalid skill name: {name!r}")
+        spec = self.get_spec(soul_id)
+        target_path = spec.workspace / "skills" / name
+        if target_path.is_symlink():
+            target_path.unlink()
+            return
+        if not target_path.exists():
+            raise KeyError(f"Skill not found in soul workspace: {name}")
+        if not target_path.is_dir():
+            raise ValueError(f"Skill path is not a directory or symlink: {name}")
+        shutil.rmtree(target_path)
+
     def _resolve_soul_workspace(self, soul_id: str, overrides: SoulOverrides) -> Path:
         if overrides.workspace:
             return Path(overrides.workspace).expanduser()
         return get_souls_root(self.nano_root) / soul_id
 
-    def _link_prompt_files(self, spec: SoulSpec, source_dir: str) -> None:
+    def _link_prompt_files(
+        self,
+        spec: SoulSpec,
+        source_dir: str,
+        mode: Literal["symlink", "copy"] = "symlink",
+    ) -> None:
         configured = set(self.soulboard_config.prompt_link_dirs)
         if source_dir not in configured:
             raise ValueError(f"Unknown prompt link directory: {source_dir}")
+        if mode not in ("symlink", "copy"):
+            raise ValueError(f"Unknown prompt link mode: {mode}")
         source_root = Path(source_dir).expanduser()
         spec.workspace.mkdir(parents=True, exist_ok=True)
         for filename in SOUL_PROMPT_FILES:
@@ -286,7 +368,10 @@ class SoulSupervisor:
             target_path = spec.workspace / filename
             if target_path.exists() or target_path.is_symlink():
                 raise ValueError(f"Cannot link prompt file because it already exists: {target_path}")
-            target_path.symlink_to(source_path)
+            if mode == "symlink":
+                target_path.symlink_to(source_path)
+            else:
+                shutil.copyfile(source_path, target_path)
 
     def read_soul_prompt_files(self, soul_id: str) -> dict[str, str | None]:
         """Read the soul markdown prompt pack from its workspace."""
@@ -325,6 +410,7 @@ class SoulSupervisor:
         soul_id: str,
         overrides: SoulOverrides | None = None,
         prompt_link_dir: str | None = None,
+        prompt_link_mode: Literal["symlink", "copy"] = "symlink",
     ) -> SoulSpec:
         """Create and persist a new soul definition."""
         validate_soul_id(soul_id)
@@ -338,7 +424,7 @@ class SoulSupervisor:
             overrides=resolved_overrides,
         )
         if prompt_link_dir:
-            self._link_prompt_files(spec, prompt_link_dir)
+            self._link_prompt_files(spec, prompt_link_dir, mode=prompt_link_mode)
         self.soulboard_config.souls[soul_id] = resolved_overrides
         save_soulboard_config(self.soulboard_config, self.config_path)
         return spec

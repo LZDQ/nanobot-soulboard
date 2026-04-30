@@ -1,6 +1,6 @@
 """API and websocket schemas for nanobot-soulboard."""
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -27,8 +27,17 @@ class CreateSoulRequest(BaseModel):
     prompt_link_dir: str | None = Field(
         default=None,
         description=(
-            "Optional configured source directory whose markdown prompt files should be soft-linked into "
-            "the new soul workspace."
+            "Optional configured source directory whose markdown prompt files should be materialized into "
+            "the new soul workspace. Materialization mode is controlled by prompt_link_mode."
+        ),
+    )
+    prompt_link_mode: Literal["symlink", "copy"] = Field(
+        default="symlink",
+        description=(
+            "How to materialize prompt files from prompt_link_dir into the new soul workspace. "
+            "'symlink' creates soft links so edits in the source directory are reflected live (default, "
+            "preserves prior behavior). 'copy' copies the files so the soul workspace owns its own "
+            "independent copy that can drift from the source."
         ),
     )
 
@@ -153,6 +162,58 @@ class SoulSkillResponse(BaseModel):
     name: str
     path: str
     content: str
+    description: str | None = None
+    link_target: str | None = Field(
+        default=None,
+        description=(
+            "Resolved symlink target if this skill directory is a soft link, otherwise None for a "
+            "soul-specific writable copy."
+        ),
+    )
+
+
+class SkillRegistryEntryResponse(BaseModel):
+    """One global skill registry entry (path + parsed metadata)."""
+
+    path: str
+    exists: bool
+    name: str | None = None
+    description: str | None = None
+
+
+class SkillRegistryResponse(BaseModel):
+    """Configured global skill registry."""
+
+    items: list[SkillRegistryEntryResponse]
+
+
+class UpdateSkillRegistryRequest(BaseModel):
+    """Replace the configured global skill registry list."""
+
+    items: list[str]
+
+
+class AddSoulSkillRequest(BaseModel):
+    """Request body for adding a skill from the global registry to a soul."""
+
+    registry_path: str = Field(
+        description="Skill registry entry path. Must already be configured in the global registry."
+    )
+    name: str | None = Field(
+        default=None,
+        description=(
+            "Optional override for the skill directory name inside the soul workspace. Defaults to the "
+            "registry entry's directory basename."
+        ),
+    )
+    mode: Literal["symlink", "copy"] = Field(
+        default="symlink",
+        description=(
+            "How to materialize the skill into the soul workspace. 'symlink' soft-links the directory so "
+            "the soul tracks the registry source live (filesystem is the source of truth). 'copy' creates "
+            "an independent writable copy."
+        ),
+    )
 
 
 class SoulResponse(BaseModel):

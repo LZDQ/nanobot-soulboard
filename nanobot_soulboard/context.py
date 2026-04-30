@@ -4,7 +4,6 @@ import platform
 from pathlib import Path
 
 from nanobot.agent.context import ContextBuilder
-from nanobot.agent.skills import SkillsLoader
 
 
 class SoulboardContextBuilder(ContextBuilder):
@@ -21,11 +20,6 @@ class SoulboardContextBuilder(ContextBuilder):
     ):
         super().__init__(workspace, timezone=timezone, disabled_skills=disabled_skills)
         self.soul_id = soul_id
-        self.workspace_skills = SkillsLoader(
-            workspace,
-            builtin_skills_dir=workspace / ".soulboard-no-builtin-skills",
-            disabled_skills=set(disabled_skills) if disabled_skills else None,
-        )
 
     def build_system_prompt(
         self,
@@ -39,9 +33,9 @@ class SoulboardContextBuilder(ContextBuilder):
             base_prompt = system_path.read_text(encoding="utf-8")
         else:
             base_prompt = self._build_default_system_prompt()
-        workspace_skills_prompt = self._build_workspace_skills_prompt()
-        if workspace_skills_prompt:
-            return f"{base_prompt}\n\n---\n\n{workspace_skills_prompt}"
+        skills_prompt = self._build_skills_prompt()
+        if skills_prompt:
+            return f"{base_prompt}\n\n---\n\n{skills_prompt}"
         return base_prompt
 
     def _build_default_system_prompt(self) -> str:
@@ -58,20 +52,20 @@ You are the active soul {self.soul_id!r} running inside nanobot-soulboard.
 - MCP servers are available as `mcp_*`. If the user asks you whether a MCP server is connected, you should reply "yes" if you see such tools.
 """
 
-    def _build_workspace_skills_prompt(self) -> str:
+    def _build_skills_prompt(self) -> str:
         parts: list[str] = []
 
-        always_skills = self.workspace_skills.get_always_skills()
+        always_skills = self.skills.get_always_skills()
         if always_skills:
-            always_content = self.workspace_skills.load_skills_for_context(always_skills)
+            always_content = self.skills.load_skills_for_context(always_skills)
             if always_content:
                 parts.append(f"# Active Skills\n\n{always_content}")
 
-        skills_summary = self.workspace_skills.build_skills_summary()
+        skills_summary = self.skills.build_skills_summary(exclude=set(always_skills))
         if skills_summary:
             parts.append(
                 "# Skills\n\n"
-                "The following workspace skills extend your capabilities. To use a skill, read its SKILL.md file "
+                "The following skills extend your capabilities. To use a skill, read its SKILL.md file "
                 "using the read_file tool.\n\n"
                 f"{skills_summary}"
             )

@@ -17,6 +17,7 @@ from nanobot_soulboard.chat_streams import ChatStreamManager
 from nanobot_soulboard.config import load_soulboard_config
 from nanobot_soulboard.agent import SOUL_PROMPT_FILES, SoulAgentLoop, SoulSpec, SoulSupervisor
 from nanobot_soulboard.schemas import (
+    AddSoulSkillRequest,
     AppLinksResponse,
     ChatRequest,
     CreateMCPServerRequest,
@@ -33,6 +34,8 @@ from nanobot_soulboard.schemas import (
     PromptLinkDirsResponse,
     SessionDetailResponse,
     SessionSummaryResponse,
+    SkillRegistryEntryResponse,
+    SkillRegistryResponse,
     SoulPromptFileResponse,
     SoulPromptFilesResponse,
     SoulResponse,
@@ -41,9 +44,11 @@ from nanobot_soulboard.schemas import (
     UpdateAppLinksRequest,
     UpdateMCPServerRequest,
     UpdatePromptLinkDirsRequest,
+    UpdateSkillRegistryRequest,
     UpdateSoulPromptFilesRequest,
     UpdateSoulRequest,
 )
+from nanobot_soulboard.skills import skill_summary
 
 
 def _build_session_metadata(key: str) -> dict[str, str]:
@@ -139,13 +144,47 @@ def _list_soul_skills(spec: SoulSpec) -> list[SoulSkillResponse]:
 
     skills: list[SoulSkillResponse] = []
     for skill_dir in sorted(skills_root.iterdir(), key=lambda path: path.name):
-        if not skill_dir.is_dir():
+        if not (skill_dir.is_dir() or skill_dir.is_symlink()):
             continue
         skill_path = skill_dir / "SKILL.md"
         if not skill_path.exists():
             continue
-        skills.append(SoulSkillResponse(name=skill_dir.name, path=str(skill_path), content=skill_path.read_text(encoding="utf-8")))
+        link_target: str | None = None
+        if skill_dir.is_symlink():
+            try:
+                link_target = str(Path(skill_dir).resolve())
+            except OSError:
+                link_target = str(skill_dir.readlink())
+        _, description = skill_summary(skill_dir)
+        skills.append(SoulSkillResponse(
+            name=skill_dir.name,
+            path=str(skill_path),
+            content=skill_path.read_text(encoding="utf-8"),
+            description=description,
+            link_target=link_target,
+        ))
     return skills
+
+
+def _build_skill_registry_response(supervisor: SoulSupervisor) -> SkillRegistryResponse:
+    items: list[SkillRegistryEntryResponse] = []
+    for raw_path in supervisor.list_skill_registry():
+        skill_dir = Path(raw_path).expanduser()
+        skill_md = skill_dir / "SKILL.md"
+        exists = skill_dir.is_dir() and skill_md.is_file()
+        name: str | None
+        description: str | None
+        if exists:
+            name, description = skill_summary(skill_dir)
+        else:
+            name, description = None, None
+        items.append(SkillRegistryEntryResponse(
+            path=raw_path,
+            exists=exists,
+            name=name,
+            description=description,
+        ))
+    return SkillRegistryResponse(items=items)
 
 
 def _get_state(request: Request) -> AppState:
@@ -349,6 +388,38 @@ def create_app(
         return _build_prompt_link_dirs_response(supervisor)
 
     @app.get(
+        "/api/skill-registry",
+        response_model=SkillRegistryResponse,
+        summary="List Global Skill Registry",
+        description=(
+            "Return the configured global skill registry: a list of skill directory paths plus parsed "
+            "SKILL.md frontmatter (name, description) and on-disk existence flag."
+        ),
+    )
+    def get_skill_registry(request: Request) -> SkillRegistryResponse:
+        supervisor = _get_supervisor(request)
+        return _build_skill_registry_response(supervisor)
+
+    @app.patch(
+        "/api/skill-registry",
+        response_model=SkillRegistryResponse,
+        responses={400: {"model": ErrorResponse}},
+        summary="Update Global Skill Registry",
+        description=(
+            "Replace the configured global skill registry list. Each entry must point to a skill directory "
+            "containing a SKILL.md file. Skill content is not edited through this API; the registry is "
+            "list-management only."
+        ),
+    )
+    def update_skill_registry(request: Request, body: UpdateSkillRegistryRequest) -> SkillRegistryResponse:
+        supervisor = _get_supervisor(request)
+        try:
+            supervisor.update_skill_registry(body.items)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _build_skill_registry_response(supervisor)
+
+    @app.get(
         "/api/souls",
         response_model=list[SoulResponse],
         summary="List Souls",
@@ -458,7 +529,12 @@ def create_app(
     async def create_soul(request: Request, body: CreateSoulRequest) -> SoulResponse:
         supervisor = _get_supervisor(request)
         try:
-            spec = supervisor.create_soul(body.soul_id, body.overrides, prompt_link_dir=body.prompt_link_dir)
+            spec = supervisor.create_soul(
+                body.soul_id,
+                body.overrides,
+                prompt_link_dir=body.prompt_link_dir,
+                prompt_link_mode=body.prompt_link_mode,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         _sync_soul_workspace(spec)
@@ -542,6 +618,71 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _build_prompt_files_response(files)
+
+    @app.get(
+        "/api/souls/{soul_id}/skills",
+        response_model=list[SoulSkillResponse],
+        responses={404: {"model": ErrorResponse}},
+        summary="List Soul Skills",
+        description=(
+            "List skill directories present in this soul's workspace skills/ folder. Each entry includes "
+            "parsed SKILL.md basics (name, description) and a link_target field that is set when the entry "
+            "is a soft link into the global skill registry; otherwise it is a soul-specific writable copy."
+        ),
+    )
+    def get_soul_skills(request: Request, soul_id: str) -> list[SoulSkillResponse]:
+        supervisor = _get_supervisor(request)
+        try:
+            spec = supervisor.get_spec(soul_id)
+        except KeyError as exc:
+            _raise_not_found(_error_detail(exc))
+        return _list_soul_skills(spec)
+
+    @app.post(
+        "/api/souls/{soul_id}/skills",
+        response_model=list[SoulSkillResponse],
+        responses={404: {"model": ErrorResponse}, 400: {"model": ErrorResponse}},
+        summary="Add Soul Skill From Registry",
+        description=(
+            "Materialize one global skill registry entry into this soul's workspace skills/ folder. "
+            "Mode 'symlink' soft-links the registry directory; mode 'copy' creates an independent copy."
+        ),
+    )
+    def add_soul_skill(request: Request, soul_id: str, body: AddSoulSkillRequest) -> list[SoulSkillResponse]:
+        supervisor = _get_supervisor(request)
+        try:
+            supervisor.add_soul_skill_from_registry(
+                soul_id,
+                registry_path=body.registry_path,
+                target_name=body.name,
+                mode=body.mode,
+            )
+            spec = supervisor.get_spec(soul_id)
+        except KeyError as exc:
+            _raise_not_found(_error_detail(exc))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _list_soul_skills(spec)
+
+    @app.delete(
+        "/api/souls/{soul_id}/skills/{name}",
+        status_code=204,
+        responses={404: {"model": ErrorResponse}, 400: {"model": ErrorResponse}},
+        summary="Delete Soul Skill",
+        description=(
+            "Remove a skill from this soul's workspace skills/ folder. For symlinks, only the link is "
+            "removed (the registry source is untouched). For directories, the entire skill directory is "
+            "deleted from the soul workspace."
+        ),
+    )
+    def delete_soul_skill(request: Request, soul_id: str, name: str) -> None:
+        supervisor = _get_supervisor(request)
+        try:
+            supervisor.delete_soul_skill(soul_id, name)
+        except KeyError as exc:
+            _raise_not_found(_error_detail(exc))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.patch(
         "/api/souls/{soul_id}",

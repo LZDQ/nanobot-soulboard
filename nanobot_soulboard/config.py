@@ -54,6 +54,13 @@ class SoulboardConfig(BaseModel):
 
     app_links: list[str] = Field(default_factory=list)
     prompt_link_dirs: list[str] = Field(default_factory=list)
+    skill_registry: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Global registry of skill directory paths (each containing a SKILL.md). Souls can pick from "
+            "this list when adding a skill, materialized as either a soft link or a copy."
+        ),
+    )
     souls: dict[str, SoulOverrides] = Field(default_factory=dict)
 
     @field_validator("app_links")
@@ -65,6 +72,11 @@ class SoulboardConfig(BaseModel):
     @classmethod
     def validate_prompt_link_dirs(cls, value: list[str]) -> list[str]:
         return _normalize_prompt_link_dirs(value)
+
+    @field_validator("skill_registry")
+    @classmethod
+    def validate_skill_registry(cls, value: list[str]) -> list[str]:
+        return _normalize_skill_registry(value)
 
 
 def _normalize_app_links(items: list[str]) -> list[str]:
@@ -90,6 +102,21 @@ def _normalize_prompt_link_dirs(items: list[str]) -> list[str]:
     seen: set[str] = set()
     for raw in items:
         item = raw.strip()
+        if not item:
+            continue
+        if item in seen:
+            continue
+        normalized.append(item)
+        seen.add(item)
+    return normalized
+
+
+def _normalize_skill_registry(items: list[str]) -> list[str]:
+    """Normalize configured global skill registry paths (skill directory paths)."""
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in items:
+        item = raw.strip().rstrip("/")
         if not item:
             continue
         if item in seen:
@@ -142,6 +169,7 @@ def save_soulboard_config(config: SoulboardConfig, path: Path) -> None:
         validate_soul_id(soul_id)
     config.app_links = _normalize_app_links(config.app_links)
     config.prompt_link_dirs = _normalize_prompt_link_dirs(config.prompt_link_dirs)
+    config.skill_registry = _normalize_skill_registry(config.skill_registry)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = config.model_dump(mode="json", exclude_none=True, by_alias=True)
     with open(path, "w", encoding="utf-8") as f:
