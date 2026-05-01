@@ -654,7 +654,7 @@ def create_app(
             "Works whether the soul is running or stopped. Each name must exist in the global registry."
         ),
     )
-    def add_soul_cron_jobs_from_registry(
+    async def add_soul_cron_jobs_from_registry(
         request: Request, soul_id: str, body: AddSoulCronJobsFromRegistryRequest
     ) -> list[CronJobResponse]:
         supervisor = _get_supervisor(request)
@@ -673,7 +673,7 @@ def create_app(
         summary="Delete Soul Cron Job",
         description="Remove a cron job from a soul. Works whether the soul is running or stopped.",
     )
-    def delete_soul_cron_job(request: Request, soul_id: str, job_id: str) -> None:
+    async def delete_soul_cron_job(request: Request, soul_id: str, job_id: str) -> None:
         supervisor = _get_supervisor(request)
         try:
             status = supervisor.remove_cron_job(soul_id, job_id)
@@ -691,7 +691,7 @@ def create_app(
         summary="Update Soul Cron Job",
         description="Update mutable fields of a soul cron job. Works whether the soul is running or stopped.",
     )
-    def update_soul_cron_job(
+    async def update_soul_cron_job(
         request: Request, soul_id: str, job_id: str, body: UpdateSoulCronJobRequest
     ) -> CronJobResponse:
         supervisor = _get_supervisor(request)
