@@ -2214,7 +2214,7 @@ export default function App() {
                             );
                           }}
                         />
-                        <span>{entry.label ?? entry.name}{entry.cron_expr ? ` — ${entry.cron_expr}` : entry.every_seconds ? ` — every ${entry.every_seconds}s` : ""}</span>
+                        <span><code>{entry.name}</code>{entry.label ? ` — ${entry.label}` : ""}{entry.cron_expr ? ` (${entry.cron_expr})` : entry.every_seconds ? ` (every ${entry.every_seconds}s)` : ""}</span>
                       </label>
                     ))}
                   </div>
@@ -2413,10 +2413,23 @@ export default function App() {
                             {selectedSoul.skills.map((skill) => (
                               <details key={skill.path} className="skill-entry-details">
                                 <summary className="skill-entry-summary">
-                                  <strong>{skill.name}</strong>
-                                  <span className={`pill ${skill.link_target ? "live" : "idle"}`}>
-                                    {skill.link_target ? "soft link" : "copy"}
-                                  </span>
+                                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                                    <strong>{skill.name}</strong>
+                                    <span className={`pill ${skill.link_target ? "live" : "idle"}`}>
+                                      {skill.link_target ? "soft link" : "copy"}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      className="ghost skill-delete-button"
+                                      onClick={(event) => {
+                                        event.preventDefault();
+                                        void deleteSoulSkill(skill.name);
+                                      }}
+                                      disabled={!!pending}
+                                    >
+                                      Delete
+                                    </button>
+                                  </div>
                                   <button
                                     type="button"
                                     className="ghost skill-path-button"
@@ -2429,17 +2442,6 @@ export default function App() {
                                     }}
                                   >
                                     <code>{skill.path}</code>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="ghost skill-delete-button"
-                                    onClick={(event) => {
-                                      event.preventDefault();
-                                      void deleteSoulSkill(skill.name);
-                                    }}
-                                    disabled={!!pending}
-                                  >
-                                    Delete
                                   </button>
                                 </summary>
                                 {skill.description ? (
@@ -2480,13 +2482,15 @@ export default function App() {
                               </option>
                             ))}
                           </select>
-                          <input
-                            value={addSkillTargetName}
-                            onChange={(event) => setAddSkillTargetName(event.target.value)}
-                            placeholder="rename (optional)"
-                            disabled={!addSkillSelection || !!pending}
-                          />
-                          <fieldset className="prompt-link-mode" disabled={!addSkillSelection || !!pending}>
+                          {addSkillSelection ? (
+                            <input
+                              value={addSkillTargetName}
+                              onChange={(event) => setAddSkillTargetName(event.target.value)}
+                              placeholder="rename (optional)"
+                              disabled={!!pending}
+                            />
+                          ) : null}
+                          {addSkillSelection ? (<fieldset className="prompt-link-mode" disabled={!!pending}>
                             <legend>Mode</legend>
                             <label className="prompt-link-mode-option">
                               <input
@@ -2508,7 +2512,7 @@ export default function App() {
                               />
                               <span><strong>Copy</strong> &mdash; soul-specific writable copy</span>
                             </label>
-                          </fieldset>
+                          </fieldset>) : null}
                           <button
                             type="button"
                             onClick={() => void addSoulSkill()}
@@ -2711,12 +2715,32 @@ export default function App() {
                                 <strong>{job.name}</strong>
                                 <span>{formatCronSchedule(job.schedule)}</span>
                               </div>
-                              <code>{job.session_key || "no session"}</code>
-                              {job.recurring_session_key_format ? (
-                                <div className="prompt-link-file-pills">
-                                  <span className="pill live">session fmt: {job.recurring_session_key_format}</span>
+                              <div className="cron-job-meta-row">
+                                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                                  <code>{job.session_key || "no session"}</code>
+                                  {job.recurring_session_key_format ? (
+                                    <span className="pill live">session fmt: {job.recurring_session_key_format}</span>
+                                  ) : null}
                                 </div>
-                              ) : null}
+                                <div style={{ display: "flex", gap: "0.5rem" }}>
+                                  <button
+                                    type="button"
+                                    className="ghost"
+                                    onClick={() => startEditCronJob(job)}
+                                    disabled={!!pending}
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="ghost"
+                                    onClick={() => void deleteSoulCronJob(job.id)}
+                                    disabled={!!pending}
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              </div>
                               <div className="cron-job-meta-row">
                                 <span>
                                   {job.enabled ? "enabled" : "disabled"}
@@ -2725,24 +2749,6 @@ export default function App() {
                                 <span>next {formatTimestampMs(job.state.next_run_at_ms)}</span>
                               </div>
                               <p>{job.message}</p>
-                              <div className="app-links-editor-row">
-                                <button
-                                  type="button"
-                                  className="ghost"
-                                  onClick={() => startEditCronJob(job)}
-                                  disabled={!!pending}
-                                >
-                                  Edit
-                                </button>
-                                <button
-                                  type="button"
-                                  className="ghost"
-                                  onClick={() => void deleteSoulCronJob(job.id)}
-                                  disabled={!!pending}
-                                >
-                                  Remove
-                                </button>
-                              </div>
                             </>
                           )}
                         </article>
