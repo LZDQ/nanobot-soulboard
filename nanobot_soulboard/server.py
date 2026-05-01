@@ -11,7 +11,7 @@ from loguru import logger
 
 from nanobot.config.loader import load_config
 from nanobot.cli.commands import _make_provider as make_provider
-from nanobot.cron.types import CronJob
+from nanobot.cron.types import CronJob, CronSchedule
 from nanobot_soulboard.cron import SoulCronPayload
 from nanobot.session.manager import SessionManager
 from nanobot_soulboard.chat_streams import ChatStreamManager
@@ -49,6 +49,7 @@ from nanobot_soulboard.schemas import (
     UpdateMCPServerRequest,
     UpdatePromptLinkDirsRequest,
     UpdateSkillRegistryRequest,
+    UpdateSoulCronJobRequest,
     UpdateSoulPromptFilesRequest,
     UpdateSoulRequest,
 )
@@ -664,6 +665,65 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return [_to_cron_job_response(job, job.payload.session_key) for job in added]
+
+    @app.delete(
+        "/api/souls/{soul_id}/cron-jobs/{job_id}",
+        status_code=204,
+        responses={404: {"model": ErrorResponse}, 403: {"model": ErrorResponse}},
+        summary="Delete Soul Cron Job",
+        description="Remove a cron job from a soul. Works whether the soul is running or stopped.",
+    )
+    def delete_soul_cron_job(request: Request, soul_id: str, job_id: str) -> None:
+        supervisor = _get_supervisor(request)
+        try:
+            status = supervisor.remove_cron_job(soul_id, job_id)
+        except KeyError as exc:
+            _raise_not_found(_error_detail(exc))
+        if status == "not_found":
+            raise HTTPException(status_code=404, detail=f"Cron job {job_id!r} not found")
+        if status == "protected":
+            raise HTTPException(status_code=403, detail=f"Cron job {job_id!r} is a protected system job")
+
+    @app.patch(
+        "/api/souls/{soul_id}/cron-jobs/{job_id}",
+        response_model=CronJobResponse,
+        responses={404: {"model": ErrorResponse}, 403: {"model": ErrorResponse}},
+        summary="Update Soul Cron Job",
+        description="Update mutable fields of a soul cron job. Works whether the soul is running or stopped.",
+    )
+    def update_soul_cron_job(
+        request: Request, soul_id: str, job_id: str, body: UpdateSoulCronJobRequest
+    ) -> CronJobResponse:
+        supervisor = _get_supervisor(request)
+        schedule = None
+        if body.schedule is not None:
+            schedule = CronSchedule(
+                kind=body.schedule.kind,
+                every_ms=body.schedule.every_ms,
+                expr=body.schedule.expr,
+                tz=body.schedule.tz,
+            )
+        channel = body.channel if "channel" in body.model_fields_set else ...
+        try:
+            result = supervisor.update_cron_job(
+                soul_id,
+                job_id,
+                name=body.name,
+                enabled=body.enabled,
+                message=body.message,
+                deliver=body.deliver,
+                channel=channel,
+                delete_after_run=body.delete_after_run,
+                schedule=schedule,
+            )
+        except KeyError as exc:
+            _raise_not_found(_error_detail(exc))
+        if result == "not_found":
+            raise HTTPException(status_code=404, detail=f"Cron job {job_id!r} not found")
+        if result == "protected":
+            raise HTTPException(status_code=403, detail=f"Cron job {job_id!r} is a protected system job")
+        assert isinstance(result, CronJob)
+        return _to_cron_job_response(result, result.payload.session_key)
 
     @app.patch(
         "/api/souls/{soul_id}/prompt-files",

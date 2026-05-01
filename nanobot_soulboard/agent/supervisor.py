@@ -549,6 +549,50 @@ class SoulSupervisor:
         service = running.cron_service if running is not None else self._build_cron_service(spec)
         return service.list_jobs_with_session_keys(include_disabled=True)
 
+    def remove_cron_job(self, soul_id: str, job_id: str) -> Literal["removed", "protected", "not_found"]:
+        """Remove a soul cron job by ID. Works whether the soul is running or stopped."""
+        spec = self.get_spec(soul_id)
+        running = self._running_souls.get(soul_id)
+        cron_service = running.cron_service if running is not None else self._build_cron_service(spec)
+        return cron_service.remove_job(job_id)
+
+    def update_cron_job(
+        self,
+        soul_id: str,
+        job_id: str,
+        *,
+        name: str | None = None,
+        enabled: bool | None = None,
+        message: str | None = None,
+        deliver: bool | None = None,
+        channel=...,
+        delete_after_run: bool | None = None,
+        schedule: CronSchedule | None = None,
+    ) -> CronJob | Literal["not_found", "protected"]:
+        """Update mutable fields of a soul cron job. Works whether the soul is running or stopped."""
+        spec = self.get_spec(soul_id)
+        running = self._running_souls.get(soul_id)
+        cron_service = running.cron_service if running is not None else self._build_cron_service(spec)
+
+        result = cron_service.update_job(
+            job_id,
+            name=name,
+            schedule=schedule,
+            message=message,
+            deliver=deliver,
+            channel=channel,
+            delete_after_run=delete_after_run,
+        )
+        if isinstance(result, str):
+            return result
+
+        if enabled is not None:
+            cron_service.enable_job(job_id, enabled)
+            jobs = cron_service.list_jobs(include_disabled=True)
+            result = next((j for j in jobs if j.id == job_id), result)
+
+        return result
+
     def _build_running_soul(self, soul_id: str) -> RunningSoul:
         """Construct supervisor-owned runtime state without starting it."""
         if self.provider_factory is None:

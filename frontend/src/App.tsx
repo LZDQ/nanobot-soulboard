@@ -165,6 +165,19 @@ type CronJobRegistryEntryDraft = {
   recurring_session_key_format: string;
 };
 
+type CronJobEditDraft = {
+  name: string;
+  enabled: boolean;
+  message: string;
+  deliver: boolean;
+  channel: string;
+  delete_after_run: boolean;
+  schedule_kind: "every" | "cron";
+  every_seconds: string;
+  cron_expr: string;
+  tz: string;
+};
+
 type StreamResetMessage = {
   type: "reset";
   content: string | null;
@@ -733,6 +746,11 @@ export default function App() {
   const [createSoulPromptLinkDir, setCreateSoulPromptLinkDir] = useState("");
   const [createSoulPromptLinkMode, setCreateSoulPromptLinkMode] = useState<"symlink" | "copy">("symlink");
   const [showOnlySelectedSessionCronJobs, setShowOnlySelectedSessionCronJobs] = useState(true);
+  const [editingCronJobId, setEditingCronJobId] = useState<string | null>(null);
+  const [cronJobEditDraft, setCronJobEditDraft] = useState<CronJobEditDraft>({
+    name: "", enabled: true, message: "", deliver: false, channel: "",
+    delete_after_run: false, schedule_kind: "cron", every_seconds: "", cron_expr: "", tz: "",
+  });
   const [mcpMode, setMcpMode] = useState<"view" | "edit" | "create">("view");
   const [socketState, setSocketState] = useState<"closed" | "connecting" | "open">("closed");
   const socketRef = useRef<WebSocket | null>(null);
@@ -884,6 +902,67 @@ export default function App() {
         body: JSON.stringify({ names: [addCronJobRegistrySelection] }),
       });
       setAddCronJobRegistrySelection("");
+      await refreshCronJobs(selectedSoul.soul_id);
+    }).catch((cause) => {
+      notifyError(cause);
+    });
+  }
+
+  async function deleteSoulCronJob(jobId: string) {
+    if (!selectedSoul) return;
+    await runAction("cron-delete", async () => {
+      await api<void>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/cron-jobs/${encodeURIComponent(jobId)}`, {
+        method: "DELETE",
+      });
+      await refreshCronJobs(selectedSoul.soul_id);
+    }).catch((cause) => {
+      notifyError(cause);
+    });
+  }
+
+  function startEditCronJob(job: CronJob) {
+    setCronJobEditDraft({
+      name: job.name,
+      enabled: job.enabled,
+      message: job.message,
+      deliver: job.deliver,
+      channel: job.channel ?? "",
+      delete_after_run: job.delete_after_run,
+      schedule_kind: job.schedule.kind === "every" ? "every" : "cron",
+      every_seconds: job.schedule.every_ms ? String(job.schedule.every_ms / 1000) : "",
+      cron_expr: job.schedule.expr ?? "",
+      tz: job.schedule.tz ?? "",
+    });
+    setEditingCronJobId(job.id);
+  }
+
+  async function updateSoulCronJob(jobId: string) {
+    if (!selectedSoul) return;
+    if (cronJobEditDraft.schedule_kind === "every") {
+      const everySeconds = parseInt(cronJobEditDraft.every_seconds, 10);
+      if (isNaN(everySeconds) || everySeconds <= 0) {
+        notifyError("every_seconds must be a positive integer");
+        return;
+      }
+    }
+    await runAction("cron-update", async () => {
+      const schedule = cronJobEditDraft.schedule_kind === "every"
+        ? { kind: "every", every_ms: parseInt(cronJobEditDraft.every_seconds, 10) * 1000 }
+        : { kind: "cron", expr: cronJobEditDraft.cron_expr.trim(), tz: cronJobEditDraft.tz.trim() || null };
+      const body: Record<string, unknown> = {
+        name: cronJobEditDraft.name.trim() || null,
+        enabled: cronJobEditDraft.enabled,
+        message: cronJobEditDraft.message,
+        deliver: cronJobEditDraft.deliver,
+        channel: cronJobEditDraft.channel.trim() || null,
+        delete_after_run: cronJobEditDraft.delete_after_run,
+        schedule,
+      };
+      await api<CronJob>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/cron-jobs/${encodeURIComponent(jobId)}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+      setEditingCronJobId(null);
       await refreshCronJobs(selectedSoul.soul_id);
     }).catch((cause) => {
       notifyError(cause);
@@ -2478,24 +2557,164 @@ export default function App() {
                     <div className="session-list">
                       {visibleCronJobs.map((job) => (
                         <article key={job.id} className="session-card cron-job-card">
-                          <div className="cron-job-meta-row">
-                            <strong>{job.name}</strong>
-                            <span>{formatCronSchedule(job.schedule)}</span>
-                          </div>
-                          <code>{job.session_key || "no session"}</code>
-                          {job.recurring_session_key_format ? (
-                            <div className="prompt-link-file-pills">
-                              <span className="pill live">session fmt: {job.recurring_session_key_format}</span>
+                          {editingCronJobId === job.id ? (
+                            <div className="details-stack" style={{ gap: "0.5rem", marginTop: 0 }}>
+                              <label>
+                                <span>Name</span>
+                                <input
+                                  value={cronJobEditDraft.name}
+                                  onChange={(e) => setCronJobEditDraft((d) => ({ ...d, name: e.target.value }))}
+                                  disabled={!!pending}
+                                />
+                              </label>
+                              <label>
+                                <span>Schedule type</span>
+                                <select
+                                  value={cronJobEditDraft.schedule_kind}
+                                  onChange={(e) => setCronJobEditDraft((d) => ({ ...d, schedule_kind: e.target.value as "every" | "cron" }))}
+                                  disabled={!!pending}
+                                >
+                                  <option value="cron">cron expression</option>
+                                  <option value="every">every N seconds</option>
+                                </select>
+                              </label>
+                              {cronJobEditDraft.schedule_kind === "cron" ? (
+                                <>
+                                  <label>
+                                    <span>Cron expression</span>
+                                    <input
+                                      value={cronJobEditDraft.cron_expr}
+                                      onChange={(e) => setCronJobEditDraft((d) => ({ ...d, cron_expr: e.target.value }))}
+                                      placeholder="0 9 * * *"
+                                      disabled={!!pending}
+                                    />
+                                  </label>
+                                  <label>
+                                    <span>Timezone</span>
+                                    <input
+                                      value={cronJobEditDraft.tz}
+                                      onChange={(e) => setCronJobEditDraft((d) => ({ ...d, tz: e.target.value }))}
+                                      placeholder="UTC"
+                                      disabled={!!pending}
+                                    />
+                                  </label>
+                                </>
+                              ) : (
+                                <label>
+                                  <span>Every (seconds)</span>
+                                  <input
+                                    type="number"
+                                    value={cronJobEditDraft.every_seconds}
+                                    onChange={(e) => setCronJobEditDraft((d) => ({ ...d, every_seconds: e.target.value }))}
+                                    placeholder="3600"
+                                    disabled={!!pending}
+                                  />
+                                </label>
+                              )}
+                              <label>
+                                <span>Message</span>
+                                <input
+                                  value={cronJobEditDraft.message}
+                                  onChange={(e) => setCronJobEditDraft((d) => ({ ...d, message: e.target.value }))}
+                                  disabled={!!pending}
+                                />
+                              </label>
+                              <label>
+                                <span>Channel</span>
+                                <input
+                                  value={cronJobEditDraft.channel}
+                                  onChange={(e) => setCronJobEditDraft((d) => ({ ...d, channel: e.target.value }))}
+                                  placeholder="(optional)"
+                                  disabled={!!pending}
+                                />
+                              </label>
+                              <div style={{ display: "flex", gap: "1.2rem", flexWrap: "wrap" }}>
+                                <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={cronJobEditDraft.enabled}
+                                    onChange={(e) => setCronJobEditDraft((d) => ({ ...d, enabled: e.target.checked }))}
+                                    disabled={!!pending}
+                                  />
+                                  Enabled
+                                </label>
+                                <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={cronJobEditDraft.deliver}
+                                    onChange={(e) => setCronJobEditDraft((d) => ({ ...d, deliver: e.target.checked }))}
+                                    disabled={!!pending}
+                                  />
+                                  Deliver
+                                </label>
+                                <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={cronJobEditDraft.delete_after_run}
+                                    onChange={(e) => setCronJobEditDraft((d) => ({ ...d, delete_after_run: e.target.checked }))}
+                                    disabled={!!pending}
+                                  />
+                                  Delete after run
+                                </label>
+                              </div>
+                              <div className="app-links-editor-row">
+                                <button
+                                  type="button"
+                                  onClick={() => void updateSoulCronJob(job.id)}
+                                  disabled={!!pending}
+                                >
+                                  Save
+                                </button>
+                                <button
+                                  type="button"
+                                  className="ghost"
+                                  onClick={() => setEditingCronJobId(null)}
+                                  disabled={!!pending}
+                                >
+                                  Cancel
+                                </button>
+                              </div>
                             </div>
-                          ) : null}
-                          <div className="cron-job-meta-row">
-                            <span>
-                              {job.enabled ? "enabled" : "disabled"}
-                              {job.state.last_status ? ` · last ${job.state.last_status}` : ""}
-                            </span>
-                            <span>next {formatTimestampMs(job.state.next_run_at_ms)}</span>
-                          </div>
-                          <p>{job.message}</p>
+                          ) : (
+                            <>
+                              <div className="cron-job-meta-row">
+                                <strong>{job.name}</strong>
+                                <span>{formatCronSchedule(job.schedule)}</span>
+                              </div>
+                              <code>{job.session_key || "no session"}</code>
+                              {job.recurring_session_key_format ? (
+                                <div className="prompt-link-file-pills">
+                                  <span className="pill live">session fmt: {job.recurring_session_key_format}</span>
+                                </div>
+                              ) : null}
+                              <div className="cron-job-meta-row">
+                                <span>
+                                  {job.enabled ? "enabled" : "disabled"}
+                                  {job.state.last_status ? ` · last ${job.state.last_status}` : ""}
+                                </span>
+                                <span>next {formatTimestampMs(job.state.next_run_at_ms)}</span>
+                              </div>
+                              <p>{job.message}</p>
+                              <div className="app-links-editor-row">
+                                <button
+                                  type="button"
+                                  className="ghost"
+                                  onClick={() => startEditCronJob(job)}
+                                  disabled={!!pending}
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  className="ghost"
+                                  onClick={() => void deleteSoulCronJob(job.id)}
+                                  disabled={!!pending}
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            </>
+                          )}
                         </article>
                       ))}
                     </div>

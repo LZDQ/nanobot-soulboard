@@ -323,6 +323,27 @@ class AddSoulCronJobsFromRegistryRequest(BaseModel):
     names: list[str] = Field(description="Registry entry names to schedule in the soul.")
 
 
+class UpdateSoulCronJobScheduleRequest(BaseModel):
+    """Updated schedule for a soul cron job."""
+
+    kind: str
+    every_ms: int | None = None
+    expr: str | None = None
+    tz: str | None = None
+
+
+class UpdateSoulCronJobRequest(BaseModel):
+    """Editable fields of a soul cron job."""
+
+    name: str | None = None
+    enabled: bool | None = None
+    message: str | None = None
+    deliver: bool | None = None
+    channel: str | None = None
+    delete_after_run: bool | None = None
+    schedule: UpdateSoulCronJobScheduleRequest | None = None
+
+
 class UpdateSoulPromptFileRequest(BaseModel):
     """One prompt file replacement."""
 
