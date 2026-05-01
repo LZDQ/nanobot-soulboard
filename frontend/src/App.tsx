@@ -733,7 +733,7 @@ export default function App() {
   const [isEditingSkillRegistry, setIsEditingSkillRegistry] = useState(false);
   const [isEditingCronJobRegistry, setIsEditingCronJobRegistry] = useState(false);
   const [cronJobRegistryDraft, setCronJobRegistryDraft] = useState<CronJobRegistryEntryDraft>({
-    name: "", label: "", cron_expr: "", every_seconds: "", tz: "", message: "",
+    name: "", label: "", cron_expr: "", every_seconds: "", tz: Intl.DateTimeFormat().resolvedOptions().timeZone, message: "",
     deliver: false, channel: "", recurring_session_key_format: "",
   });
   const [addCronJobRegistrySelection, setAddCronJobRegistrySelection] = useState("");
@@ -851,7 +851,7 @@ export default function App() {
       setCronJobRegistry(response.items);
       setIsEditingCronJobRegistry(false);
       setCronJobRegistryDraft({
-        name: "", label: "", cron_expr: "", every_seconds: "", tz: "", message: "",
+        name: "", label: "", cron_expr: "", every_seconds: "", tz: Intl.DateTimeFormat().resolvedOptions().timeZone, message: "",
         deliver: false, channel: "", recurring_session_key_format: "",
       });
       if (addCronJobRegistrySelection && !response.items.some((e) => e.name === addCronJobRegistrySelection)) {
@@ -892,6 +892,16 @@ export default function App() {
 
   async function deleteCronJobRegistryEntry(name: string) {
     await saveCronJobRegistry(cronJobRegistry.filter((e) => e.name !== name));
+  }
+
+  async function moveCronJobRegistryEntry(name: string, direction: -1 | 1) {
+    const idx = cronJobRegistry.findIndex((e) => e.name === name);
+    if (idx < 0) return;
+    const next = idx + direction;
+    if (next < 0 || next >= cronJobRegistry.length) return;
+    const reordered = [...cronJobRegistry];
+    [reordered[idx], reordered[next]] = [reordered[next], reordered[idx]];
+    await saveCronJobRegistry(reordered);
   }
 
   async function addSoulCronJobsFromRegistry() {
@@ -1930,7 +1940,7 @@ export default function App() {
                     <input
                       value={cronJobRegistryDraft.tz}
                       onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, tz: e.target.value }))}
-                      placeholder="America/New_York"
+                      placeholder="e.g. America/New_York"
                       disabled={!!pending}
                     />
                   </label>
@@ -1982,14 +1992,34 @@ export default function App() {
                   <div className="prompt-link-dir-head">
                     <code>{entry.name}</code>
                     {isEditingCronJobRegistry ? (
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => void deleteCronJobRegistryEntry(entry.name)}
-                        disabled={!!pending}
-                      >
-                        Remove
-                      </button>
+                      <div style={{ display: "flex", gap: "0.4rem" }}>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => void moveCronJobRegistryEntry(entry.name, -1)}
+                          disabled={!!pending || cronJobRegistry.indexOf(entry) === 0}
+                          aria-label="Move up"
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => void moveCronJobRegistryEntry(entry.name, 1)}
+                          disabled={!!pending || cronJobRegistry.indexOf(entry) === cronJobRegistry.length - 1}
+                          aria-label="Move down"
+                        >
+                          ↓
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => void deleteCronJobRegistryEntry(entry.name)}
+                          disabled={!!pending}
+                        >
+                          Remove
+                        </button>
+                      </div>
                     ) : null}
                   </div>
                   <div className="prompt-link-file-pills">
