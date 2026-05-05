@@ -53,7 +53,7 @@ from nanobot_soulboard.schemas import (
     UpdateSoulPromptFilesRequest,
     UpdateSoulRequest,
 )
-from nanobot_soulboard.skills import skill_summary
+from nanobot_soulboard.skills import count_skill_md_tokens, count_text_tokens, skill_summary
 
 
 def _build_session_metadata(key: str) -> dict[str, str]:
@@ -161,11 +161,13 @@ def _list_soul_skills(spec: SoulSpec) -> list[SoulSkillResponse]:
             except OSError:
                 link_target = str(skill_dir.readlink())
         _, description = skill_summary(skill_dir)
+        content = skill_path.read_text(encoding="utf-8")
         skills.append(SoulSkillResponse(
             name=skill_dir.name,
             path=str(skill_path),
-            content=skill_path.read_text(encoding="utf-8"),
+            content=content,
             description=description,
+            token_count=count_text_tokens(content),
             link_target=link_target,
         ))
     return skills
@@ -179,15 +181,19 @@ def _build_skill_registry_response(supervisor: SoulSupervisor) -> SkillRegistryR
         exists = skill_dir.is_dir() and skill_md.is_file()
         name: str | None
         description: str | None
+        token_count: int | None
         if exists:
             name, description = skill_summary(skill_dir)
+            token_count = count_skill_md_tokens(skill_dir)
         else:
             name, description = None, None
+            token_count = None
         items.append(SkillRegistryEntryResponse(
             path=raw_path,
             exists=exists,
             name=name,
             description=description,
+            token_count=token_count,
         ))
     return SkillRegistryResponse(items=items)
 

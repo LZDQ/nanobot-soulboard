@@ -170,6 +170,10 @@ class SoulSkillResponse(BaseModel):
     path: str
     content: str
     description: str | None = None
+    token_count: int | None = Field(
+        default=None,
+        description="tiktoken (cl100k_base) count for SKILL.md only; excludes any sibling files.",
+    )
     link_target: str | None = Field(
         default=None,
         description=(
@@ -186,6 +190,10 @@ class SkillRegistryEntryResponse(BaseModel):
     exists: bool
     name: str | None = None
     description: str | None = None
+    token_count: int | None = Field(
+        default=None,
+        description="tiktoken (cl100k_base) count for SKILL.md only; excludes any sibling files.",
+    )
 
 
 class SkillRegistryResponse(BaseModel):

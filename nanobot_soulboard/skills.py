@@ -1,10 +1,34 @@
 """Skill metadata helpers shared by registry and per-soul endpoints."""
 
+from functools import lru_cache
 from pathlib import Path
 
+import tiktoken
 import yaml
 
 from nanobot.agent.skills import _STRIP_SKILL_FRONTMATTER
+
+
+@lru_cache(maxsize=1)
+def _skill_encoding() -> tiktoken.Encoding:
+    return tiktoken.get_encoding("cl100k_base")
+
+
+def count_skill_md_tokens(skill_dir: Path) -> int | None:
+    """Return the tiktoken count of SKILL.md, or None if it can't be read."""
+    skill_md = skill_dir / "SKILL.md"
+    if not skill_md.is_file():
+        return None
+    try:
+        content = skill_md.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    return len(_skill_encoding().encode(content))
+
+
+def count_text_tokens(text: str) -> int:
+    """Return the tiktoken count of an already-loaded SKILL.md body."""
+    return len(_skill_encoding().encode(text))
 
 
 def parse_skill_metadata(skill_dir: Path) -> dict | None:

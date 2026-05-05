@@ -281,7 +281,8 @@ pre {
 
 .details-panel,
 .chat-panel,
-.mcp-panel {
+.mcp-panel,
+.tools-panel {
   grid-column: 1 / -1;
 }
 
@@ -1054,4 +1055,63 @@ label span {
   stroke-width: 3;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.tools-master,
+.tools-subpanel {
+  display: block;
+}
+
+.tools-summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  padding: 0.25rem 0;
+}
+
+.tools-summary::-webkit-details-marker {
+  display: none;
+}
+
+.tools-summary > h2,
+.tools-summary > h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.tools-summary > h2::before,
+.tools-summary > h3::before {
+  content: "\25B8";
+  font-size: 0.85em;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+  display: inline-block;
+}
+
+.tools-master[open] > .tools-summary > h2::before,
+.tools-subpanel[open] > .tools-summary > h3::before {
+  transform: rotate(90deg);
+}
+
+.tools-stack {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.tools-subpanel {
+  border-top: 1px solid var(--panel-border);
+  padding-top: 1rem;
+}
+
+.tools-subpanel-body {
+  display: grid;
+  gap: 0.9rem;
+  margin-top: 0.9rem;
+}
+
+.tools-fold-hint {
+  font-size: 0.85rem;
 }

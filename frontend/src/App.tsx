@@ -39,6 +39,7 @@ type SoulSkill = {
   path: string;
   content: string;
   description: string | null;
+  token_count: number | null;
   link_target: string | null;
 };
 
@@ -47,6 +48,7 @@ type SkillRegistryEntry = {
   exists: boolean;
   name: string | null;
   description: string | null;
+  token_count: number | null;
 };
 
 type SkillRegistryResponse = {
@@ -1771,269 +1773,6 @@ export default function App() {
             </button>
           </div>
 
-          <div className="create-box">
-            <div className="panel-head">
-              <h3>Prompt sources</h3>
-              <button
-                type="button"
-                className="ghost"
-                onClick={() => setIsEditingPromptLinkDirs((current) => !current)}
-                disabled={!!pending}
-              >
-                {isEditingPromptLinkDirs ? "Done" : "Edit"}
-              </button>
-            </div>
-            {isEditingPromptLinkDirs ? (
-              <div className="app-links-editor">
-                <div className="app-links-editor-row">
-                  <input
-                    value={newPromptLinkDir}
-                    onChange={(event) => setNewPromptLinkDir(event.target.value)}
-                    placeholder="~/prompts/reviewer"
-                    disabled={!!pending}
-                  />
-                  <button type="button" onClick={() => void addPromptLinkDir()} disabled={!!pending}>
-                    Add
-                  </button>
-                </div>
-              </div>
-            ) : null}
-            <div className="prompt-link-dir-list">
-              {promptLinkDirs.length ? promptLinkDirs.map((item) => (
-                <article key={item.path} className="prompt-link-dir-card">
-                  <div className="prompt-link-dir-head">
-                    <code>{item.path}</code>
-                    {isEditingPromptLinkDirs ? (
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => void deletePromptLinkDir(item.path)}
-                        disabled={!!pending}
-                      >
-                        Delete
-                      </button>
-                    ) : null}
-                  </div>
-                  <div className="prompt-link-file-pills">
-                    {item.files.map((file) => (
-                      <span key={`${item.path}:${file.name}`} className={`pill ${file.exists ? "live" : "idle"}`}>
-                        {file.name} {file.exists ? "present" : "missing"}
-                      </span>
-                    ))}
-                  </div>
-                </article>
-              )) : <p className="muted">No prompt source directories configured.</p>}
-            </div>
-          </div>
-
-          <div className="create-box">
-            <div className="panel-head">
-              <h3>Skill registry</h3>
-              <button
-                type="button"
-                className="ghost"
-                onClick={() => setIsEditingSkillRegistry((current) => !current)}
-                disabled={!!pending}
-              >
-                {isEditingSkillRegistry ? "Done" : "Edit"}
-              </button>
-            </div>
-            {isEditingSkillRegistry ? (
-              <div className="app-links-editor">
-                <div className="app-links-editor-row">
-                  <input
-                    value={newSkillRegistryPath}
-                    onChange={(event) => setNewSkillRegistryPath(event.target.value)}
-                    placeholder="~/skills/my-skill"
-                    disabled={!!pending}
-                  />
-                  <button type="button" onClick={() => void addSkillRegistryEntry()} disabled={!!pending}>
-                    Add
-                  </button>
-                </div>
-              </div>
-            ) : null}
-            <div className="prompt-link-dir-list">
-              {skillRegistry.length ? skillRegistry.map((item) => (
-                <article key={item.path} className="prompt-link-dir-card">
-                  <div className="prompt-link-dir-head">
-                    <code>{item.path}</code>
-                    {isEditingSkillRegistry ? (
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => void deleteSkillRegistryEntry(item.path)}
-                        disabled={!!pending}
-                      >
-                        Remove
-                      </button>
-                    ) : null}
-                  </div>
-                  <div className="prompt-link-file-pills">
-                    <span className={`pill ${item.exists ? "live" : "idle"}`}>
-                      {item.exists ? "SKILL.md present" : "missing"}
-                    </span>
-                    {item.name ? <span className="pill live">{item.name}</span> : null}
-                  </div>
-                  {item.description ? (
-                    <p className="muted skill-registry-desc">{item.description}</p>
-                  ) : null}
-                </article>
-              )) : <p className="muted">No skills registered.</p>}
-            </div>
-          </div>
-
-          <div className="create-box">
-            <div className="panel-head">
-              <h3>Cron job registry</h3>
-              <button
-                type="button"
-                className="ghost"
-                onClick={() => setIsEditingCronJobRegistry((current) => !current)}
-                disabled={!!pending}
-              >
-                {isEditingCronJobRegistry ? "Done" : "Edit"}
-              </button>
-            </div>
-            {isEditingCronJobRegistry ? (
-              <div className="app-links-editor">
-                <div className="details-stack" style={{ gap: "0.5rem" }}>
-                  <label>
-                    <span>Name (unique ID)</span>
-                    <input
-                      value={cronJobRegistryDraft.name}
-                      onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, name: e.target.value }))}
-                      placeholder="daily-digest"
-                      disabled={!!pending}
-                    />
-                  </label>
-                  <label>
-                    <span>Label (display name)</span>
-                    <input
-                      value={cronJobRegistryDraft.label}
-                      onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, label: e.target.value }))}
-                      placeholder="Daily digest"
-                      disabled={!!pending}
-                    />
-                  </label>
-                  <label>
-                    <span>Cron expr</span>
-                    <input
-                      value={cronJobRegistryDraft.cron_expr}
-                      onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, cron_expr: e.target.value }))}
-                      placeholder="0 9 * * 1-5"
-                      disabled={!!pending}
-                    />
-                  </label>
-                  <label>
-                    <span>Every (seconds)</span>
-                    <input
-                      type="number"
-                      value={cronJobRegistryDraft.every_seconds}
-                      onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, every_seconds: e.target.value }))}
-                      placeholder="3600"
-                      disabled={!!pending}
-                    />
-                  </label>
-                  <label>
-                    <span>Timezone</span>
-                    <input
-                      value={cronJobRegistryDraft.tz}
-                      onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, tz: e.target.value }))}
-                      placeholder="e.g. America/New_York"
-                      disabled={!!pending}
-                    />
-                  </label>
-                  <label>
-                    <span>Message</span>
-                    <input
-                      value={cronJobRegistryDraft.message}
-                      onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, message: e.target.value }))}
-                      placeholder="Run the daily summary"
-                      disabled={!!pending}
-                    />
-                  </label>
-                  <label>
-                    <span>Channel</span>
-                    <input
-                      value={cronJobRegistryDraft.channel}
-                      onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, channel: e.target.value }))}
-                      placeholder="whatsapp"
-                      disabled={!!pending}
-                    />
-                  </label>
-                  <label>
-                    <span>Recurring session key format</span>
-                    <input
-                      value={cronJobRegistryDraft.recurring_session_key_format}
-                      onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, recurring_session_key_format: e.target.value }))}
-                      placeholder="%Y-%m-%d"
-                      disabled={!!pending}
-                    />
-                  </label>
-                  <label className="checkbox">
-                    <input
-                      type="checkbox"
-                      checked={cronJobRegistryDraft.deliver}
-                      onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, deliver: e.target.checked }))}
-                      disabled={!!pending}
-                    />
-                    <span>Deliver response</span>
-                  </label>
-                  <button type="button" onClick={() => void addCronJobRegistryEntry()} disabled={!!pending}>
-                    Add entry
-                  </button>
-                </div>
-              </div>
-            ) : null}
-            <div className="prompt-link-dir-list">
-              {cronJobRegistry.length ? cronJobRegistry.map((entry) => (
-                <article key={entry.name} className="prompt-link-dir-card">
-                  <div className="prompt-link-dir-head">
-                    <code>{entry.name}</code>
-                    {isEditingCronJobRegistry ? (
-                      <div style={{ display: "flex", gap: "0.4rem" }}>
-                        <button
-                          type="button"
-                          className="ghost"
-                          onClick={() => void moveCronJobRegistryEntry(entry.name, -1)}
-                          disabled={!!pending || cronJobRegistry.indexOf(entry) === 0}
-                          aria-label="Move up"
-                        >
-                          ↑
-                        </button>
-                        <button
-                          type="button"
-                          className="ghost"
-                          onClick={() => void moveCronJobRegistryEntry(entry.name, 1)}
-                          disabled={!!pending || cronJobRegistry.indexOf(entry) === cronJobRegistry.length - 1}
-                          aria-label="Move down"
-                        >
-                          ↓
-                        </button>
-                        <button
-                          type="button"
-                          className="ghost"
-                          onClick={() => void deleteCronJobRegistryEntry(entry.name)}
-                          disabled={!!pending}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
-                  <div className="prompt-link-file-pills">
-                    {entry.label ? <span className="pill live">{entry.label}</span> : null}
-                    {entry.cron_expr ? <span className="pill idle">{entry.cron_expr}{entry.tz ? ` (${entry.tz})` : ""}</span> : null}
-                    {entry.every_seconds ? <span className="pill idle">every {entry.every_seconds}s</span> : null}
-                    {entry.recurring_session_key_format ? <span className="pill live">session: {entry.recurring_session_key_format}</span> : null}
-                    {entry.channel ? <span className="pill idle">{entry.channel}</span> : null}
-                  </div>
-                  {entry.message ? <p className="muted skill-registry-desc">{entry.message}</p> : null}
-                </article>
-              )) : <p className="muted">No cron job templates registered.</p>}
-            </div>
-          </div>
         </section>
 
         <section className="panel sessions-panel">
@@ -2255,6 +1994,662 @@ export default function App() {
           )}
         </section>
 
+        <section className="panel tools-panel">
+          <details className="tools-master">
+            <summary className="panel-head tools-summary tools-master-summary">
+              <h2>Registries & MCP servers</h2>
+              <span className="muted tools-fold-hint">click to expand</span>
+            </summary>
+            <div className="tools-stack">
+              <details className="tools-subpanel">
+                <summary className="panel-head tools-summary">
+                  <h3>Prompt sources</h3>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      setIsEditingPromptLinkDirs((current) => !current);
+                    }}
+                    disabled={!!pending}
+                  >
+                    {isEditingPromptLinkDirs ? "Done" : "Edit"}
+                  </button>
+                </summary>
+                <div className="tools-subpanel-body">
+                  {isEditingPromptLinkDirs ? (
+                    <div className="app-links-editor">
+                      <div className="app-links-editor-row">
+                        <input
+                          value={newPromptLinkDir}
+                          onChange={(event) => setNewPromptLinkDir(event.target.value)}
+                          placeholder="~/prompts/reviewer"
+                          disabled={!!pending}
+                        />
+                        <button type="button" onClick={() => void addPromptLinkDir()} disabled={!!pending}>
+                          Add
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                  <div className="prompt-link-dir-list">
+                    {promptLinkDirs.length ? promptLinkDirs.map((item) => (
+                      <article key={item.path} className="prompt-link-dir-card">
+                        <div className="prompt-link-dir-head">
+                          <code>{item.path}</code>
+                          {isEditingPromptLinkDirs ? (
+                            <button
+                              type="button"
+                              className="ghost"
+                              onClick={() => void deletePromptLinkDir(item.path)}
+                              disabled={!!pending}
+                            >
+                              Delete
+                            </button>
+                          ) : null}
+                        </div>
+                        <div className="prompt-link-file-pills">
+                          {item.files.map((file) => (
+                            <span key={`${item.path}:${file.name}`} className={`pill ${file.exists ? "live" : "idle"}`}>
+                              {file.name} {file.exists ? "present" : "missing"}
+                            </span>
+                          ))}
+                        </div>
+                      </article>
+                    )) : <p className="muted">No prompt source directories configured.</p>}
+                  </div>
+                </div>
+              </details>
+
+              <details className="tools-subpanel">
+                <summary className="panel-head tools-summary">
+                  <h3>Skill registry</h3>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      setIsEditingSkillRegistry((current) => !current);
+                    }}
+                    disabled={!!pending}
+                  >
+                    {isEditingSkillRegistry ? "Done" : "Edit"}
+                  </button>
+                </summary>
+                <div className="tools-subpanel-body">
+                  {isEditingSkillRegistry ? (
+                    <div className="app-links-editor">
+                      <div className="app-links-editor-row">
+                        <input
+                          value={newSkillRegistryPath}
+                          onChange={(event) => setNewSkillRegistryPath(event.target.value)}
+                          placeholder="~/skills/my-skill"
+                          disabled={!!pending}
+                        />
+                        <button type="button" onClick={() => void addSkillRegistryEntry()} disabled={!!pending}>
+                          Add
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                  <div className="prompt-link-dir-list">
+                    {skillRegistry.length ? skillRegistry.map((item) => (
+                      <article key={item.path} className="prompt-link-dir-card">
+                        <div className="prompt-link-dir-head">
+                          <code>{item.path}</code>
+                          {isEditingSkillRegistry ? (
+                            <button
+                              type="button"
+                              className="ghost"
+                              onClick={() => void deleteSkillRegistryEntry(item.path)}
+                              disabled={!!pending}
+                            >
+                              Remove
+                            </button>
+                          ) : null}
+                        </div>
+                        <div className="prompt-link-file-pills">
+                          <span className={`pill ${item.exists ? "live" : "idle"}`}>
+                            {item.exists ? "SKILL.md present" : "missing"}
+                          </span>
+                          {item.name ? <span className="pill live">{item.name}</span> : null}
+                          {item.token_count !== null && item.token_count !== undefined ? (
+                            <span className="pill idle">{item.token_count.toLocaleString()} tokens</span>
+                          ) : null}
+                        </div>
+                        {item.description ? (
+                          <p className="muted skill-registry-desc">{item.description}</p>
+                        ) : null}
+                      </article>
+                    )) : <p className="muted">No skills registered.</p>}
+                  </div>
+                </div>
+              </details>
+
+              <details className="tools-subpanel">
+                <summary className="panel-head tools-summary">
+                  <h3>Cron job registry</h3>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      setIsEditingCronJobRegistry((current) => !current);
+                    }}
+                    disabled={!!pending}
+                  >
+                    {isEditingCronJobRegistry ? "Done" : "Edit"}
+                  </button>
+                </summary>
+                <div className="tools-subpanel-body">
+                  {isEditingCronJobRegistry ? (
+                    <div className="app-links-editor">
+                      <div className="details-stack" style={{ gap: "0.5rem" }}>
+                        <label>
+                          <span>Name (unique ID)</span>
+                          <input
+                            value={cronJobRegistryDraft.name}
+                            onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, name: e.target.value }))}
+                            placeholder="daily-digest"
+                            disabled={!!pending}
+                          />
+                        </label>
+                        <label>
+                          <span>Label (display name)</span>
+                          <input
+                            value={cronJobRegistryDraft.label}
+                            onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, label: e.target.value }))}
+                            placeholder="Daily digest"
+                            disabled={!!pending}
+                          />
+                        </label>
+                        <label>
+                          <span>Cron expr</span>
+                          <input
+                            value={cronJobRegistryDraft.cron_expr}
+                            onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, cron_expr: e.target.value }))}
+                            placeholder="0 9 * * 1-5"
+                            disabled={!!pending}
+                          />
+                        </label>
+                        <label>
+                          <span>Every (seconds)</span>
+                          <input
+                            type="number"
+                            value={cronJobRegistryDraft.every_seconds}
+                            onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, every_seconds: e.target.value }))}
+                            placeholder="3600"
+                            disabled={!!pending}
+                          />
+                        </label>
+                        <label>
+                          <span>Timezone</span>
+                          <input
+                            value={cronJobRegistryDraft.tz}
+                            onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, tz: e.target.value }))}
+                            placeholder="e.g. America/New_York"
+                            disabled={!!pending}
+                          />
+                        </label>
+                        <label>
+                          <span>Message</span>
+                          <input
+                            value={cronJobRegistryDraft.message}
+                            onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, message: e.target.value }))}
+                            placeholder="Run the daily summary"
+                            disabled={!!pending}
+                          />
+                        </label>
+                        <label>
+                          <span>Channel</span>
+                          <input
+                            value={cronJobRegistryDraft.channel}
+                            onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, channel: e.target.value }))}
+                            placeholder="whatsapp"
+                            disabled={!!pending}
+                          />
+                        </label>
+                        <label>
+                          <span>Recurring session key format</span>
+                          <input
+                            value={cronJobRegistryDraft.recurring_session_key_format}
+                            onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, recurring_session_key_format: e.target.value }))}
+                            placeholder="%Y-%m-%d"
+                            disabled={!!pending}
+                          />
+                        </label>
+                        <label className="checkbox">
+                          <input
+                            type="checkbox"
+                            checked={cronJobRegistryDraft.deliver}
+                            onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, deliver: e.target.checked }))}
+                            disabled={!!pending}
+                          />
+                          <span>Deliver response</span>
+                        </label>
+                        <button type="button" onClick={() => void addCronJobRegistryEntry()} disabled={!!pending}>
+                          Add entry
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                  <div className="prompt-link-dir-list">
+                    {cronJobRegistry.length ? cronJobRegistry.map((entry) => (
+                      <article key={entry.name} className="prompt-link-dir-card">
+                        <div className="prompt-link-dir-head">
+                          <code>{entry.name}</code>
+                          {isEditingCronJobRegistry ? (
+                            <div style={{ display: "flex", gap: "0.4rem" }}>
+                              <button
+                                type="button"
+                                className="ghost"
+                                onClick={() => void moveCronJobRegistryEntry(entry.name, -1)}
+                                disabled={!!pending || cronJobRegistry.indexOf(entry) === 0}
+                                aria-label="Move up"
+                              >
+                                ↑
+                              </button>
+                              <button
+                                type="button"
+                                className="ghost"
+                                onClick={() => void moveCronJobRegistryEntry(entry.name, 1)}
+                                disabled={!!pending || cronJobRegistry.indexOf(entry) === cronJobRegistry.length - 1}
+                                aria-label="Move down"
+                              >
+                                ↓
+                              </button>
+                              <button
+                                type="button"
+                                className="ghost"
+                                onClick={() => void deleteCronJobRegistryEntry(entry.name)}
+                                disabled={!!pending}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="prompt-link-file-pills">
+                          {entry.label ? <span className="pill live">{entry.label}</span> : null}
+                          {entry.cron_expr ? <span className="pill idle">{entry.cron_expr}{entry.tz ? ` (${entry.tz})` : ""}</span> : null}
+                          {entry.every_seconds ? <span className="pill idle">every {entry.every_seconds}s</span> : null}
+                          {entry.recurring_session_key_format ? <span className="pill live">session: {entry.recurring_session_key_format}</span> : null}
+                          {entry.channel ? <span className="pill idle">{entry.channel}</span> : null}
+                        </div>
+                        {entry.message ? <p className="muted skill-registry-desc">{entry.message}</p> : null}
+                      </article>
+                    )) : <p className="muted">No cron job templates registered.</p>}
+                  </div>
+                </div>
+              </details>
+
+              <details className="tools-subpanel">
+                <summary className="panel-head tools-summary">
+                  <h3>MCP servers</h3>
+                  <button
+                    className="ghost"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      void refreshMcpServers(selectedMcpServerName).catch((cause) => {
+                        notifyError(cause);
+                      });
+                    }}
+                    disabled={!!pending}
+                  >
+                    Reload
+                  </button>
+                </summary>
+                <div className="tools-subpanel-body">
+                  <div className="mcp-layout">
+                    <div className="mcp-list">
+                      {mcpServers.map((server) => (
+                        <button
+                          key={server.name}
+                          className={`session-card ${selectedMcpServerName === server.name ? "active" : ""}`}
+                          onClick={() => {
+                            setSelectedMcpServerName(server.name);
+                            setMcpMode("view");
+                          }}
+                        >
+                          <strong>{server.name}</strong>
+                          <span>{server.config.type || "auto"} transport</span>
+                          <code>{server.config.command || server.config.url || "no endpoint configured"}</code>
+                        </button>
+                      ))}
+                      {!mcpServers.length ? <p className="muted">No MCP server definitions found in the base nanobot config.</p> : null}
+
+                      <div className="create-box">
+                        <h3>Create MCP server</h3>
+                        <button
+                          className="ghost"
+                          onClick={() => {
+                            setMcpMode("create");
+                            setCreateMcpServerName("");
+                            setCreateMcpDraft(getEmptyMcpDraft());
+                          }}
+                          disabled={!!pending}
+                        >
+                          New MCP server
+                        </button>
+                      </div>
+                    </div>
+
+                    {mcpMode === "create" ? (
+                      <div className="mcp-editor">
+                        <div className="panel-head">
+                          <h3>Create definition</h3>
+                          <code>{createMcpServerName || "new server"}</code>
+                        </div>
+                        <div className="field-grid">
+                          <label>
+                            <span>Name</span>
+                            <input
+                              value={createMcpServerName}
+                              onChange={(event) => setCreateMcpServerName(event.target.value)}
+                              placeholder="github"
+                            />
+                          </label>
+                          <label>
+                            <span>Type</span>
+                            <select
+                              value={createMcpDraft.type}
+                              onChange={(event) => setCreateMcpDraft((current) => ({ ...current, type: event.target.value }))}
+                            >
+                              <option value="stdio">stdio</option>
+                              <option value="sse">sse</option>
+                              <option value="streamableHttp">streamableHttp</option>
+                            </select>
+                          </label>
+                          <label>
+                            <span>Tool timeout</span>
+                            <input
+                              value={createMcpDraft.tool_timeout}
+                              onChange={(event) =>
+                                setCreateMcpDraft((current) => ({ ...current, tool_timeout: event.target.value }))
+                              }
+                              placeholder="30"
+                            />
+                          </label>
+                          {createMcpDraft.type === "stdio" ? (
+                            <>
+                              <label>
+                                <span>Command</span>
+                                <input
+                                  value={createMcpDraft.command}
+                                  onChange={(event) =>
+                                    setCreateMcpDraft((current) => ({ ...current, command: event.target.value }))
+                                  }
+                                  placeholder="npx"
+                                />
+                              </label>
+                              <label>
+                                <span>Args, one per line</span>
+                                <textarea
+                                  value={createMcpDraft.args}
+                                  onChange={(event) =>
+                                    setCreateMcpDraft((current) => ({ ...current, args: event.target.value }))
+                                  }
+                                />
+                              </label>
+                              <label>
+                                <span>Env JSON</span>
+                                <textarea
+                                  value={createMcpDraft.env}
+                                  onChange={(event) =>
+                                    setCreateMcpDraft((current) => ({ ...current, env: event.target.value }))
+                                  }
+                                />
+                              </label>
+                            </>
+                          ) : (
+                            <>
+                              <label>
+                                <span>URL</span>
+                                <input
+                                  value={createMcpDraft.url}
+                                  onChange={(event) => setCreateMcpDraft((current) => ({ ...current, url: event.target.value }))}
+                                  placeholder="https://example.com/mcp"
+                                />
+                              </label>
+                              <label>
+                                <span>Headers JSON</span>
+                                <textarea
+                                  value={createMcpDraft.headers}
+                                  onChange={(event) =>
+                                    setCreateMcpDraft((current) => ({ ...current, headers: event.target.value }))
+                                  }
+                                />
+                              </label>
+                            </>
+                          )}
+                          <label className="checkbox">
+                            <input
+                              type="checkbox"
+                              checked={createMcpDraft.use_enabled_tools}
+                              onChange={(event) =>
+                                setCreateMcpDraft((current) => ({
+                                  ...current,
+                                  use_enabled_tools: event.target.checked,
+                                  enabled_tools: event.target.checked ? current.enabled_tools : "",
+                                }))
+                              }
+                            />
+                            <span>Whitelist tools</span>
+                          </label>
+                          {createMcpDraft.use_enabled_tools ? (
+                            <label>
+                              <span>Whitelisted tools, one per line</span>
+                              <textarea
+                                value={createMcpDraft.enabled_tools}
+                                onChange={(event) =>
+                                  setCreateMcpDraft((current) => ({ ...current, enabled_tools: event.target.value }))
+                                }
+                              />
+                            </label>
+                          ) : null}
+                        </div>
+                        <div className="action-row">
+                          <button
+                            className="ghost"
+                            onClick={() => {
+                              setCreateMcpServerName("");
+                              setCreateMcpDraft(getEmptyMcpDraft());
+                              setMcpMode(selectedMcpServer ? "view" : "create");
+                            }}
+                            disabled={!!pending}
+                          >
+                            Cancel
+                          </button>
+                          <button onClick={() => void createMcpServer()} disabled={!!pending}>
+                            Create MCP server
+                          </button>
+                        </div>
+                      </div>
+                    ) : selectedMcpServer ? (
+                      <div className="mcp-editor">
+                        <div className="panel-head">
+                          <h3>{mcpMode === "edit" ? "Edit definition" : "Definition"}</h3>
+                          <code>{selectedMcpServer.name}</code>
+                        </div>
+                        {mcpMode === "edit" ? (
+                          <div className="field-grid">
+                            <label>
+                              <span>Type</span>
+                              <select
+                                value={activeMcpDraft.type}
+                                onChange={(event) => setMcpDraft((current) => ({ ...current, type: event.target.value }))}
+                              >
+                                <option value="stdio">stdio</option>
+                                <option value="sse">sse</option>
+                                <option value="streamableHttp">streamableHttp</option>
+                              </select>
+                            </label>
+                            <label>
+                              <span>Tool timeout</span>
+                              <input
+                                value={activeMcpDraft.tool_timeout}
+                                onChange={(event) => setMcpDraft((current) => ({ ...current, tool_timeout: event.target.value }))}
+                                placeholder="30"
+                              />
+                            </label>
+                            {activeMcpDraft.type === "stdio" ? (
+                              <>
+                                <label>
+                                  <span>Command</span>
+                                  <input
+                                    value={activeMcpDraft.command}
+                                    onChange={(event) => setMcpDraft((current) => ({ ...current, command: event.target.value }))}
+                                    placeholder="npx"
+                                  />
+                                </label>
+                                <label>
+                                  <span>Args, one per line</span>
+                                  <textarea
+                                    value={activeMcpDraft.args}
+                                    onChange={(event) => setMcpDraft((current) => ({ ...current, args: event.target.value }))}
+                                  />
+                                </label>
+                                <label>
+                                  <span>Env JSON</span>
+                                  <textarea
+                                    value={activeMcpDraft.env}
+                                    onChange={(event) => setMcpDraft((current) => ({ ...current, env: event.target.value }))}
+                                  />
+                                </label>
+                              </>
+                            ) : (
+                              <>
+                                <label>
+                                  <span>URL</span>
+                                  <input
+                                    value={activeMcpDraft.url}
+                                    onChange={(event) => setMcpDraft((current) => ({ ...current, url: event.target.value }))}
+                                    placeholder="https://example.com/mcp"
+                                  />
+                                </label>
+                                <label>
+                                  <span>Headers JSON</span>
+                                  <textarea
+                                    value={activeMcpDraft.headers}
+                                    onChange={(event) => setMcpDraft((current) => ({ ...current, headers: event.target.value }))}
+                                  />
+                                </label>
+                              </>
+                            )}
+                            <label className="checkbox">
+                              <input
+                                type="checkbox"
+                                checked={activeMcpDraft.use_enabled_tools}
+                                onChange={(event) =>
+                                  setMcpDraft((current) => ({
+                                    ...current,
+                                    use_enabled_tools: event.target.checked,
+                                    enabled_tools: event.target.checked ? current.enabled_tools : "",
+                                  }))
+                                }
+                              />
+                              <span>Whitelist tools</span>
+                            </label>
+                            {activeMcpDraft.use_enabled_tools ? (
+                              <label>
+                                <span>Whitelisted tools, one per line</span>
+                                <textarea
+                                  value={activeMcpDraft.enabled_tools}
+                                  onChange={(event) =>
+                                    setMcpDraft((current) => ({ ...current, enabled_tools: event.target.value }))
+                                  }
+                                />
+                              </label>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <div className="override-grid">
+                            <article className="override-card">
+                              <span>Type</span>
+                              <strong>{renderMcpTypeLabel(selectedMcpServer.config.type)}</strong>
+                            </article>
+                            <article className="override-card">
+                              <span>Command</span>
+                              <strong>{selectedMcpServer.config.command || "n/a"}</strong>
+                            </article>
+                            <article className="override-card">
+                              <span>URL</span>
+                              <strong>{selectedMcpServer.config.url || "n/a"}</strong>
+                            </article>
+                            <article className="override-card">
+                              <span>Tool timeout</span>
+                              <strong>{String(selectedMcpServer.config.toolTimeout)}</strong>
+                            </article>
+                            <article className="override-card">
+                              <span>Args</span>
+                              <strong>{renderEnabledList(selectedMcpServer.config.args)}</strong>
+                            </article>
+                            <article className="override-card">
+                              <span>Whitelist</span>
+                              <strong>
+                                {selectedMcpServer.config.enabledTools.length === 1 &&
+                                selectedMcpServer.config.enabledTools[0] === "*"
+                                  ? "all tools"
+                                  : renderEnabledList(selectedMcpServer.config.enabledTools)}
+                              </strong>
+                            </article>
+                            <article className="override-card">
+                              <span>Env</span>
+                              <strong>{Object.keys(selectedMcpServer.config.env).length ? JSON.stringify(selectedMcpServer.config.env) : "none"}</strong>
+                            </article>
+                            <article className="override-card">
+                              <span>Headers</span>
+                              <strong>{Object.keys(selectedMcpServer.config.headers).length ? JSON.stringify(selectedMcpServer.config.headers) : "none"}</strong>
+                            </article>
+                          </div>
+                        )}
+                        <div className="action-row">
+                          {mcpMode === "edit" ? (
+                            <>
+                              <button
+                                className="ghost"
+                                onClick={() => {
+                                  setMcpDraft(mcpConfigToDraft(selectedMcpServer.config));
+                                  setMcpMode("view");
+                                }}
+                                disabled={!!pending}
+                              >
+                                Cancel
+                              </button>
+                              <button onClick={() => void updateMcpServer()} disabled={!!pending}>
+                                Save MCP server
+                              </button>
+                              <button className="danger" onClick={() => void deleteMcpServer()} disabled={!!pending}>
+                                Delete
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                className="ghost"
+                                onClick={() => {
+                                  setMcpDraft(mcpConfigToDraft(selectedMcpServer.config));
+                                  setMcpMode("edit");
+                                }}
+                                disabled={!!pending}
+                              >
+                                Edit
+                              </button>
+                              <button className="danger" onClick={() => void deleteMcpServer()} disabled={!!pending}>
+                                Delete
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </details>
+            </div>
+          </details>
+        </section>
+
         <section className="panel details-panel">
           {soulError ? <section className="banner error">{soulError}</section> : null}
           <div className="panel-head">
@@ -2418,6 +2813,9 @@ export default function App() {
                                     <span className={`pill ${skill.link_target ? "live" : "idle"}`}>
                                       {skill.link_target ? "soft link" : "copy"}
                                     </span>
+                                    {skill.token_count !== null && skill.token_count !== undefined ? (
+                                      <span className="pill idle">{skill.token_count.toLocaleString()} tokens</span>
+                                    ) : null}
                                     <button
                                       type="button"
                                       className="ghost skill-delete-button"
@@ -2915,366 +3313,6 @@ export default function App() {
                   </div>
                 </section>
 
-                <section className="subpanel">
-                  <div className="panel-head">
-                    <h3>MCP servers</h3>
-                    <button
-                      className="ghost"
-                      onClick={() => {
-                        void refreshMcpServers(selectedMcpServerName).catch((cause) => {
-                          notifyError(cause);
-                        });
-                      }}
-                      disabled={!!pending}
-                    >
-                      Reload
-                    </button>
-                  </div>
-                  <div className="mcp-layout">
-                    <div className="mcp-list">
-                      {mcpServers.map((server) => (
-                        <button
-                          key={server.name}
-                          className={`session-card ${selectedMcpServerName === server.name ? "active" : ""}`}
-                          onClick={() => {
-                            setSelectedMcpServerName(server.name);
-                            setMcpMode("view");
-                          }}
-                        >
-                          <strong>{server.name}</strong>
-                          <span>{server.config.type || "auto"} transport</span>
-                          <code>{server.config.command || server.config.url || "no endpoint configured"}</code>
-                        </button>
-                      ))}
-                      {!mcpServers.length ? <p className="muted">No MCP server definitions found in the base nanobot config.</p> : null}
-
-                      <div className="create-box">
-                        <h3>Create MCP server</h3>
-                        <button
-                          className="ghost"
-                          onClick={() => {
-                            setMcpMode("create");
-                            setCreateMcpServerName("");
-                            setCreateMcpDraft(getEmptyMcpDraft());
-                          }}
-                          disabled={!!pending}
-                        >
-                          New MCP server
-                        </button>
-                      </div>
-                    </div>
-
-                    {mcpMode === "create" ? (
-                      <div className="mcp-editor">
-                        <div className="panel-head">
-                          <h3>Create definition</h3>
-                          <code>{createMcpServerName || "new server"}</code>
-                        </div>
-                        <div className="field-grid">
-                          <label>
-                            <span>Name</span>
-                            <input
-                              value={createMcpServerName}
-                              onChange={(event) => setCreateMcpServerName(event.target.value)}
-                              placeholder="github"
-                            />
-                          </label>
-                          <label>
-                            <span>Type</span>
-                            <select
-                              value={createMcpDraft.type}
-                              onChange={(event) => setCreateMcpDraft((current) => ({ ...current, type: event.target.value }))}
-                            >
-                              <option value="stdio">stdio</option>
-                              <option value="sse">sse</option>
-                              <option value="streamableHttp">streamableHttp</option>
-                            </select>
-                          </label>
-                          <label>
-                            <span>Tool timeout</span>
-                            <input
-                              value={createMcpDraft.tool_timeout}
-                              onChange={(event) =>
-                                setCreateMcpDraft((current) => ({ ...current, tool_timeout: event.target.value }))
-                              }
-                              placeholder="30"
-                            />
-                          </label>
-                          {createMcpDraft.type === "stdio" ? (
-                            <>
-                              <label>
-                                <span>Command</span>
-                                <input
-                                  value={createMcpDraft.command}
-                                  onChange={(event) =>
-                                    setCreateMcpDraft((current) => ({ ...current, command: event.target.value }))
-                                  }
-                                  placeholder="npx"
-                                />
-                              </label>
-                              <label>
-                                <span>Args, one per line</span>
-                                <textarea
-                                  value={createMcpDraft.args}
-                                  onChange={(event) =>
-                                    setCreateMcpDraft((current) => ({ ...current, args: event.target.value }))
-                                  }
-                                />
-                              </label>
-                              <label>
-                                <span>Env JSON</span>
-                                <textarea
-                                  value={createMcpDraft.env}
-                                  onChange={(event) =>
-                                    setCreateMcpDraft((current) => ({ ...current, env: event.target.value }))
-                                  }
-                                />
-                              </label>
-                            </>
-                          ) : (
-                            <>
-                              <label>
-                                <span>URL</span>
-                                <input
-                                  value={createMcpDraft.url}
-                                  onChange={(event) => setCreateMcpDraft((current) => ({ ...current, url: event.target.value }))}
-                                  placeholder="https://example.com/mcp"
-                                />
-                              </label>
-                              <label>
-                                <span>Headers JSON</span>
-                                <textarea
-                                  value={createMcpDraft.headers}
-                                  onChange={(event) =>
-                                    setCreateMcpDraft((current) => ({ ...current, headers: event.target.value }))
-                                  }
-                                />
-                              </label>
-                            </>
-                          )}
-                          <label className="checkbox">
-                            <input
-                              type="checkbox"
-                              checked={createMcpDraft.use_enabled_tools}
-                              onChange={(event) =>
-                                setCreateMcpDraft((current) => ({
-                                  ...current,
-                                  use_enabled_tools: event.target.checked,
-                                  enabled_tools: event.target.checked ? current.enabled_tools : "",
-                                }))
-                              }
-                            />
-                            <span>Whitelist tools</span>
-                          </label>
-                          {createMcpDraft.use_enabled_tools ? (
-                            <label>
-                              <span>Whitelisted tools, one per line</span>
-                              <textarea
-                                value={createMcpDraft.enabled_tools}
-                                onChange={(event) =>
-                                  setCreateMcpDraft((current) => ({ ...current, enabled_tools: event.target.value }))
-                                }
-                              />
-                            </label>
-                          ) : null}
-                        </div>
-                        <div className="action-row">
-                          <button
-                            className="ghost"
-                            onClick={() => {
-                              setCreateMcpServerName("");
-                              setCreateMcpDraft(getEmptyMcpDraft());
-                              setMcpMode(selectedMcpServer ? "view" : "create");
-                            }}
-                            disabled={!!pending}
-                          >
-                            Cancel
-                          </button>
-                          <button onClick={() => void createMcpServer()} disabled={!!pending}>
-                            Create MCP server
-                          </button>
-                        </div>
-                      </div>
-                    ) : selectedMcpServer ? (
-                      <div className="mcp-editor">
-                        <div className="panel-head">
-                          <h3>{mcpMode === "edit" ? "Edit definition" : "Definition"}</h3>
-                          <code>{selectedMcpServer.name}</code>
-                        </div>
-                        {mcpMode === "edit" ? (
-                          <div className="field-grid">
-                            <label>
-                              <span>Type</span>
-                              <select
-                                value={activeMcpDraft.type}
-                                onChange={(event) => setMcpDraft((current) => ({ ...current, type: event.target.value }))}
-                              >
-                                <option value="stdio">stdio</option>
-                                <option value="sse">sse</option>
-                                <option value="streamableHttp">streamableHttp</option>
-                              </select>
-                            </label>
-                            <label>
-                              <span>Tool timeout</span>
-                              <input
-                                value={activeMcpDraft.tool_timeout}
-                                onChange={(event) => setMcpDraft((current) => ({ ...current, tool_timeout: event.target.value }))}
-                                placeholder="30"
-                              />
-                            </label>
-                            {activeMcpDraft.type === "stdio" ? (
-                              <>
-                                <label>
-                                  <span>Command</span>
-                                  <input
-                                    value={activeMcpDraft.command}
-                                    onChange={(event) => setMcpDraft((current) => ({ ...current, command: event.target.value }))}
-                                    placeholder="npx"
-                                  />
-                                </label>
-                                <label>
-                                  <span>Args, one per line</span>
-                                  <textarea
-                                    value={activeMcpDraft.args}
-                                    onChange={(event) => setMcpDraft((current) => ({ ...current, args: event.target.value }))}
-                                  />
-                                </label>
-                                <label>
-                                  <span>Env JSON</span>
-                                  <textarea
-                                    value={activeMcpDraft.env}
-                                    onChange={(event) => setMcpDraft((current) => ({ ...current, env: event.target.value }))}
-                                  />
-                                </label>
-                              </>
-                            ) : (
-                              <>
-                                <label>
-                                  <span>URL</span>
-                                  <input
-                                    value={activeMcpDraft.url}
-                                    onChange={(event) => setMcpDraft((current) => ({ ...current, url: event.target.value }))}
-                                    placeholder="https://example.com/mcp"
-                                  />
-                                </label>
-                                <label>
-                                  <span>Headers JSON</span>
-                                  <textarea
-                                    value={activeMcpDraft.headers}
-                                    onChange={(event) => setMcpDraft((current) => ({ ...current, headers: event.target.value }))}
-                                  />
-                                </label>
-                              </>
-                            )}
-                            <label className="checkbox">
-                              <input
-                                type="checkbox"
-                                checked={activeMcpDraft.use_enabled_tools}
-                                onChange={(event) =>
-                                  setMcpDraft((current) => ({
-                                    ...current,
-                                    use_enabled_tools: event.target.checked,
-                                    enabled_tools: event.target.checked ? current.enabled_tools : "",
-                                  }))
-                                }
-                              />
-                              <span>Whitelist tools</span>
-                            </label>
-                            {activeMcpDraft.use_enabled_tools ? (
-                              <label>
-                                <span>Whitelisted tools, one per line</span>
-                                <textarea
-                                  value={activeMcpDraft.enabled_tools}
-                                  onChange={(event) =>
-                                    setMcpDraft((current) => ({ ...current, enabled_tools: event.target.value }))
-                                  }
-                                />
-                              </label>
-                            ) : null}
-                          </div>
-                        ) : (
-                          <div className="override-grid">
-                            <article className="override-card">
-                              <span>Type</span>
-                              <strong>{renderMcpTypeLabel(selectedMcpServer.config.type)}</strong>
-                            </article>
-                            <article className="override-card">
-                              <span>Command</span>
-                              <strong>{selectedMcpServer.config.command || "n/a"}</strong>
-                            </article>
-                            <article className="override-card">
-                              <span>URL</span>
-                              <strong>{selectedMcpServer.config.url || "n/a"}</strong>
-                            </article>
-                            <article className="override-card">
-                              <span>Tool timeout</span>
-                              <strong>{String(selectedMcpServer.config.toolTimeout)}</strong>
-                            </article>
-                            <article className="override-card">
-                              <span>Args</span>
-                              <strong>{renderEnabledList(selectedMcpServer.config.args)}</strong>
-                            </article>
-                            <article className="override-card">
-                              <span>Whitelist</span>
-                              <strong>
-                                {selectedMcpServer.config.enabledTools.length === 1 &&
-                                selectedMcpServer.config.enabledTools[0] === "*"
-                                  ? "all tools"
-                                  : renderEnabledList(selectedMcpServer.config.enabledTools)}
-                              </strong>
-                            </article>
-                            <article className="override-card">
-                              <span>Env</span>
-                              <strong>{Object.keys(selectedMcpServer.config.env).length ? JSON.stringify(selectedMcpServer.config.env) : "none"}</strong>
-                            </article>
-                            <article className="override-card">
-                              <span>Headers</span>
-                              <strong>{Object.keys(selectedMcpServer.config.headers).length ? JSON.stringify(selectedMcpServer.config.headers) : "none"}</strong>
-                            </article>
-                          </div>
-                        )}
-                        <div className="action-row">
-                          {mcpMode === "edit" ? (
-                            <>
-                              <button
-                                className="ghost"
-                                onClick={() => {
-                                  setMcpDraft(mcpConfigToDraft(selectedMcpServer.config));
-                                  setMcpMode("view");
-                                }}
-                                disabled={!!pending}
-                              >
-                                Cancel
-                              </button>
-                              <button onClick={() => void updateMcpServer()} disabled={!!pending}>
-                                Save MCP server
-                              </button>
-                              <button className="danger" onClick={() => void deleteMcpServer()} disabled={!!pending}>
-                                Delete
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              <button
-                                className="ghost"
-                                onClick={() => {
-                                  setMcpDraft(mcpConfigToDraft(selectedMcpServer.config));
-                                  setMcpMode("edit");
-                                }}
-                                disabled={!!pending}
-                              >
-                                Edit
-                              </button>
-                              <button className="danger" onClick={() => void deleteMcpServer()} disabled={!!pending}>
-                                Delete
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                </section>
                 </div>
             </>
           ) : (
