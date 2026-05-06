@@ -3,6 +3,7 @@
 import json
 import time
 import uuid
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -110,8 +111,15 @@ class SoulCronService(CronService):
             metadata["is_group"] = bool(raw["is_group"])
         return metadata
 
-    def _load_jobs(self) -> tuple[list[CronJob], int]:
-        """Override parent loader so SoulCronPayload fields survive a round-trip."""
+    def _load_jobs(self) -> tuple[list[CronJob], int] | None:
+        """Override parent loader so SoulCronPayload fields survive a round-trip.
+
+        Mirrors upstream's corruption-preservation contract: returns ``None``
+        when the store file exists but cannot be parsed, after renaming the
+        bad file with a ``.corrupt-<ts>`` suffix. The parent ``_load_store``
+        and ``start`` use that ``None`` to avoid silently overwriting a
+        recoverable on-disk store with an empty job list.
+        """
         jobs: list[CronJob] = []
         version = 1
         if self.store_path.exists():
@@ -150,8 +158,20 @@ class SoulCronService(CronService):
                         updated_at_ms=j.get("updatedAtMs", 0),
                         delete_after_run=j.get("deleteAfterRun", False),
                     ))
-            except Exception as e:
-                logger.warning("Failed to load cron store: {}", e)
+            except Exception:
+                backup = self.store_path.with_suffix(
+                    self.store_path.suffix + f".corrupt-{int(time.time())}"
+                )
+                with suppress(OSError):
+                    self.store_path.rename(backup)
+                logger.exception(
+                    "Failed to load soul cron store at {}. "
+                    "Corrupt file preserved at {}. "
+                    "Refusing to overwrite to avoid data loss.",
+                    self.store_path,
+                    backup,
+                )
+                return None
         return jobs, version
 
     def _save_store(self) -> None:
@@ -199,8 +219,8 @@ class SoulCronService(CronService):
             ],
         }
 
-        self.store_path.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+        self._atomic_write(
+            self.store_path, json.dumps(data, indent=2, ensure_ascii=False)
         )
 
     def _merge_action(self) -> None:
