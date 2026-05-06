@@ -37,7 +37,8 @@ from nanobot_soulboard.schemas import (
     PromptLinkDirsResponse,
     SessionDetailResponse,
     SessionSummaryResponse,
-    SkillRegistryEntryResponse,
+    SkillPoolEntryResponse,
+    SkillPoolResponse,
     SkillRegistryResponse,
     SoulPromptFileResponse,
     SoulPromptFilesResponse,
@@ -53,7 +54,7 @@ from nanobot_soulboard.schemas import (
     UpdateSoulPromptFilesRequest,
     UpdateSoulRequest,
 )
-from nanobot_soulboard.skills import count_skill_md_tokens, count_text_tokens, skill_summary
+from nanobot_soulboard.skills import count_text_tokens, skill_summary
 
 
 def _build_session_metadata(key: str) -> dict[str, str]:
@@ -174,28 +175,24 @@ def _list_soul_skills(spec: SoulSpec) -> list[SoulSkillResponse]:
 
 
 def _build_skill_registry_response(supervisor: SoulSupervisor) -> SkillRegistryResponse:
-    items: list[SkillRegistryEntryResponse] = []
-    for raw_path in supervisor.list_skill_registry():
-        skill_dir = Path(raw_path).expanduser()
-        skill_md = skill_dir / "SKILL.md"
-        exists = skill_dir.is_dir() and skill_md.is_file()
-        name: str | None
-        description: str | None
-        token_count: int | None
-        if exists:
-            name, description = skill_summary(skill_dir)
-            token_count = count_skill_md_tokens(skill_dir)
-        else:
-            name, description = None, None
-            token_count = None
-        items.append(SkillRegistryEntryResponse(
-            path=raw_path,
-            exists=exists,
-            name=name,
-            description=description,
-            token_count=token_count,
-        ))
-    return SkillRegistryResponse(items=items)
+    pools_cache = supervisor.get_skill_pools()
+    pools: list[SkillPoolResponse] = []
+    for raw_path in supervisor.list_skill_pools():
+        pool_root = Path(raw_path).expanduser()
+        exists = pool_root.is_dir()
+        entries = pools_cache.get(raw_path, [])
+        skills = [
+            SkillPoolEntryResponse(
+                skill_path=str(entry.skill_dir),
+                relative_path=entry.relative_path,
+                name=entry.name,
+                description=entry.description,
+                token_count=entry.token_count,
+            )
+            for entry in entries
+        ]
+        pools.append(SkillPoolResponse(path=raw_path, exists=exists, skills=skills))
+    return SkillRegistryResponse(pools=pools)
 
 
 def _get_state(request: Request) -> AppState:
@@ -303,6 +300,7 @@ def create_app(
             soulboard_config_path=resolved_soulboard_config_path,
         )
         app.state.chat_streams = ChatStreamManager()
+        supervisor.refresh_skill_pools()
         for spec in supervisor.list_specs():
             _sync_soul_workspace(spec)
         await supervisor.start_autostart_souls()
@@ -403,10 +401,11 @@ def create_app(
     @app.get(
         "/api/skill-registry",
         response_model=SkillRegistryResponse,
-        summary="List Global Skill Registry",
+        summary="List Global Skill Pools",
         description=(
-            "Return the configured global skill registry: a list of skill directory paths plus parsed "
-            "SKILL.md frontmatter (name, description) and on-disk existence flag."
+            "Return the configured global skill pools and the skills loaded from each. Each pool path is "
+            "walked recursively for subdirectories with a valid SKILL.md frontmatter; entries lacking a "
+            "valid header are skipped (and logged) rather than returned here."
         ),
     )
     def get_skill_registry(request: Request) -> SkillRegistryResponse:
@@ -417,19 +416,33 @@ def create_app(
         "/api/skill-registry",
         response_model=SkillRegistryResponse,
         responses={400: {"model": ErrorResponse}},
-        summary="Update Global Skill Registry",
+        summary="Update Global Skill Pools",
         description=(
-            "Replace the configured global skill registry list. Each entry must point to a skill directory "
-            "containing a SKILL.md file. Skill content is not edited through this API; the registry is "
-            "list-management only."
+            "Replace the configured global skill pool list. Each entry is a pool directory whose "
+            "subdirectories with valid SKILL.md frontmatter are loaded as skills. Persisting also reloads "
+            "the in-memory pool cache."
         ),
     )
     def update_skill_registry(request: Request, body: UpdateSkillRegistryRequest) -> SkillRegistryResponse:
         supervisor = _get_supervisor(request)
         try:
-            supervisor.update_skill_registry(body.items)
+            supervisor.update_skill_pools(body.items)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _build_skill_registry_response(supervisor)
+
+    @app.post(
+        "/api/skill-registry/refresh",
+        response_model=SkillRegistryResponse,
+        summary="Refresh Skill Pools",
+        description=(
+            "Re-walk every configured skill pool from disk and rebuild the in-memory skill cache. Use "
+            "this after adding or modifying SKILL.md files inside a configured pool."
+        ),
+    )
+    def refresh_skill_registry(request: Request) -> SkillRegistryResponse:
+        supervisor = _get_supervisor(request)
+        supervisor.refresh_skill_pools()
         return _build_skill_registry_response(supervisor)
 
     @app.get(
@@ -777,18 +790,19 @@ def create_app(
         "/api/souls/{soul_id}/skills",
         response_model=list[SoulSkillResponse],
         responses={404: {"model": ErrorResponse}, 400: {"model": ErrorResponse}},
-        summary="Add Soul Skill From Registry",
+        summary="Add Soul Skill From Pools",
         description=(
-            "Materialize one global skill registry entry into this soul's workspace skills/ folder. "
-            "Mode 'symlink' soft-links the registry directory; mode 'copy' creates an independent copy."
+            "Materialize a skill from one of the configured global skill pools into this soul's "
+            "workspace skills/ folder. Mode 'symlink' soft-links the pool skill directory; mode 'copy' "
+            "creates an independent copy."
         ),
     )
     def add_soul_skill(request: Request, soul_id: str, body: AddSoulSkillRequest) -> list[SoulSkillResponse]:
         supervisor = _get_supervisor(request)
         try:
-            supervisor.add_soul_skill_from_registry(
+            supervisor.add_soul_skill_from_pools(
                 soul_id,
-                registry_path=body.registry_path,
+                skill_path=body.skill_path,
                 target_name=body.name,
                 mode=body.mode,
             )

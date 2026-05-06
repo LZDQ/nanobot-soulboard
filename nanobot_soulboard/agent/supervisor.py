@@ -31,6 +31,7 @@ from nanobot_soulboard.config import (
     validate_soul_id,
 )
 from nanobot_soulboard.cron import SoulCronPayload, SoulCronService
+from nanobot_soulboard.skills import DiscoveredSkill, discover_skills_in_pool
 
 SOUL_PROMPT_FILES = ("AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "SYSTEM.md")
 
@@ -179,6 +180,8 @@ class SoulSupervisor:
         self.base_config_path = base_config_path
         self.provider_factory = provider_factory
         self._running_souls: dict[str, RunningSoul] = {}
+        self._skill_pool_cache: dict[str, list[DiscoveredSkill]] = {}
+        self._skill_pools_loaded: bool = False
 
     def list_specs(self) -> list[SoulSpec]:
         """List all resolved soul specs."""
@@ -226,6 +229,7 @@ class SoulSupervisor:
         self.soulboard_config = load_soulboard_config(self.config_path)
         if self.base_config_path is not None:
             self.base_config = load_config(self.base_config_path)
+        self.refresh_skill_pools()
         dirty = False
         for soul_id in list(self.soulboard_config.souls):
             overrides = self.soulboard_config.souls[soul_id]
@@ -270,48 +274,65 @@ class SoulSupervisor:
         save_soulboard_config(self.soulboard_config, self.config_path)
         return list(self.soulboard_config.prompt_link_dirs)
 
-    def list_skill_registry(self) -> list[str]:
-        """Return the configured global skill registry paths."""
+    def list_skill_pools(self) -> list[str]:
+        """Return the configured global skill pool paths."""
         return list(self.soulboard_config.skill_registry)
 
-    def update_skill_registry(self, items: list[str]) -> list[str]:
-        """Replace the configured global skill registry paths."""
+    def update_skill_pools(self, items: list[str]) -> list[str]:
+        """Replace the configured global skill pool paths and reload the cache."""
         self.soulboard_config = self.soulboard_config.model_copy(update={"skill_registry": items})
         save_soulboard_config(self.soulboard_config, self.config_path)
+        self.refresh_skill_pools()
         return list(self.soulboard_config.skill_registry)
 
-    def resolve_skill_registry_entry(self, raw_path: str) -> Path:
-        """Resolve and validate one configured registry entry.
+    def refresh_skill_pools(self) -> dict[str, list[DiscoveredSkill]]:
+        """Walk every configured pool and rebuild the in-memory skill cache."""
+        cache: dict[str, list[DiscoveredSkill]] = {}
+        for raw_path in self.soulboard_config.skill_registry:
+            pool_root = Path(raw_path).expanduser()
+            if not pool_root.is_dir():
+                logger.warning("Skill pool path is not a directory: {}", raw_path)
+                cache[raw_path] = []
+                continue
+            cache[raw_path] = discover_skills_in_pool(raw_path, pool_root)
+        self._skill_pool_cache = cache
+        self._skill_pools_loaded = True
+        return cache
 
-        Raises ValueError if the path is not in the registry, missing on disk,
-        or does not contain a SKILL.md.
-        """
-        registered = set(self.soulboard_config.skill_registry)
-        if raw_path not in registered:
-            raise ValueError(f"Unknown skill registry entry: {raw_path}")
-        skill_dir = Path(raw_path).expanduser()
-        if not skill_dir.is_dir():
-            raise ValueError(f"Skill registry entry is not a directory: {raw_path}")
-        if not (skill_dir / "SKILL.md").is_file():
-            raise ValueError(f"Skill registry entry has no SKILL.md: {raw_path}")
-        return skill_dir
+    def get_skill_pools(self) -> dict[str, list[DiscoveredSkill]]:
+        """Return cached pool→skills, populating the cache on first access."""
+        if not self._skill_pools_loaded:
+            self.refresh_skill_pools()
+        return self._skill_pool_cache
 
-    def add_soul_skill_from_registry(
+    def resolve_skill_in_pools(self, skill_path: str) -> DiscoveredSkill:
+        """Look up a skill in the cached pools by its absolute skill directory path."""
+        target = Path(skill_path).expanduser().resolve()
+        for entries in self.get_skill_pools().values():
+            for entry in entries:
+                try:
+                    if entry.skill_dir.resolve() == target:
+                        return entry
+                except OSError:
+                    continue
+        raise ValueError(f"Unknown skill: {skill_path}")
+
+    def add_soul_skill_from_pools(
         self,
         soul_id: str,
-        registry_path: str,
+        skill_path: str,
         target_name: str | None = None,
         mode: Literal["symlink", "copy"] = "symlink",
     ) -> Path:
-        """Materialize a registry skill into a soul's workspace skills/ dir.
+        """Materialize a pool-resident skill into a soul's workspace skills/ dir.
 
         Returns the resulting skill directory path inside the soul workspace.
         """
         if mode not in ("symlink", "copy"):
             raise ValueError(f"Unknown skill add mode: {mode}")
         spec = self.get_spec(soul_id)
-        skill_dir = self.resolve_skill_registry_entry(registry_path)
-        name = (target_name or skill_dir.name).strip()
+        skill = self.resolve_skill_in_pools(skill_path)
+        name = (target_name or skill.skill_dir.name).strip()
         if not name or "/" in name or name in (".", ".."):
             raise ValueError(f"Invalid target skill name: {name!r}")
         soul_skills_root = spec.workspace / "skills"
@@ -320,9 +341,9 @@ class SoulSupervisor:
         if target_path.exists() or target_path.is_symlink():
             raise ValueError(f"Skill already exists in soul workspace: {name}")
         if mode == "symlink":
-            target_path.symlink_to(skill_dir)
+            target_path.symlink_to(skill.skill_dir)
         else:
-            shutil.copytree(skill_dir, target_path, symlinks=False)
+            shutil.copytree(skill.skill_dir, target_path, symlinks=False)
         return target_path
 
     def delete_soul_skill(self, soul_id: str, name: str) -> None:

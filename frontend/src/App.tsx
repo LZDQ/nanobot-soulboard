@@ -43,16 +43,22 @@ type SoulSkill = {
   link_target: string | null;
 };
 
-type SkillRegistryEntry = {
-  path: string;
-  exists: boolean;
-  name: string | null;
+type SkillPoolEntry = {
+  skill_path: string;
+  relative_path: string;
+  name: string;
   description: string | null;
   token_count: number | null;
 };
 
+type SkillPool = {
+  path: string;
+  exists: boolean;
+  skills: SkillPoolEntry[];
+};
+
 type SkillRegistryResponse = {
-  items: SkillRegistryEntry[];
+  pools: SkillPool[];
 };
 
 type Soul = {
@@ -695,7 +701,7 @@ export default function App() {
   const [mcpServers, setMcpServers] = useState<MCPServer[]>([]);
   const [appLinks, setAppLinks] = useState<string[]>([]);
   const [promptLinkDirs, setPromptLinkDirs] = useState<PromptLinkDir[]>([]);
-  const [skillRegistry, setSkillRegistry] = useState<SkillRegistryEntry[]>([]);
+  const [skillPools, setSkillPools] = useState<SkillPool[]>([]);
   const [cronJobRegistry, setCronJobRegistry] = useState<CronJobRegistryEntry[]>([]);
   const [promptFiles, setPromptFiles] = useState<SoulPromptFile[]>([]);
   const [cronJobs, setCronJobs] = useState<CronJob[] | null>(null);
@@ -836,7 +842,19 @@ export default function App() {
 
   async function refreshSkillRegistry(): Promise<void> {
     const response = await api<SkillRegistryResponse>("/api/skill-registry");
-    setSkillRegistry(response.items);
+    setSkillPools(response.pools);
+  }
+
+  async function reloadSkillPools(): Promise<void> {
+    await runAction("skill-registry-refresh", async () => {
+      const response = await api<SkillRegistryResponse>("/api/skill-registry/refresh", {
+        method: "POST",
+      });
+      setSkillPools(response.pools);
+      toast.success("Skill pools reloaded");
+    }).catch((cause) => {
+      notifyError(cause);
+    });
   }
 
   async function refreshCronJobRegistry(): Promise<void> {
@@ -1558,10 +1576,13 @@ export default function App() {
         method: "PATCH",
         body: JSON.stringify({ items: normalized }),
       });
-      setSkillRegistry(response.items);
+      setSkillPools(response.pools);
       setIsEditingSkillRegistry(false);
       setNewSkillRegistryPath("");
-      if (addSkillSelection && !response.items.some((item) => item.path === addSkillSelection)) {
+      const stillExists = response.pools.some((pool) =>
+        pool.skills.some((skill) => skill.skill_path === addSkillSelection),
+      );
+      if (addSkillSelection && !stillExists) {
         setAddSkillSelection("");
       }
     }).catch((cause) => {
@@ -1572,21 +1593,21 @@ export default function App() {
   async function addSkillRegistryEntry() {
     const item = newSkillRegistryPath.trim();
     if (!item) {
-      notifyError("Skill path is required");
+      notifyError("Skill pool path is required");
       return;
     }
-    await saveSkillRegistry([...skillRegistry.map((entry) => entry.path), item]);
+    await saveSkillRegistry([...skillPools.map((entry) => entry.path), item]);
   }
 
   async function deleteSkillRegistryEntry(path: string) {
-    await saveSkillRegistry(skillRegistry.map((entry) => entry.path).filter((item) => item !== path));
+    await saveSkillRegistry(skillPools.map((entry) => entry.path).filter((item) => item !== path));
   }
 
   async function addSoulSkill() {
     if (!selectedSoul) return;
-    const registry_path = addSkillSelection;
-    if (!registry_path) {
-      notifyError("Pick a skill from the registry");
+    const skill_path = addSkillSelection;
+    if (!skill_path) {
+      notifyError("Pick a skill from the pools");
       return;
     }
     const targetName = addSkillTargetName.trim();
@@ -1594,7 +1615,7 @@ export default function App() {
       const response = await api<SoulSkill[]>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/skills`, {
         method: "POST",
         body: JSON.stringify({
-          registry_path,
+          skill_path,
           name: targetName || null,
           mode: addSkillMode,
         }),
@@ -1615,7 +1636,7 @@ export default function App() {
     const skill = selectedSoul.skills.find((entry) => entry.name === name);
     const isLink = !!skill?.link_target;
     const message = isLink
-      ? `Remove the soft link "${name}" from this soul? The global registry source will be untouched.`
+      ? `Remove the soft link "${name}" from this soul? The pool source will be untouched.`
       : `Permanently delete the soul-specific skill "${name}"? Its workspace files will be removed.`;
     if (!window.confirm(message)) {
       return;
@@ -2063,18 +2084,31 @@ export default function App() {
 
               <details className="tools-subpanel">
                 <summary className="panel-head tools-summary">
-                  <h3>Skill registry</h3>
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={(event) => {
-                      event.preventDefault();
-                      setIsEditingSkillRegistry((current) => !current);
-                    }}
-                    disabled={!!pending}
-                  >
-                    {isEditingSkillRegistry ? "Done" : "Edit"}
-                  </button>
+                  <h3>Skill pools</h3>
+                  <div style={{ display: "flex", gap: "0.5rem" }}>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        void reloadSkillPools();
+                      }}
+                      disabled={!!pending}
+                    >
+                      Refresh
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        setIsEditingSkillRegistry((current) => !current);
+                      }}
+                      disabled={!!pending}
+                    >
+                      {isEditingSkillRegistry ? "Done" : "Edit"}
+                    </button>
+                  </div>
                 </summary>
                 <div className="tools-subpanel-body">
                   {isEditingSkillRegistry ? (
@@ -2083,25 +2117,25 @@ export default function App() {
                         <input
                           value={newSkillRegistryPath}
                           onChange={(event) => setNewSkillRegistryPath(event.target.value)}
-                          placeholder="~/skills/my-skill"
+                          placeholder="~/skills"
                           disabled={!!pending}
                         />
                         <button type="button" onClick={() => void addSkillRegistryEntry()} disabled={!!pending}>
-                          Add
+                          Add pool
                         </button>
                       </div>
                     </div>
                   ) : null}
                   <div className="prompt-link-dir-list">
-                    {skillRegistry.length ? skillRegistry.map((item) => (
-                      <article key={item.path} className="prompt-link-dir-card">
+                    {skillPools.length ? skillPools.map((pool) => (
+                      <article key={pool.path} className="prompt-link-dir-card">
                         <div className="prompt-link-dir-head">
-                          <code>{item.path}</code>
+                          <code>{pool.path}</code>
                           {isEditingSkillRegistry ? (
                             <button
                               type="button"
                               className="ghost"
-                              onClick={() => void deleteSkillRegistryEntry(item.path)}
+                              onClick={() => void deleteSkillRegistryEntry(pool.path)}
                               disabled={!!pending}
                             >
                               Remove
@@ -2109,19 +2143,42 @@ export default function App() {
                           ) : null}
                         </div>
                         <div className="prompt-link-file-pills">
-                          <span className={`pill ${item.exists ? "live" : "idle"}`}>
-                            {item.exists ? "SKILL.md present" : "missing"}
+                          <span className={`pill ${pool.exists ? "live" : "idle"}`}>
+                            {pool.exists ? "pool present" : "missing"}
                           </span>
-                          {item.name ? <span className="pill live">{item.name}</span> : null}
-                          {item.token_count !== null && item.token_count !== undefined ? (
-                            <span className="pill idle">{item.token_count.toLocaleString()} tokens</span>
-                          ) : null}
+                          <span className="pill idle">
+                            {pool.skills.length} skill{pool.skills.length === 1 ? "" : "s"}
+                          </span>
                         </div>
-                        {item.description ? (
-                          <p className="muted skill-registry-desc">{item.description}</p>
+                        {pool.skills.length ? (
+                          <div className="skill-list" style={{ marginTop: "0.5rem" }}>
+                            {pool.skills.map((skill) => (
+                              <details key={skill.skill_path} className="skill-entry-details">
+                                <summary className="skill-entry-summary">
+                                  <div>
+                                    <strong>{skill.name}</strong>
+                                    <code style={{ marginLeft: "0.5rem" }}>{skill.relative_path}</code>
+                                    {skill.token_count !== null && skill.token_count !== undefined ? (
+                                      <span className="pill idle" style={{ marginLeft: "0.5rem" }}>
+                                        {skill.token_count.toLocaleString()} tokens
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                </summary>
+                                {skill.description ? (
+                                  <p className="muted skill-registry-desc">{skill.description}</p>
+                                ) : null}
+                                <p className="muted skill-entry-target">
+                                  <code>{skill.skill_path}</code>
+                                </p>
+                              </details>
+                            ))}
+                          </div>
+                        ) : pool.exists ? (
+                          <p className="muted skill-registry-desc">No skills with valid SKILL.md frontmatter.</p>
                         ) : null}
                       </article>
-                    )) : <p className="muted">No skills registered.</p>}
+                    )) : <p className="muted">No skill pools configured.</p>}
                   </div>
                 </div>
               </details>
@@ -2868,16 +2925,23 @@ export default function App() {
                           <select
                             value={addSkillSelection}
                             onChange={(event) => setAddSkillSelection(event.target.value)}
-                            disabled={!skillRegistry.length || !!pending}
+                            disabled={!skillPools.some((pool) => pool.skills.length) || !!pending}
                           >
                             <option value="">
-                              {skillRegistry.length ? "Add from registry…" : "No registry entries"}
+                              {skillPools.some((pool) => pool.skills.length)
+                                ? "Add from pools…"
+                                : "No skills loaded"}
                             </option>
-                            {skillRegistry.map((entry) => (
-                              <option key={entry.path} value={entry.path} disabled={!entry.exists}>
-                                {entry.name || entry.path}
-                                {entry.exists ? "" : " (missing)"}
-                              </option>
+                            {skillPools.map((pool) => (
+                              pool.skills.length ? (
+                                <optgroup key={pool.path} label={pool.path}>
+                                  {pool.skills.map((skill) => (
+                                    <option key={skill.skill_path} value={skill.skill_path}>
+                                      {skill.name} ({skill.relative_path})
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              ) : null
                             ))}
                           </select>
                           {addSkillSelection ? (
@@ -2898,7 +2962,7 @@ export default function App() {
                                 checked={addSkillMode === "symlink"}
                                 onChange={() => setAddSkillMode("symlink")}
                               />
-                              <span><strong>Soft link</strong> &mdash; track the registry source live</span>
+                              <span><strong>Soft link</strong> &mdash; track the pool source live</span>
                             </label>
                             <label className="prompt-link-mode-option">
                               <input

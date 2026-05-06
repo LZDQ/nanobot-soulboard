@@ -183,12 +183,12 @@ class SoulSkillResponse(BaseModel):
     )
 
 
-class SkillRegistryEntryResponse(BaseModel):
-    """One global skill registry entry (path + parsed metadata)."""
+class SkillPoolEntryResponse(BaseModel):
+    """One skill discovered inside a configured pool."""
 
-    path: str
-    exists: bool
-    name: str | None = None
+    skill_path: str = Field(description="Absolute path to the skill directory.")
+    relative_path: str = Field(description="Path relative to the pool root, posix-style.")
+    name: str = Field(description="Skill name from SKILL.md frontmatter.")
     description: str | None = None
     token_count: int | None = Field(
         default=None,
@@ -196,37 +196,47 @@ class SkillRegistryEntryResponse(BaseModel):
     )
 
 
-class SkillRegistryResponse(BaseModel):
-    """Configured global skill registry."""
+class SkillPoolResponse(BaseModel):
+    """One configured skill pool with its discovered skills."""
 
-    items: list[SkillRegistryEntryResponse]
+    path: str = Field(description="The configured pool path (raw, unexpanded).")
+    exists: bool = Field(description="Whether the pool path resolves to a directory on disk.")
+    skills: list[SkillPoolEntryResponse]
+
+
+class SkillRegistryResponse(BaseModel):
+    """Configured global skill pools and their loaded skills."""
+
+    pools: list[SkillPoolResponse]
 
 
 class UpdateSkillRegistryRequest(BaseModel):
-    """Replace the configured global skill registry list."""
+    """Replace the configured global skill pool list."""
 
     items: list[str]
 
 
 class AddSoulSkillRequest(BaseModel):
-    """Request body for adding a skill from the global registry to a soul."""
+    """Request body for adding a skill loaded from the pools to a soul."""
 
-    registry_path: str = Field(
-        description="Skill registry entry path. Must already be configured in the global registry."
+    skill_path: str = Field(
+        description=(
+            "Absolute path to a skill directory. Must be a skill discovered inside one of the "
+            "configured global skill pools."
+        )
     )
     name: str | None = Field(
         default=None,
         description=(
             "Optional override for the skill directory name inside the soul workspace. Defaults to the "
-            "registry entry's directory basename."
+            "skill's directory basename."
         ),
     )
     mode: Literal["symlink", "copy"] = Field(
         default="symlink",
         description=(
             "How to materialize the skill into the soul workspace. 'symlink' soft-links the directory so "
-            "the soul tracks the registry source live (filesystem is the source of truth). 'copy' creates "
-            "an independent writable copy."
+            "the soul tracks the pool source live. 'copy' creates an independent writable copy."
         ),
     )
 
