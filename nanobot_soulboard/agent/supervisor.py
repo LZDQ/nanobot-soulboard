@@ -2,6 +2,7 @@
 
 import asyncio
 import shutil
+from contextlib import suppress
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
@@ -158,7 +159,41 @@ class RunningSoul:
     channel_manager: ChannelManager
     agent_task: asyncio.Task | None = None
     channels_task: asyncio.Task | None = None
+    mcp_owner_task: asyncio.Task | None = None
+    mcp_shutdown: asyncio.Event | None = None
     cron_started: bool = False
+
+
+async def _own_mcp_lifecycle(
+    agent_loop: SoulAgentLoop,
+    ready: asyncio.Future,
+    shutdown: asyncio.Event,
+) -> None:
+    """Long-lived task that owns this soul's MCP cancel scopes.
+
+    nanobot's streamable_http_client opens an anyio CancelScope in whatever
+    task calls connect. If we let agent_task own that scope (via run() ->
+    _connect_mcp), a transport-side cancel cascade (peer drops the connection)
+    delivers cancellation forever via loop.call_soon — agent_task is too far
+    inside its message loop to ever exit the scope. Same task must enter and
+    exit, so this task does both. See HKUDS/nanobot#3638.
+    """
+    try:
+        await agent_loop._connect_mcp()
+    except BaseException as e:
+        if not ready.done():
+            ready.set_exception(e)
+        return
+    if not ready.done():
+        ready.set_result(None)
+    try:
+        await shutdown.wait()
+    except asyncio.CancelledError:
+        pass
+    try:
+        await agent_loop.close_mcp()
+    except (RuntimeError, BaseExceptionGroup):
+        pass
 
 
 class SoulSupervisor:
@@ -746,6 +781,22 @@ class SoulSupervisor:
         if not running.cron_started:
             await running.cron_service.start()
             running.cron_started = True
+        # Pre-connect MCP from a dedicated owner task, so the cancel scopes
+        # bind to a task that can also exit them. Must complete before run()
+        # starts (run() calls _connect_mcp itself, which is then a no-op).
+        if running.agent_loop._mcp_servers and (
+            not running.mcp_owner_task or running.mcp_owner_task.done()
+        ):
+            running.mcp_shutdown = asyncio.Event()
+            ready = asyncio.get_running_loop().create_future()
+            running.mcp_owner_task = asyncio.create_task(
+                _own_mcp_lifecycle(running.agent_loop, ready, running.mcp_shutdown),
+                name=f"mcp-owner:{soul_id}",
+            )
+            try:
+                await ready
+            except Exception as e:
+                logger.warning("Soul '{}' MCP connect failed: {}", soul_id, e)
         if not running.agent_task or running.agent_task.done():
             running.agent_task = asyncio.create_task(running.agent_loop.run())
         if running.channel_manager.enabled_channels and (
@@ -768,7 +819,22 @@ class SoulSupervisor:
         if running is None:
             return
         running.agent_loop.stop()
-        await running.agent_loop.close_mcp()
+        # Tear down MCP via the owner task so close_mcp runs on the same task
+        # that entered the cancel scopes.
+        if running.mcp_shutdown is not None:
+            running.mcp_shutdown.set()
+        if running.mcp_owner_task and not running.mcp_owner_task.done():
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(running.mcp_owner_task), timeout=10.0
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Soul '{}' MCP owner did not exit in 10s; cancelling", soul_id)
+                running.mcp_owner_task.cancel()
+                with suppress(BaseException):
+                    await running.mcp_owner_task
+            except Exception:
+                pass
         current_loop = asyncio.get_running_loop()
         if running.agent_task and running.agent_task.get_loop() is current_loop and not running.agent_task.get_loop().is_closed():
             await asyncio.gather(running.agent_task, return_exceptions=True)
