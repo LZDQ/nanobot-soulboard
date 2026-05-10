@@ -354,30 +354,39 @@ pre {
   color: var(--muted);
 }
 
+.soul-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-top: 0.55rem;
+}
+
+.soul-card-foot code {
+  display: inline-block;
+  margin-top: 0;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .soul-card-groups {
   display: flex;
   flex-wrap: wrap;
   gap: 0.3rem;
-  margin-top: 0.5rem;
+  flex-shrink: 0;
+  justify-content: flex-end;
 }
 
 .soul-group-filter {
-  margin-bottom: 0.6rem;
-}
-
-.soul-group-filter label {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.soul-group-filter span {
-  font-size: 0.78rem;
-  color: var(--muted);
-}
-
-.soul-group-filter select {
-  flex: 1;
+  margin: 0 auto;
+  padding: 0.3rem 0.55rem;
+  font-size: 0.85rem;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: rgba(255, 255, 255, 0.85);
 }
 
 .group-editor {

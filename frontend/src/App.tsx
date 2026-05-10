@@ -1862,6 +1862,21 @@ export default function App() {
         <section className="panel souls-panel">
           <div className="panel-head">
             <h2>Souls</h2>
+            {allSoulGroups.length ? (
+              <select
+                className="soul-group-filter"
+                value={soulGroupFilter}
+                onChange={(event) => setSoulGroupFilter(event.target.value)}
+                aria-label="Filter souls by group"
+              >
+                <option value="">All groups</option>
+                {allSoulGroups.map((group) => (
+                  <option key={group} value={group}>
+                    {group}
+                  </option>
+                ))}
+              </select>
+            ) : null}
             <button
               className="ghost"
               onClick={() => {
@@ -1881,24 +1896,6 @@ export default function App() {
               Refresh
             </button>
           </div>
-          {allSoulGroups.length ? (
-            <div className="soul-group-filter">
-              <label>
-                <span>Group</span>
-                <select
-                  value={soulGroupFilter}
-                  onChange={(event) => setSoulGroupFilter(event.target.value)}
-                >
-                  <option value="">All groups</option>
-                  {allSoulGroups.map((group) => (
-                    <option key={group} value={group}>
-                      {group}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-          ) : null}
           <div className="soul-list">
             {visibleSouls.map((soul) => (
               <button
@@ -1910,14 +1907,16 @@ export default function App() {
                   <strong>{soul.soul_id}</strong>
                   <span className={`pill ${soul.running ? "live" : "idle"}`}>{soul.running ? "running" : "stopped"}</span>
                 </div>
-                <code>{soul.workspace}</code>
-                {soul.overrides.groups && soul.overrides.groups.length ? (
-                  <div className="soul-card-groups">
-                    {soul.overrides.groups.map((group) => (
-                      <span key={group} className="pill idle">{group}</span>
-                    ))}
-                  </div>
-                ) : null}
+                <div className="soul-card-foot">
+                  <code>{soul.workspace}</code>
+                  {soul.overrides.groups && soul.overrides.groups.length ? (
+                    <div className="soul-card-groups">
+                      {soul.overrides.groups.map((group) => (
+                        <span key={group} className="group-chip">{group}</span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
               </button>
             ))}
             {!souls.length ? (
@@ -2071,9 +2070,10 @@ export default function App() {
                     placeholder="cli, telegram"
                   />
                 </label>
-                <label>
+                <label htmlFor="create-soul-groups-input">
                   <span>Groups (display only)</span>
                   <GroupListEditor
+                    inputId="create-soul-groups-input"
                     value={draft.groups}
                     onChange={(next) => setDraft((current) => ({ ...current, groups: next }))}
                     suggestions={allSoulGroups}
@@ -2970,9 +2970,10 @@ export default function App() {
                           placeholder="cli, telegram"
                         />
                       </label>
-                      <label>
+                      <label htmlFor="edit-soul-groups-input">
                         <span>Groups (display only)</span>
                         <GroupListEditor
+                          inputId="edit-soul-groups-input"
                           value={draft.groups}
                           onChange={(next) => setDraft((current) => ({ ...current, groups: next }))}
                           suggestions={allSoulGroups}
