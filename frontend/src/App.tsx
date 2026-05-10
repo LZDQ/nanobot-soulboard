@@ -1328,8 +1328,6 @@ export default function App() {
     setSoulError("");
     setSessionDetail(null);
     setSessionKey(pendingSessionKey);
-    setSessions([]);
-    setSessionsTotal(0);
     setChatContent("");
     setChatReasoning("");
     setFinalizedMessages([]);
@@ -1345,7 +1343,13 @@ export default function App() {
   }, [selectedSoul?.soul_id]);
 
   useEffect(() => {
-    if (!selectedSoulId) return;
+    if (!selectedSoulId) {
+      setSessions([]);
+      setSessionsTotal(0);
+      return;
+    }
+    setSessions([]);
+    setSessionsTotal(0);
     let cancelled = false;
     void (async () => {
       try {
