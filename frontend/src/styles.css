@@ -354,6 +354,101 @@ pre {
   color: var(--muted);
 }
 
+.soul-card-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.5rem;
+}
+
+.soul-group-filter {
+  margin-bottom: 0.6rem;
+}
+
+.soul-group-filter label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.soul-group-filter span {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.soul-group-filter select {
+  flex: 1;
+}
+
+.group-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.group-editor-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  min-height: 1.6rem;
+}
+
+.group-editor-empty {
+  font-size: 0.78rem;
+}
+
+.group-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(183, 77, 18, 0.12);
+  color: var(--text);
+  font-size: 0.82rem;
+  border: 1px solid rgba(183, 77, 18, 0.25);
+}
+
+.group-chip-remove {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 0.1rem;
+}
+
+.group-chip-remove:hover {
+  color: rgba(183, 77, 18, 0.85);
+}
+
+.group-editor-input {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.group-editor-input input {
+  flex: 1;
+}
+
+.group-editor-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+.group-editor-suggestions .muted {
+  font-size: 0.75rem;
+}
+
+.group-suggestion {
+  font-size: 0.78rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+}
+
 .session-card > strong,
 .session-card > span {
   display: block;

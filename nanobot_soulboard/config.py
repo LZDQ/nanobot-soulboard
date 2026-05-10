@@ -45,6 +45,26 @@ class SoulOverrides(BaseModel):
         default=False,
         description="Whether soulboard should automatically start this soul runtime.",
     )
+    groups: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Display-only group tags for organizing souls in the frontend listing. The set of all "
+            "groups is inferred as the union across souls; group membership has no runtime effect."
+        ),
+    )
+
+    @field_validator("groups")
+    @classmethod
+    def _validate_groups(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            item = raw.strip()
+            if not item or item in seen:
+                continue
+            normalized.append(item)
+            seen.add(item)
+        return normalized
 
 
 class CronJobRegistryEntry(BaseModel):

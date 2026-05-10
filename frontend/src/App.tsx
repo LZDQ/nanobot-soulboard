@@ -16,6 +16,7 @@ type SoulOverrides = {
   mcp_servers: string[];
   mcp_http_headers: Record<string, Record<string, string>>;
   autostart: boolean;
+  groups: string[];
 };
 
 type MCPServerConfig = {
@@ -216,6 +217,7 @@ type DraftOverrides = {
   mcp_servers: string[];
   mcp_http_headers: Record<string, string>;
   autostart: boolean;
+  groups: string[];
 };
 
 type MCPServerDraft = {
@@ -341,6 +343,7 @@ function overridesToDraft(overrides: SoulOverrides): DraftOverrides {
       ]),
     ),
     autostart: overrides.autostart,
+    groups: [...(overrides.groups ?? [])],
   };
 }
 
@@ -389,6 +392,7 @@ function draftToOverrides(draft: DraftOverrides): SoulOverrides {
     mcp_servers: [...draft.mcp_servers],
     mcp_http_headers: mcpHttpHeaders,
     autostart: draft.autostart,
+    groups: [...draft.groups],
   };
 }
 
@@ -692,6 +696,116 @@ function formatCronSchedule(schedule: CronJobSchedule): string {
   return schedule.kind;
 }
 
+function GroupListEditor({
+  value,
+  onChange,
+  suggestions,
+  inputId,
+}: {
+  value: string[];
+  onChange: (next: string[]) => void;
+  suggestions: string[];
+  inputId?: string;
+}) {
+  const [input, setInput] = useState("");
+
+  function addRaw(raw: string) {
+    const additions = raw
+      .split(",")
+      .map((token) => token.trim())
+      .filter(Boolean);
+    if (!additions.length) {
+      setInput("");
+      return;
+    }
+    const seen = new Set(value);
+    const next = [...value];
+    let added = false;
+    for (const item of additions) {
+      if (!seen.has(item)) {
+        next.push(item);
+        seen.add(item);
+        added = true;
+      }
+    }
+    if (added) onChange(next);
+    setInput("");
+  }
+
+  function removeAt(index: number) {
+    onChange(value.filter((_, idx) => idx !== index));
+  }
+
+  const available = suggestions.filter((group) => !value.includes(group));
+
+  return (
+    <div className="group-editor">
+      <div className="group-editor-chips">
+        {value.length ? (
+          value.map((group, index) => (
+            <span key={`${group}-${index}`} className="group-chip">
+              <span>{group}</span>
+              <button
+                type="button"
+                className="group-chip-remove"
+                aria-label={`Remove ${group}`}
+                onClick={() => removeAt(index)}
+              >
+                ×
+              </button>
+            </span>
+          ))
+        ) : (
+          <span className="muted group-editor-empty">No groups</span>
+        )}
+      </div>
+      <div className="group-editor-input">
+        <input
+          id={inputId}
+          value={input}
+          onChange={(event) => setInput(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === ",") {
+              event.preventDefault();
+              addRaw(input);
+            } else if (event.key === "Backspace" && !input && value.length) {
+              event.preventDefault();
+              removeAt(value.length - 1);
+            }
+          }}
+          onBlur={() => {
+            if (input.trim()) addRaw(input);
+          }}
+          placeholder="Type a group name, press Enter"
+        />
+        <button
+          type="button"
+          className="ghost"
+          onClick={() => addRaw(input)}
+          disabled={!input.trim()}
+        >
+          Add
+        </button>
+      </div>
+      {available.length ? (
+        <div className="group-editor-suggestions">
+          <span className="muted">Existing:</span>
+          {available.map((group) => (
+            <button
+              key={group}
+              type="button"
+              className="ghost group-suggestion"
+              onClick={() => addRaw(group)}
+            >
+              + {group}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function App() {
   const initialFocusRef = useRef(getFocusFromUrl());
 
@@ -730,6 +844,7 @@ export default function App() {
     mcp_servers: [],
     mcp_http_headers: {},
     autostart: false,
+    groups: [],
   });
   const [mcpDraft, setMcpDraft] = useState<MCPServerDraft>(getEmptyMcpDraft());
   const [createMcpDraft, setCreateMcpDraft] = useState<MCPServerDraft>(getEmptyMcpDraft());
@@ -761,6 +876,7 @@ export default function App() {
   });
   const [mcpMode, setMcpMode] = useState<"view" | "edit" | "create">("view");
   const [socketState, setSocketState] = useState<"closed" | "connecting" | "open">("closed");
+  const [soulGroupFilter, setSoulGroupFilter] = useState<string>("");
   const socketRef = useRef<WebSocket | null>(null);
   const initializedRef = useRef(false);
 
@@ -768,6 +884,19 @@ export default function App() {
     () => souls.find((soul) => soul.soul_id === selectedSoulId) ?? null,
     [souls, selectedSoulId],
   );
+  const allSoulGroups = useMemo(() => {
+    const seen = new Set<string>();
+    for (const soul of souls) {
+      for (const group of soul.overrides.groups ?? []) {
+        if (group) seen.add(group);
+      }
+    }
+    return Array.from(seen).sort((a, b) => a.localeCompare(b));
+  }, [souls]);
+  const visibleSouls = useMemo(() => {
+    if (!soulGroupFilter) return souls;
+    return souls.filter((soul) => (soul.overrides.groups ?? []).includes(soulGroupFilter));
+  }, [souls, soulGroupFilter]);
   const visibleCronJobs = useMemo(() => {
     if (!cronJobs) {
       return cronJobs;
@@ -1106,6 +1235,12 @@ export default function App() {
   useEffect(() => {
     syncFocusToUrl(selectedSoulId, sessionKey);
   }, [selectedSoulId, sessionKey]);
+
+  useEffect(() => {
+    if (soulGroupFilter && !allSoulGroups.includes(soulGroupFilter)) {
+      setSoulGroupFilter("");
+    }
+  }, [soulGroupFilter, allSoulGroups]);
 
   useEffect(() => {
     const selected = mcpServers.find((server) => server.name === selectedMcpServerName);
@@ -1746,8 +1881,26 @@ export default function App() {
               Refresh
             </button>
           </div>
+          {allSoulGroups.length ? (
+            <div className="soul-group-filter">
+              <label>
+                <span>Group</span>
+                <select
+                  value={soulGroupFilter}
+                  onChange={(event) => setSoulGroupFilter(event.target.value)}
+                >
+                  <option value="">All groups</option>
+                  {allSoulGroups.map((group) => (
+                    <option key={group} value={group}>
+                      {group}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          ) : null}
           <div className="soul-list">
-            {souls.map((soul) => (
+            {visibleSouls.map((soul) => (
               <button
                 key={soul.soul_id}
                 className={`soul-card ${selectedSoulId === soul.soul_id ? "active" : ""}`}
@@ -1758,9 +1911,20 @@ export default function App() {
                   <span className={`pill ${soul.running ? "live" : "idle"}`}>{soul.running ? "running" : "stopped"}</span>
                 </div>
                 <code>{soul.workspace}</code>
+                {soul.overrides.groups && soul.overrides.groups.length ? (
+                  <div className="soul-card-groups">
+                    {soul.overrides.groups.map((group) => (
+                      <span key={group} className="pill idle">{group}</span>
+                    ))}
+                  </div>
+                ) : null}
               </button>
             ))}
-            {!souls.length ? <p className="muted">No souls configured yet.</p> : null}
+            {!souls.length ? (
+              <p className="muted">No souls configured yet.</p>
+            ) : !visibleSouls.length ? (
+              <p className="muted">No souls in group "{soulGroupFilter}".</p>
+            ) : null}
           </div>
 
           <div className="create-box">
@@ -1786,6 +1950,7 @@ export default function App() {
                   mcp_servers: [],
                   mcp_http_headers: {},
                   autostart: false,
+                  groups: [],
                 });
               }}
               disabled={!!pending}
@@ -1904,6 +2069,14 @@ export default function App() {
                     value={draft.channels}
                     onChange={(event) => setDraft((current) => ({ ...current, channels: event.target.value }))}
                     placeholder="cli, telegram"
+                  />
+                </label>
+                <label>
+                  <span>Groups (display only)</span>
+                  <GroupListEditor
+                    value={draft.groups}
+                    onChange={(next) => setDraft((current) => ({ ...current, groups: next }))}
+                    suggestions={allSoulGroups}
                   />
                 </label>
                 <label>
@@ -2798,6 +2971,14 @@ export default function App() {
                         />
                       </label>
                       <label>
+                        <span>Groups (display only)</span>
+                        <GroupListEditor
+                          value={draft.groups}
+                          onChange={(next) => setDraft((current) => ({ ...current, groups: next }))}
+                          suggestions={allSoulGroups}
+                        />
+                      </label>
+                      <label>
                         <span>MCP servers</span>
                         <div className="selection-grid">
                           {mcpServers.map((server) => (
@@ -2995,6 +3176,10 @@ export default function App() {
                       <article className="override-card">
                         <span>Channel overrides</span>
                         <strong>{renderEnabledList(selectedSoul.overrides.channels)}</strong>
+                      </article>
+                      <article className="override-card">
+                        <span>Groups</span>
+                        <strong>{renderEnabledList(selectedSoul.overrides.groups ?? [])}</strong>
                       </article>
                       <article className="override-card">
                         <span>Enabled MCP servers</span>
