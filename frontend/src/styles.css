@@ -389,6 +389,49 @@ pre {
   background: rgba(255, 255, 255, 0.85);
 }
 
+.session-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-bottom: 0.6rem;
+  align-items: center;
+}
+
+.session-toolbar-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.session-toolbar-field > span {
+  white-space: nowrap;
+}
+
+.session-toolbar-field select {
+  padding: 0.25rem 0.45rem;
+  font-size: 0.82rem;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.session-pager {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.7rem;
+  font-size: 0.8rem;
+}
+
+.session-pager .muted {
+  text-align: center;
+  flex: 1;
+}
+
 .group-editor {
   display: flex;
   flex-direction: column;

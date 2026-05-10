@@ -321,6 +321,70 @@ class SoulCronService(CronService):
         logger.info("Cron: added job '{}' ({})", name, job.id)
         return job
 
+    def update_job(
+        self,
+        job_id: str,
+        *,
+        name: str | None = None,
+        schedule: CronSchedule | None = None,
+        message: str | None = None,
+        deliver: bool | None = None,
+        channel: str | None = ...,
+        to: str | None = ...,
+        delete_after_run: bool | None = None,
+        session_key: str | None = ...,
+        recurring_session_key_format: str | None = ...,
+    ) -> CronJob | Any:
+        """Update mutable fields of a soul cron job.
+
+        Extends upstream CronService.update_job with soul-only payload fields
+        (session_key, recurring_session_key_format). Sentinel ``...`` means
+        ``leave unchanged``; an explicit ``None`` clears the field.
+        """
+        store = self._load_store()
+        job = next((j for j in store.jobs if j.id == job_id), None)
+        if job is None:
+            return "not_found"
+        if job.payload.kind == "system_event":
+            return "protected"
+
+        if schedule is not None:
+            _validate_schedule_for_add(schedule)
+            job.schedule = schedule
+        if name is not None:
+            job.name = name
+        if message is not None:
+            job.payload.message = message
+        if deliver is not None:
+            job.payload.deliver = deliver
+        if channel is not ...:
+            job.payload.channel = channel
+        if to is not ...:
+            job.payload.to = to
+        if session_key is not ...:
+            job.payload.session_key = session_key
+        if recurring_session_key_format is not ...:
+            assert isinstance(job.payload, SoulCronPayload), (
+                "Soul cron job payload must be SoulCronPayload"
+            )
+            job.payload.recurring_session_key_format = recurring_session_key_format
+        if delete_after_run is not None:
+            job.delete_after_run = delete_after_run
+
+        now = int(time.time() * 1000)
+        job.updated_at_ms = now
+        if job.enabled:
+            job.state.next_run_at_ms = _compute_next_run(job.schedule, now)
+
+        if self._running:
+            self._save_store()
+            self._arm_timer()
+        else:
+            self._append_action("update", asdict(job))
+
+        logger.info("Cron: updated soul job '{}' ({})", job.name, job.id)
+        return job
+
     def register_system_job(self, job: CronJob) -> CronJob:
         """Promote payload to SoulCronPayload before delegating to parent."""
         if not isinstance(job.payload, SoulCronPayload):

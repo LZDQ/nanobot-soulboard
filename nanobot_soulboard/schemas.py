@@ -260,6 +260,16 @@ class SessionSummaryResponse(BaseModel):
     path: str
 
 
+class SessionListResponse(BaseModel):
+    """Paged session list for one soul workspace."""
+
+    items: list[SessionSummaryResponse]
+    total: int = Field(description="Total session count for this soul (across all pages).")
+    limit: int
+    offset: int
+    order: Literal["asc", "desc"]
+
+
 class SessionDetailResponse(BaseModel):
     """Expanded session contents."""
 
@@ -358,8 +368,27 @@ class UpdateSoulCronJobRequest(BaseModel):
     message: str | None = None
     deliver: bool | None = None
     channel: str | None = None
+    chat_id: str | None = None
+    session_key: str | None = None
+    recurring_session_key_format: str | None = None
     delete_after_run: bool | None = None
     schedule: UpdateSoulCronJobScheduleRequest | None = None
+
+
+class CreateSoulCronJobRequest(BaseModel):
+    """Manual per-soul cron job creation payload."""
+
+    name: str = Field(min_length=1, description="Display name for the new job.")
+    message: str = Field(default="", description="Message the job will inject when it fires.")
+    deliver: bool = Field(default=False)
+    channel: str | None = None
+    chat_id: str | None = None
+    session_key: str | None = None
+    recurring_session_key_format: str | None = None
+    delete_after_run: bool = False
+    schedule: UpdateSoulCronJobScheduleRequest = Field(
+        description="Schedule definition. Only kind='cron' (with expr) and kind='every' (with every_ms) are accepted."
+    )
 
 
 class UpdateSoulPromptFileRequest(BaseModel):

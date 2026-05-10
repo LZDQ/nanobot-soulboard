@@ -449,10 +449,44 @@ class SoulSupervisor:
                 message=entry.message,
                 deliver=entry.deliver,
                 channel=entry.channel,
+                to=entry.chat_id,
+                session_key=entry.session_key,
                 recurring_session_key_format=entry.recurring_session_key_format,
             )
             added.append(job)
         return added
+
+    def add_cron_job_to_soul(
+        self,
+        soul_id: str,
+        *,
+        name: str,
+        schedule: CronSchedule,
+        message: str = "",
+        deliver: bool = False,
+        channel: str | None = None,
+        to: str | None = None,
+        session_key: str | None = None,
+        recurring_session_key_format: str | None = None,
+        delete_after_run: bool = False,
+    ) -> CronJob:
+        """Manually schedule one cron job in a soul, without going through the registry."""
+        spec = self.get_spec(soul_id)
+        running = self._running_souls.get(soul_id)
+        cron_service = (
+            running.cron_service if running is not None else self._build_cron_service(spec)
+        )
+        return cron_service.add_job(
+            name=name,
+            schedule=schedule,
+            message=message,
+            deliver=deliver,
+            channel=channel,
+            to=to,
+            session_key=session_key,
+            recurring_session_key_format=recurring_session_key_format,
+            delete_after_run=delete_after_run,
+        )
 
     def _resolve_soul_workspace(self, soul_id: str, overrides: SoulOverrides) -> Path:
         if overrides.workspace:
@@ -622,6 +656,9 @@ class SoulSupervisor:
         message: str | None = None,
         deliver: bool | None = None,
         channel=...,
+        to=...,
+        session_key=...,
+        recurring_session_key_format=...,
         delete_after_run: bool | None = None,
         schedule: CronSchedule | None = None,
     ) -> CronJob | Literal["not_found", "protected"]:
@@ -637,6 +674,9 @@ class SoulSupervisor:
             message=message,
             deliver=deliver,
             channel=channel,
+            to=to,
+            session_key=session_key,
+            recurring_session_key_format=recurring_session_key_format,
             delete_after_run=delete_after_run,
         )
         if isinstance(result, str):

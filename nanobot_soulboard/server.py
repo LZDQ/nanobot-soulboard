@@ -3,7 +3,7 @@
 from importlib.resources import files as pkg_files
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,6 +19,7 @@ from nanobot_soulboard.config import load_soulboard_config
 from nanobot_soulboard.agent import SOUL_PROMPT_FILES, SoulAgentLoop, SoulSpec, SoulSupervisor
 from nanobot_soulboard.schemas import (
     AddSoulCronJobsFromRegistryRequest,
+    CreateSoulCronJobRequest,
     AddSoulSkillRequest,
     AppLinksResponse,
     ChatRequest,
@@ -36,6 +37,7 @@ from nanobot_soulboard.schemas import (
     PromptLinkDirResponse,
     PromptLinkDirsResponse,
     SessionDetailResponse,
+    SessionListResponse,
     SessionSummaryResponse,
     SkillPoolEntryResponse,
     SkillPoolResponse,
@@ -685,6 +687,57 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return [_to_cron_job_response(job, job.payload.session_key) for job in added]
 
+    @app.post(
+        "/api/souls/{soul_id}/cron-jobs",
+        response_model=CronJobResponse,
+        responses={404: {"model": ErrorResponse}, 400: {"model": ErrorResponse}},
+        summary="Add Soul Cron Job",
+        description=(
+            "Manually schedule a new cron job in the selected soul, without going through the global "
+            "cron job registry. Works whether the soul is running or stopped."
+        ),
+    )
+    async def add_soul_cron_job(
+        request: Request, soul_id: str, body: CreateSoulCronJobRequest
+    ) -> CronJobResponse:
+        supervisor = _get_supervisor(request)
+        if body.schedule.kind not in ("cron", "every"):
+            raise HTTPException(
+                status_code=400, detail=f"Unsupported schedule kind: {body.schedule.kind!r}"
+            )
+        if body.schedule.kind == "cron" and not body.schedule.expr:
+            raise HTTPException(
+                status_code=400, detail="schedule.expr is required for kind='cron'"
+            )
+        if body.schedule.kind == "every" and not body.schedule.every_ms:
+            raise HTTPException(
+                status_code=400, detail="schedule.every_ms is required for kind='every'"
+            )
+        schedule = CronSchedule(
+            kind=body.schedule.kind,
+            every_ms=body.schedule.every_ms,
+            expr=body.schedule.expr,
+            tz=body.schedule.tz,
+        )
+        try:
+            job = supervisor.add_cron_job_to_soul(
+                soul_id,
+                name=body.name,
+                schedule=schedule,
+                message=body.message,
+                deliver=body.deliver,
+                channel=body.channel,
+                to=body.chat_id,
+                session_key=body.session_key,
+                recurring_session_key_format=body.recurring_session_key_format,
+                delete_after_run=body.delete_after_run,
+            )
+        except KeyError as exc:
+            _raise_not_found(_error_detail(exc))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _to_cron_job_response(job, job.payload.session_key)
+
     @app.delete(
         "/api/souls/{soul_id}/cron-jobs/{job_id}",
         status_code=204,
@@ -722,7 +775,9 @@ def create_app(
                 expr=body.schedule.expr,
                 tz=body.schedule.tz,
             )
-        channel = body.channel if "channel" in body.model_fields_set else ...
+        def _opt(field: str) -> Any:
+            return getattr(body, field) if field in body.model_fields_set else ...
+
         try:
             result = supervisor.update_cron_job(
                 soul_id,
@@ -731,7 +786,10 @@ def create_app(
                 enabled=body.enabled,
                 message=body.message,
                 deliver=body.deliver,
-                channel=channel,
+                channel=_opt("channel"),
+                to=_opt("chat_id"),
+                session_key=_opt("session_key"),
+                recurring_session_key_format=_opt("recurring_session_key_format"),
                 delete_after_run=body.delete_after_run,
                 schedule=schedule,
             )
@@ -918,22 +976,40 @@ def create_app(
 
     @app.get(
         "/api/souls/{soul_id}/sessions",
-        response_model=list[SessionSummaryResponse],
+        response_model=SessionListResponse,
         responses={404: {"model": ErrorResponse}},
         summary="List Soul Sessions",
         description=(
-            "List persisted session files for one soul workspace using upstream nanobot SessionManager. "
-            "Sessions remain stored under that soul's workspace/sessions directory."
+            "Paged list of persisted session files for one soul workspace, sourced from the upstream "
+            "nanobot SessionManager. Sessions are sorted by updated_at; pass order=asc to flip the "
+            "direction. limit/offset slice the sorted list."
         ),
     )
-    def list_soul_sessions(request: Request, soul_id: str) -> list[SessionSummaryResponse]:
+    def list_soul_sessions(
+        request: Request,
+        soul_id: str,
+        limit: int = Query(default=10, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+        order: Literal["asc", "desc"] = Query(default="desc"),
+    ) -> SessionListResponse:
         supervisor = _get_supervisor(request)
         try:
             spec = supervisor.get_spec(soul_id)
         except KeyError as exc:
             _raise_not_found(_error_detail(exc))
         manager = _get_session_manager(supervisor, spec)
-        return [SessionSummaryResponse(**item) for item in manager.list_sessions()]
+        raw = manager.list_sessions()
+        if order == "asc":
+            raw = list(reversed(raw))
+        total = len(raw)
+        page = raw[offset : offset + limit]
+        return SessionListResponse(
+            items=[SessionSummaryResponse(**item) for item in page],
+            total=total,
+            limit=limit,
+            offset=offset,
+            order=order,
+        )
 
     @app.post(
         "/api/souls/{soul_id}/sessions",

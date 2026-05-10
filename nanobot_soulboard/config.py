@@ -80,6 +80,17 @@ class CronJobRegistryEntry(BaseModel):
     message: str = Field(default="", description="Message injected into the agent loop when this job fires.")
     deliver: bool = Field(default=False)
     channel: str | None = Field(default=None)
+    chat_id: str | None = Field(
+        default=None,
+        description=(
+            "Optional channel-local chat identifier. Stored on the cron payload as 'to'; combined with "
+            "channel as the default session_key fallback when no explicit session_key is set."
+        ),
+    )
+    session_key: str | None = Field(
+        default=None,
+        description="Optional explicit session_key for the scheduled job (overrides the channel:chat fallback).",
+    )
     recurring_session_key_format: str | None = Field(
         default=None,
         description="strftime format rendered at fire-time to produce a dynamic session key (e.g. '%Y-%m-%d').",

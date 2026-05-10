@@ -77,6 +77,14 @@ type SessionSummary = {
   path: string;
 };
 
+type SessionListResponse = {
+  items: SessionSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+  order: "asc" | "desc";
+};
+
 type SessionDetail = {
   created_at: string;
   updated_at: string;
@@ -155,6 +163,8 @@ type CronJobRegistryEntry = {
   message: string;
   deliver: boolean;
   channel: string | null;
+  chat_id: string | null;
+  session_key: string | null;
   recurring_session_key_format: string | null;
 };
 
@@ -171,6 +181,8 @@ type CronJobRegistryEntryDraft = {
   message: string;
   deliver: boolean;
   channel: string;
+  chat_id: string;
+  session_key: string;
   recurring_session_key_format: string;
 };
 
@@ -180,11 +192,43 @@ type CronJobEditDraft = {
   message: string;
   deliver: boolean;
   channel: string;
+  chat_id: string;
+  session_key: string;
   delete_after_run: boolean;
   schedule_kind: "every" | "cron";
   every_seconds: string;
   cron_expr: string;
   tz: string;
+};
+
+type CronJobCreateDraft = {
+  name: string;
+  message: string;
+  deliver: boolean;
+  channel: string;
+  chat_id: string;
+  session_key: string;
+  recurring_session_key_format: string;
+  delete_after_run: boolean;
+  schedule_kind: "every" | "cron";
+  every_seconds: string;
+  cron_expr: string;
+  tz: string;
+};
+
+const EMPTY_CRON_CREATE_DRAFT: CronJobCreateDraft = {
+  name: "",
+  message: "",
+  deliver: false,
+  channel: "",
+  chat_id: "",
+  session_key: "",
+  recurring_session_key_format: "",
+  delete_after_run: false,
+  schedule_kind: "cron",
+  every_seconds: "",
+  cron_expr: "",
+  tz: "",
 };
 
 type StreamResetMessage = {
@@ -857,7 +901,7 @@ export default function App() {
   const [isEditingCronJobRegistry, setIsEditingCronJobRegistry] = useState(false);
   const [cronJobRegistryDraft, setCronJobRegistryDraft] = useState<CronJobRegistryEntryDraft>({
     name: "", label: "", cron_expr: "", every_seconds: "", tz: Intl.DateTimeFormat().resolvedOptions().timeZone, message: "",
-    deliver: false, channel: "", recurring_session_key_format: "",
+    deliver: false, channel: "", chat_id: "", session_key: "", recurring_session_key_format: "",
   });
   const [addCronJobRegistrySelection, setAddCronJobRegistrySelection] = useState("");
   const [createSoulCronJobNames, setCreateSoulCronJobNames] = useState<string[]>([]);
@@ -871,12 +915,18 @@ export default function App() {
   const [showOnlySelectedSessionCronJobs, setShowOnlySelectedSessionCronJobs] = useState(true);
   const [editingCronJobId, setEditingCronJobId] = useState<string | null>(null);
   const [cronJobEditDraft, setCronJobEditDraft] = useState<CronJobEditDraft>({
-    name: "", enabled: true, message: "", deliver: false, channel: "",
+    name: "", enabled: true, message: "", deliver: false, channel: "", chat_id: "", session_key: "",
     delete_after_run: false, schedule_kind: "cron", every_seconds: "", cron_expr: "", tz: "",
   });
+  const [isCreatingCronJob, setIsCreatingCronJob] = useState(false);
+  const [cronJobCreateDraft, setCronJobCreateDraft] = useState<CronJobCreateDraft>(EMPTY_CRON_CREATE_DRAFT);
   const [mcpMode, setMcpMode] = useState<"view" | "edit" | "create">("view");
   const [socketState, setSocketState] = useState<"closed" | "connecting" | "open">("closed");
   const [soulGroupFilter, setSoulGroupFilter] = useState<string>("");
+  const [sessionsPage, setSessionsPage] = useState<number>(0);
+  const [sessionsPerPage, setSessionsPerPage] = useState<number>(10);
+  const [sessionSortOrder, setSessionSortOrder] = useState<"desc" | "asc">("desc");
+  const [sessionsTotal, setSessionsTotal] = useState<number>(0);
   const socketRef = useRef<WebSocket | null>(null);
   const initializedRef = useRef(false);
 
@@ -897,6 +947,8 @@ export default function App() {
     if (!soulGroupFilter) return souls;
     return souls.filter((soul) => (soul.overrides.groups ?? []).includes(soulGroupFilter));
   }, [souls, soulGroupFilter]);
+  const sessionsTotalPages = Math.max(1, Math.ceil(sessionsTotal / sessionsPerPage));
+  const clampedSessionsPage = Math.min(sessionsPage, sessionsTotalPages - 1);
   const visibleCronJobs = useMemo(() => {
     if (!cronJobs) {
       return cronJobs;
@@ -1001,7 +1053,7 @@ export default function App() {
       setIsEditingCronJobRegistry(false);
       setCronJobRegistryDraft({
         name: "", label: "", cron_expr: "", every_seconds: "", tz: Intl.DateTimeFormat().resolvedOptions().timeZone, message: "",
-        deliver: false, channel: "", recurring_session_key_format: "",
+        deliver: false, channel: "", chat_id: "", session_key: "", recurring_session_key_format: "",
       });
       if (addCronJobRegistrySelection && !response.items.some((e) => e.name === addCronJobRegistrySelection)) {
         setAddCronJobRegistrySelection("");
@@ -1034,6 +1086,8 @@ export default function App() {
       message: cronJobRegistryDraft.message,
       deliver: cronJobRegistryDraft.deliver,
       channel: cronJobRegistryDraft.channel.trim() || null,
+      chat_id: cronJobRegistryDraft.chat_id.trim() || null,
+      session_key: cronJobRegistryDraft.session_key.trim() || null,
       recurring_session_key_format: cronJobRegistryDraft.recurring_session_key_format.trim() || null,
     };
     await saveCronJobRegistry([...cronJobRegistry, entry]);
@@ -1086,6 +1140,8 @@ export default function App() {
       message: job.message,
       deliver: job.deliver,
       channel: job.channel ?? "",
+      chat_id: job.chat_id ?? "",
+      session_key: job.session_key ?? "",
       delete_after_run: job.delete_after_run,
       schedule_kind: job.schedule.kind === "every" ? "every" : "cron",
       every_seconds: job.schedule.every_ms ? String(job.schedule.every_ms / 1000) : "",
@@ -1114,6 +1170,8 @@ export default function App() {
         message: cronJobEditDraft.message,
         deliver: cronJobEditDraft.deliver,
         channel: cronJobEditDraft.channel.trim() || null,
+        chat_id: cronJobEditDraft.chat_id.trim() || null,
+        session_key: cronJobEditDraft.session_key.trim() || null,
         delete_after_run: cronJobEditDraft.delete_after_run,
         schedule,
       };
@@ -1128,10 +1186,72 @@ export default function App() {
     });
   }
 
-  async function refreshSessions(soulId: string): Promise<SessionSummary[]> {
-    const nextSessions = await api<SessionSummary[]>(`/api/souls/${encodeURIComponent(soulId)}/sessions`);
-    setSessions(nextSessions);
-    return nextSessions;
+  async function createSoulCronJob() {
+    if (!selectedSoul) return;
+    const name = cronJobCreateDraft.name.trim();
+    if (!name) {
+      notifyError("Cron job name is required");
+      return;
+    }
+    let schedule: Record<string, unknown>;
+    if (cronJobCreateDraft.schedule_kind === "every") {
+      const everySeconds = parseInt(cronJobCreateDraft.every_seconds, 10);
+      if (isNaN(everySeconds) || everySeconds <= 0) {
+        notifyError("every_seconds must be a positive integer");
+        return;
+      }
+      schedule = { kind: "every", every_ms: everySeconds * 1000 };
+    } else {
+      const expr = cronJobCreateDraft.cron_expr.trim();
+      if (!expr) {
+        notifyError("Cron expression is required");
+        return;
+      }
+      schedule = { kind: "cron", expr, tz: cronJobCreateDraft.tz.trim() || null };
+    }
+    await runAction("cron-create", async () => {
+      const body = {
+        name,
+        message: cronJobCreateDraft.message,
+        deliver: cronJobCreateDraft.deliver,
+        channel: cronJobCreateDraft.channel.trim() || null,
+        chat_id: cronJobCreateDraft.chat_id.trim() || null,
+        session_key: cronJobCreateDraft.session_key.trim() || null,
+        recurring_session_key_format:
+          cronJobCreateDraft.recurring_session_key_format.trim() || null,
+        delete_after_run: cronJobCreateDraft.delete_after_run,
+        schedule,
+      };
+      await api<CronJob>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/cron-jobs`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      setIsCreatingCronJob(false);
+      setCronJobCreateDraft(EMPTY_CRON_CREATE_DRAFT);
+      await refreshCronJobs(selectedSoul.soul_id);
+    }).catch((cause) => {
+      notifyError(cause);
+    });
+  }
+
+  async function refreshSessions(
+    soulId: string,
+    overrides?: { page?: number; perPage?: number; order?: "asc" | "desc" },
+  ): Promise<SessionSummary[]> {
+    const page = overrides?.page ?? sessionsPage;
+    const perPage = overrides?.perPage ?? sessionsPerPage;
+    const order = overrides?.order ?? sessionSortOrder;
+    const params = new URLSearchParams({
+      limit: String(perPage),
+      offset: String(page * perPage),
+      order,
+    });
+    const response = await api<SessionListResponse>(
+      `/api/souls/${encodeURIComponent(soulId)}/sessions?${params.toString()}`,
+    );
+    setSessions(response.items);
+    setSessionsTotal(response.total);
+    return response.items;
   }
 
   async function refreshPromptFiles(soulId: string, resetDraft = false): Promise<void> {
@@ -1208,33 +1328,53 @@ export default function App() {
     setSoulError("");
     setSessionDetail(null);
     setSessionKey(pendingSessionKey);
+    setSessions([]);
+    setSessionsTotal(0);
     setChatContent("");
     setChatReasoning("");
     setFinalizedMessages([]);
     socketRef.current?.close();
     socketRef.current = null;
     setSocketState("closed");
-    void refreshSessions(selectedSoul.soul_id)
-      .then((nextSessions) => {
-        if (pendingSessionKey && nextSessions.some((session) => session.key === pendingSessionKey)) {
-          void loadSession(pendingSessionKey);
-        }
-      })
-      .catch((cause) => {
-        notifyError(cause);
-      });
     void refreshPromptFiles(selectedSoul.soul_id).catch((cause) => {
       notifyError(cause);
     });
     void refreshCronJobs(selectedSoul.soul_id).catch((cause) => {
       notifyError(cause);
     });
-    initialFocusRef.current = { soulId: "", sessionKey: null };
   }, [selectedSoul?.soul_id]);
+
+  useEffect(() => {
+    if (!selectedSoulId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const nextSessions = await refreshSessions(selectedSoulId);
+        if (cancelled) return;
+        const pendingSessionKey =
+          initialFocusRef.current.soulId === selectedSoulId
+            ? initialFocusRef.current.sessionKey
+            : null;
+        if (pendingSessionKey && nextSessions.some((session) => session.key === pendingSessionKey)) {
+          void loadSession(pendingSessionKey);
+        }
+        initialFocusRef.current = { soulId: "", sessionKey: null };
+      } catch (cause) {
+        if (!cancelled) notifyError(cause);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSoulId, sessionsPage, sessionsPerPage, sessionSortOrder]);
 
   useEffect(() => {
     syncFocusToUrl(selectedSoulId, sessionKey);
   }, [selectedSoulId, sessionKey]);
+
+  useEffect(() => {
+    setSessionsPage(0);
+  }, [selectedSoulId, sessionsPerPage, sessionSortOrder]);
 
   useEffect(() => {
     if (soulGroupFilter && !allSoulGroups.includes(soulGroupFilter)) {
@@ -1553,7 +1693,8 @@ export default function App() {
       setChatContent("");
       setChatReasoning("");
       setFinalizedMessages([]);
-      await refreshSessions(selectedSoul.soul_id);
+      setSessionsPage(0);
+      await refreshSessions(selectedSoul.soul_id, { page: 0 });
       setSocketEpoch((current) => current + 1);
     }).catch((cause) => {
       notifyError(cause);
@@ -2159,6 +2300,31 @@ export default function App() {
             </div>
           ) : (
             <>
+              {sessionsTotal > 0 ? (
+                <div className="session-toolbar">
+                  <label className="session-toolbar-field">
+                    <span>Sort</span>
+                    <select
+                      value={sessionSortOrder}
+                      onChange={(event) => setSessionSortOrder(event.target.value === "asc" ? "asc" : "desc")}
+                    >
+                      <option value="desc">Newest first</option>
+                      <option value="asc">Oldest first</option>
+                    </select>
+                  </label>
+                  <label className="session-toolbar-field">
+                    <span>Per page</span>
+                    <select
+                      value={sessionsPerPage}
+                      onChange={(event) => setSessionsPerPage(Number(event.target.value))}
+                    >
+                      {[5, 10, 20, 50].map((size) => (
+                        <option key={size} value={size}>{size}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              ) : null}
               <div className="session-list">
                 {sessions.map((session) => (
                   <button key={session.key} className="session-card" onClick={() => void loadSession(session.key)}>
@@ -2167,8 +2333,31 @@ export default function App() {
                     <code>{session.path}</code>
                   </button>
                 ))}
-                {!sessions.length ? <p className="muted">No sessions found for this soul.</p> : null}
+                {sessionsTotal === 0 ? <p className="muted">No sessions found for this soul.</p> : null}
               </div>
+              {sessionsTotal > sessionsPerPage ? (
+                <div className="session-pager">
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => setSessionsPage((current) => Math.max(0, current - 1))}
+                    disabled={clampedSessionsPage === 0}
+                  >
+                    ‹ Prev
+                  </button>
+                  <span className="muted">
+                    Page {clampedSessionsPage + 1} of {sessionsTotalPages} · {sessionsTotal} total
+                  </span>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => setSessionsPage((current) => Math.min(sessionsTotalPages - 1, current + 1))}
+                    disabled={clampedSessionsPage >= sessionsTotalPages - 1}
+                  >
+                    Next ›
+                  </button>
+                </div>
+              ) : null}
 
               <div className="create-box">
                 <h3>Create session</h3>
@@ -2436,6 +2625,24 @@ export default function App() {
                             value={cronJobRegistryDraft.channel}
                             onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, channel: e.target.value }))}
                             placeholder="whatsapp"
+                            disabled={!!pending}
+                          />
+                        </label>
+                        <label>
+                          <span>Chat ID</span>
+                          <input
+                            value={cronJobRegistryDraft.chat_id}
+                            onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, chat_id: e.target.value }))}
+                            placeholder="(optional, channel-local id)"
+                            disabled={!!pending}
+                          />
+                        </label>
+                        <label>
+                          <span>Session key</span>
+                          <input
+                            value={cronJobRegistryDraft.session_key}
+                            onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, session_key: e.target.value }))}
+                            placeholder="(optional, e.g. cli:direct)"
                             disabled={!!pending}
                           />
                         </label>
@@ -3310,6 +3517,24 @@ export default function App() {
                                   disabled={!!pending}
                                 />
                               </label>
+                              <label>
+                                <span>Chat ID</span>
+                                <input
+                                  value={cronJobEditDraft.chat_id}
+                                  onChange={(e) => setCronJobEditDraft((d) => ({ ...d, chat_id: e.target.value }))}
+                                  placeholder="(optional, channel-local id)"
+                                  disabled={!!pending}
+                                />
+                              </label>
+                              <label>
+                                <span>Session key</span>
+                                <input
+                                  value={cronJobEditDraft.session_key}
+                                  onChange={(e) => setCronJobEditDraft((d) => ({ ...d, session_key: e.target.value }))}
+                                  placeholder="(optional, e.g. cli:direct)"
+                                  disabled={!!pending}
+                                />
+                              </label>
                               <div style={{ display: "flex", gap: "1.2rem", flexWrap: "wrap" }}>
                                 <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
                                   <input
@@ -3435,6 +3660,170 @@ export default function App() {
                       </div>
                     </div>
                   ) : null}
+
+                  <div className="create-box" style={{ marginTop: "0.75rem" }}>
+                    <div className="panel-head">
+                      <h4 style={{ margin: 0 }}>New cron job</h4>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => {
+                          setIsCreatingCronJob((current) => {
+                            const next = !current;
+                            if (next) {
+                              setCronJobCreateDraft({
+                                ...EMPTY_CRON_CREATE_DRAFT,
+                                tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                              });
+                            }
+                            return next;
+                          });
+                        }}
+                        disabled={!!pending || !selectedSoul}
+                      >
+                        {isCreatingCronJob ? "Cancel" : "New"}
+                      </button>
+                    </div>
+                    {isCreatingCronJob ? (
+                      <div className="details-stack" style={{ gap: "0.5rem" }}>
+                        <label>
+                          <span>Name</span>
+                          <input
+                            value={cronJobCreateDraft.name}
+                            onChange={(e) => setCronJobCreateDraft((d) => ({ ...d, name: e.target.value }))}
+                            placeholder="hourly-check"
+                            disabled={!!pending}
+                          />
+                        </label>
+                        <label>
+                          <span>Schedule type</span>
+                          <select
+                            value={cronJobCreateDraft.schedule_kind}
+                            onChange={(e) =>
+                              setCronJobCreateDraft((d) => ({
+                                ...d,
+                                schedule_kind: e.target.value as "every" | "cron",
+                              }))
+                            }
+                            disabled={!!pending}
+                          >
+                            <option value="cron">cron expression</option>
+                            <option value="every">every N seconds</option>
+                          </select>
+                        </label>
+                        {cronJobCreateDraft.schedule_kind === "cron" ? (
+                          <>
+                            <label>
+                              <span>Cron expression</span>
+                              <input
+                                value={cronJobCreateDraft.cron_expr}
+                                onChange={(e) => setCronJobCreateDraft((d) => ({ ...d, cron_expr: e.target.value }))}
+                                placeholder="0 9 * * *"
+                                disabled={!!pending}
+                              />
+                            </label>
+                            <label>
+                              <span>Timezone</span>
+                              <input
+                                value={cronJobCreateDraft.tz}
+                                onChange={(e) => setCronJobCreateDraft((d) => ({ ...d, tz: e.target.value }))}
+                                placeholder="UTC"
+                                disabled={!!pending}
+                              />
+                            </label>
+                          </>
+                        ) : (
+                          <label>
+                            <span>Every (seconds)</span>
+                            <input
+                              type="number"
+                              value={cronJobCreateDraft.every_seconds}
+                              onChange={(e) => setCronJobCreateDraft((d) => ({ ...d, every_seconds: e.target.value }))}
+                              placeholder="3600"
+                              disabled={!!pending}
+                            />
+                          </label>
+                        )}
+                        <label>
+                          <span>Message</span>
+                          <input
+                            value={cronJobCreateDraft.message}
+                            onChange={(e) => setCronJobCreateDraft((d) => ({ ...d, message: e.target.value }))}
+                            placeholder="Run the hourly summary"
+                            disabled={!!pending}
+                          />
+                        </label>
+                        <label>
+                          <span>Channel</span>
+                          <input
+                            value={cronJobCreateDraft.channel}
+                            onChange={(e) => setCronJobCreateDraft((d) => ({ ...d, channel: e.target.value }))}
+                            placeholder="(optional)"
+                            disabled={!!pending}
+                          />
+                        </label>
+                        <label>
+                          <span>Chat ID</span>
+                          <input
+                            value={cronJobCreateDraft.chat_id}
+                            onChange={(e) => setCronJobCreateDraft((d) => ({ ...d, chat_id: e.target.value }))}
+                            placeholder="(optional, channel-local id)"
+                            disabled={!!pending}
+                          />
+                        </label>
+                        <label>
+                          <span>Session key</span>
+                          <input
+                            value={cronJobCreateDraft.session_key}
+                            onChange={(e) => setCronJobCreateDraft((d) => ({ ...d, session_key: e.target.value }))}
+                            placeholder="(optional, e.g. cli:direct)"
+                            disabled={!!pending}
+                          />
+                        </label>
+                        <label>
+                          <span>Recurring session key format</span>
+                          <input
+                            value={cronJobCreateDraft.recurring_session_key_format}
+                            onChange={(e) =>
+                              setCronJobCreateDraft((d) => ({
+                                ...d,
+                                recurring_session_key_format: e.target.value,
+                              }))
+                            }
+                            placeholder="%Y-%m-%d"
+                            disabled={!!pending}
+                          />
+                        </label>
+                        <div style={{ display: "flex", gap: "1.2rem", flexWrap: "wrap" }}>
+                          <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                            <input
+                              type="checkbox"
+                              checked={cronJobCreateDraft.deliver}
+                              onChange={(e) => setCronJobCreateDraft((d) => ({ ...d, deliver: e.target.checked }))}
+                              disabled={!!pending}
+                            />
+                            Deliver
+                          </label>
+                          <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                            <input
+                              type="checkbox"
+                              checked={cronJobCreateDraft.delete_after_run}
+                              onChange={(e) => setCronJobCreateDraft((d) => ({ ...d, delete_after_run: e.target.checked }))}
+                              disabled={!!pending}
+                            />
+                            Delete after run
+                          </label>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void createSoulCronJob()}
+                          disabled={!!pending}
+                        >
+                          Schedule
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
                 </section>
 
                 <section className="subpanel">
