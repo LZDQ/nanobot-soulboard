@@ -2050,18 +2050,18 @@ export default function App() {
               >
                 <div className="soul-card-head">
                   <strong>{soul.soul_id}</strong>
-                  <span className={`pill ${soul.running ? "live" : "idle"}`}>{soul.running ? "running" : "stopped"}</span>
+                  <div className="soul-card-head-right">
+                    {soul.overrides.groups && soul.overrides.groups.length ? (
+                      <div className="soul-card-groups">
+                        {soul.overrides.groups.map((group) => (
+                          <span key={group} className="group-chip">{group}</span>
+                        ))}
+                      </div>
+                    ) : null}
+                    <span className={`pill ${soul.running ? "live" : "idle"}`}>{soul.running ? "running" : "stopped"}</span>
+                  </div>
                 </div>
-                <div className="soul-card-foot">
-                  <code>{soul.workspace}</code>
-                  {soul.overrides.groups && soul.overrides.groups.length ? (
-                    <div className="soul-card-groups">
-                      {soul.overrides.groups.map((group) => (
-                        <span key={group} className="group-chip">{group}</span>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
+                <code>{soul.workspace}</code>
               </button>
             ))}
             {!souls.length ? (
