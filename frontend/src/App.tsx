@@ -1340,6 +1340,15 @@ export default function App() {
     void refreshCronJobs(selectedSoul.soul_id).catch((cause) => {
       notifyError(cause);
     });
+    // Restore the session focused via the URL once the soul is resolved.
+    // This must happen here (not in the sessions-list effect below) because
+    // loadSession needs `selectedSoul`, which is null on the first render —
+    // at that point only `selectedSoulId` is known from the URL. The list
+    // effect runs first and would consume/clear initialFocusRef too early.
+    if (pendingSessionKey) {
+      void loadSession(pendingSessionKey);
+    }
+    initialFocusRef.current = { soulId: "", sessionKey: null };
   }, [selectedSoul?.soul_id]);
 
   useEffect(() => {
@@ -1353,16 +1362,7 @@ export default function App() {
     let cancelled = false;
     void (async () => {
       try {
-        const nextSessions = await refreshSessions(selectedSoulId);
-        if (cancelled) return;
-        const pendingSessionKey =
-          initialFocusRef.current.soulId === selectedSoulId
-            ? initialFocusRef.current.sessionKey
-            : null;
-        if (pendingSessionKey && nextSessions.some((session) => session.key === pendingSessionKey)) {
-          void loadSession(pendingSessionKey);
-        }
-        initialFocusRef.current = { soulId: "", sessionKey: null };
+        await refreshSessions(selectedSoulId);
       } catch (cause) {
         if (!cancelled) notifyError(cause);
       }

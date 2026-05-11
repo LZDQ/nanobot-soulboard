@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from loguru import logger
 from nanobot.agent.tools.cron import CronTool
@@ -742,11 +743,30 @@ class SoulSupervisor:
             assert isinstance(payload, SoulCronPayload), (
                 f"SoulCronService payload must be SoulCronPayload, got {type(payload).__name__}"
             )
+            # Resolve the firing-time datetime in the job's schedule timezone
+            # when set, so dynamic session keys rotate at that zone's midnight
+            # and the reported datetime matches it (e.g. a soul that runs on a
+            # different timezone than this process). Falls back to local time
+            # when schedule.tz is unset or unrecognized.
+            schedule_tz = job.schedule.tz
+            fire_dt = datetime.now().astimezone()
+            if schedule_tz:
+                try:
+                    fire_dt = datetime.now(ZoneInfo(schedule_tz))
+                except (ZoneInfoNotFoundError, ValueError, TypeError) as exc:
+                    logger.warning(
+                        "Cron job '{}' ({}) schedule.tz {!r} is unrecognized; "
+                        "using local time for session key and reported datetime: {}",
+                        job.name,
+                        job.id,
+                        schedule_tz,
+                        exc,
+                    )
             recurring_format = payload.recurring_session_key_format
             rendered_session_key: str | None = None
             if recurring_format:
                 try:
-                    rendered_session_key = datetime.now().strftime(recurring_format)
+                    rendered_session_key = fire_dt.strftime(recurring_format)
                 except (ValueError, TypeError) as exc:
                     logger.warning(
                         "Cron job '{}' ({}) recurring_session_key_format {!r} "
@@ -781,7 +801,7 @@ class SoulSupervisor:
             delivery_metadata = cron_service.get_delivery_metadata(job.id)
             channel = payload.channel or "cli"
             chat_id = payload.to or "direct"
-            fired_at = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
+            fired_at = fire_dt.strftime("%Y-%m-%d %H:%M %Z")
             cron_content = (
                 f"System: cron job {job.name!r} fired. "
                 f"Job message: {job.payload.message!r}. "

@@ -27,9 +27,11 @@ class SoulCronPayload(CronPayload):
     ``recurring_session_key_format`` — when set to a strftime-style format
     (e.g. ``"%Y-%m-%d"``), the runtime renders the effective session_key by
     formatting the firing-time datetime instead of using the stored
-    ``session_key``. The rendered session is created on disk on demand.
-    Validation is intentionally omitted; an invalid format surfaces only when
-    the job fires, and is logged and falls back to ``session_key``.
+    ``session_key``. The firing-time datetime is taken in the job's
+    ``schedule.tz`` when set (so the key rotates at that zone's midnight),
+    otherwise in process-local time. The rendered session is created on disk
+    on demand. Validation is intentionally omitted; an invalid format surfaces
+    only when the job fires, and is logged and falls back to ``session_key``.
     """
 
     recurring_session_key_format: str | None = None

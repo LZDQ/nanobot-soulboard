@@ -93,7 +93,10 @@ class CronJobRegistryEntry(BaseModel):
     )
     recurring_session_key_format: str | None = Field(
         default=None,
-        description="strftime format rendered at fire-time to produce a dynamic session key (e.g. '%Y-%m-%d').",
+        description=(
+            "strftime format rendered at fire-time to produce a dynamic session key (e.g. '%Y-%m-%d'). "
+            "Rendered in the job's 'tz' timezone when set, so the key rotates at that zone's midnight."
+        ),
     )
 
 
