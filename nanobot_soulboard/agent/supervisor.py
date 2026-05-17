@@ -581,8 +581,11 @@ class SoulSupervisor:
             raise RuntimeError(f"Cannot delete running soul: {soul_id}")
         if soul_id not in self.soulboard_config.souls:
             raise KeyError(f"Unknown soul: {soul_id}")
+        workspace = self._resolve_soul_workspace(soul_id, self.soulboard_config.souls[soul_id])
         del self.soulboard_config.souls[soul_id]
         save_soulboard_config(self.soulboard_config, self.config_path)
+        if workspace.exists():
+            shutil.rmtree(workspace)
 
     def list_mcp_servers(self) -> dict[str, MCPServerConfig]:
         """Return MCP server definitions from the base nanobot config."""
