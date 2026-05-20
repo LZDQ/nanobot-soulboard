@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
 from nanobot.config.loader import load_config
-from nanobot.cli.commands import _make_provider as make_provider
+from nanobot_soulboard.providers import make_provider
 from nanobot.cron.types import CronJob, CronSchedule
 from nanobot_soulboard.cron import SoulCronPayload
 from nanobot.session.manager import SessionManager
