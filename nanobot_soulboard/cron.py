@@ -4,11 +4,13 @@ import json
 import time
 import uuid
 from contextlib import suppress
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
+from nanobot.agent.tools.context import RequestContext
 from nanobot.agent.tools.cron import CronTool
 from nanobot.cron.service import CronService, _compute_next_run, _validate_schedule_for_add
 from nanobot.cron.types import (
@@ -434,20 +436,17 @@ class SoulCronTool(CronTool):
         super().__init__(cron_service, default_timezone=default_timezone)
         self._cron: SoulCronService = cron_service
 
-    def set_context(
-        self,
-        channel: str,
-        chat_id: str,
-        metadata: dict[str, Any] | None = None,
-        session_key: str | None = None,
-    ) -> None:
-        normalized_metadata = self._cron._normalize_delivery_metadata(metadata)
-        super().set_context(
-            channel,
-            chat_id,
-            metadata=normalized_metadata,
-            session_key=session_key,
-        )
+    def set_context(self, ctx: RequestContext) -> None:
+        """Adapt the per-request context before handing it to upstream.
+
+        Upstream ``CronTool.set_context`` now takes a single ``RequestContext``
+        and stores ``ctx.metadata`` verbatim on the origin contextvar. We keep
+        soulboard's behaviour of carrying only normalized delivery metadata
+        (e.g. ``is_group``) by rewriting the metadata, then delegating so the
+        session-key and origin contextvars are populated by upstream.
+        """
+        normalized_metadata = self._cron._normalize_delivery_metadata(ctx.metadata)
+        super().set_context(replace(ctx, metadata=normalized_metadata))
 
     @property
     def description(self) -> str:
@@ -474,6 +473,17 @@ class SoulCronTool(CronTool):
             "description": (
                 "For list only. Defaults to true and shows only cron jobs created by the current session. "
                 "Set false to list all cron jobs for this soul."
+            ),
+            "default": True,
+        }
+        # Upstream dropped `deliver` from the base cron schema; soulboard still
+        # exposes it so the agent can choose whether a fired job delivers back
+        # to the originating channel.
+        properties["deliver"] = {
+            "type": "boolean",
+            "description": (
+                "For add only. When true (default) the job's output is delivered back to the "
+                "originating channel when it fires; set false to run it silently."
             ),
             "default": True,
         }
@@ -511,6 +521,82 @@ class SoulCronTool(CronTool):
         if action == "remove":
             return self._remove_job(job_id)
         return f"Unknown action: {action}"
+
+    def _add_job(
+        self,
+        name: str | None,
+        message: str,
+        every_seconds: int | None,
+        cron_expr: str | None,
+        tz: str | None,
+        at: str | None,
+        deliver: bool = True,
+    ) -> str:
+        """Schedule a job using soulboard's legacy delivery model.
+
+        Upstream's ``_add_job`` dropped the ``deliver`` flag and now passes
+        ``origin_*`` kwargs that ``SoulCronService.add_job`` does not accept, so
+        we override it. The originating session's channel / chat_id / metadata
+        are read from the contextvars upstream's ``set_context`` populates and
+        mapped onto the legacy ``channel`` / ``to`` / ``channel_meta`` payload
+        fields that ``_on_cron_job`` delivers on.
+        """
+        if not message:
+            return (
+                "Error: cron action='add' requires a non-empty 'message' parameter "
+                "describing what to do when the job triggers "
+                "(e.g. the reminder text). Retry including message=\"...\"."
+            )
+        channel = self._origin_channel.get()
+        chat_id = self._origin_chat_id.get()
+        if not channel or not chat_id:
+            return "Error: no session context (channel/chat_id)"
+        if tz and not cron_expr:
+            return "Error: tz can only be used with cron_expr"
+        if tz:
+            if err := self._validate_timezone(tz):
+                return err
+
+        delete_after = False
+        if every_seconds:
+            schedule = CronSchedule(kind="every", every_ms=every_seconds * 1000)
+        elif cron_expr:
+            effective_tz = tz or self._default_timezone
+            if err := self._validate_timezone(effective_tz):
+                return err
+            schedule = CronSchedule(kind="cron", expr=cron_expr, tz=effective_tz)
+        elif at:
+            from zoneinfo import ZoneInfo
+
+            try:
+                dt = datetime.fromisoformat(at)
+            except ValueError:
+                return (
+                    f"Error: invalid ISO datetime format '{at}'. "
+                    "Expected format: YYYY-MM-DDTHH:MM:SS"
+                )
+            if dt.tzinfo is None:
+                if err := self._validate_timezone(self._default_timezone):
+                    return err
+                dt = dt.replace(tzinfo=ZoneInfo(self._default_timezone))
+            at_ms = int(dt.timestamp() * 1000)
+            schedule = CronSchedule(kind="at", at_ms=at_ms)
+            delete_after = True
+        else:
+            return "Error: either every_seconds, cron_expr, or at is required"
+
+        job = self._cron.add_job(
+            name=name or message[:30],
+            schedule=schedule,
+            message=message,
+            deliver=deliver,
+            channel=channel,
+            to=chat_id,
+            delete_after_run=delete_after,
+            channel_meta=dict(self._origin_metadata.get() or {}),
+            session_key=self._session_key.get() or None,
+        )
+        return f"Created job '{job.name}' (id: {job.id})"
 
     def _list_jobs(self, *, only_current_session: bool = True) -> str:
         jobs_with_sessions = self._cron.list_jobs_with_session_keys()

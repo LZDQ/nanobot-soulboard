@@ -2,6 +2,7 @@
 
 import platform
 from pathlib import Path
+from typing import Any
 
 from nanobot.agent.context import ContextBuilder
 
@@ -25,9 +26,14 @@ class SoulboardContextBuilder(ContextBuilder):
         self,
         skill_names: list[str] | None = None,
         channel: str | None = None,
+        **kwargs: Any,
     ) -> str:
-        del skill_names
-        del channel
+        # Upstream's inherited build_messages() now calls build_system_prompt
+        # with extra kwargs (session_summary, workspace,
+        # include_memory_recent_history, session_key, unified_session).
+        # Soulboard builds its prompt purely from SYSTEM.md + skills, so we
+        # accept and ignore them to stay call-compatible.
+        del skill_names, channel, kwargs
         system_path = self.workspace / self.SYSTEM_FILENAME
         if system_path.exists():
             base_prompt = system_path.read_text(encoding="utf-8")

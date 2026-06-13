@@ -19,6 +19,7 @@ from nanobot.config.loader import load_config, save_config
 from nanobot.config.schema import Config, MCPServerConfig
 from nanobot.cron.types import CronJob, CronSchedule
 from nanobot.providers.base import LLMProvider
+from nanobot.providers.image_generation import image_gen_provider_configs
 from nanobot.session.manager import SessionManager
 
 from nanobot_soulboard.agent.loop import SoulAgentLoop
@@ -264,7 +265,18 @@ class SoulSupervisor:
         """Reload persisted configs without disturbing running souls."""
         self.soulboard_config = load_soulboard_config(self.config_path)
         if self.base_config_path is not None:
-            self.base_config = load_config(self.base_config_path)
+            try:
+                self.base_config = load_config(self.base_config_path)
+            except ValueError as exc:
+                # Upstream load_config now raises on a malformed config instead
+                # of warning and falling back to defaults. During a live reload,
+                # keep the last-known-good base_config rather than crashing the
+                # reload or clobbering running souls with default settings.
+                logger.warning(
+                    "Reload skipped base config {}: {}. Keeping previous config.",
+                    self.base_config_path,
+                    exc,
+                )
         self.refresh_skill_pools()
         dirty = False
         for soul_id in list(self.soulboard_config.souls):
@@ -715,8 +727,6 @@ class SoulSupervisor:
             context_block_limit=config.agents.defaults.context_block_limit,
             max_tool_result_chars=config.agents.defaults.max_tool_result_chars,
             provider_retry_mode=config.agents.defaults.provider_retry_mode,
-            web_config=config.tools.web,
-            exec_config=config.tools.exec,
             cron_service=cron_service,
             restrict_to_workspace=config.tools.restrict_to_workspace,
             session_manager=session_manager,
@@ -728,6 +738,7 @@ class SoulSupervisor:
             unified_session=config.agents.defaults.unified_session,
             disabled_skills=config.agents.defaults.disabled_skills,
             tools_config=config.tools,
+            image_generation_provider_configs=image_gen_provider_configs(config),
         )
         channel_manager = ChannelManager(config, bus)
         running = RunningSoul(

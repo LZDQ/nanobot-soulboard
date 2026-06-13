@@ -1373,7 +1373,7 @@ wheels = [
 
 [[package]]
 name = "nanobot-ai"
-version = "0.1.5.post3"
+version = "0.2.1"
 source = { editable = "nanobot" }
 dependencies = [
     { name = "anthropic" },
@@ -1389,6 +1389,7 @@ dependencies = [
     { name = "json-repair" },
     { name = "lark-oapi" },
     { name = "loguru" },
+    { name = "lxml-html-clean" },
     { name = "mcp" },
     { name = "msgpack" },
     { name = "oauth-cli-kit" },
@@ -1402,7 +1403,7 @@ dependencies = [
     { name = "python-pptx" },
     { name = "python-socketio" },
     { name = "python-socks", marker = "sys_platform != 'win32'" },
-    { name = "python-telegram-bot", extra = ["socks"] },
+    { name = "python-telegram-bot", extra = ["socks", "webhooks"] },
     { name = "pyyaml" },
     { name = "qq-botpy" },
     { name = "questionary" },
@@ -1421,7 +1422,9 @@ dependencies = [
 requires-dist = [
     { name = "aiohttp", marker = "extra == 'api'", specifier = ">=3.9.0,<4.0.0" },
     { name = "aiohttp", marker = "extra == 'dev'", specifier = ">=3.9.0,<4.0.0" },
+    { name = "aiohttp", marker = "extra == 'matrix'", specifier = ">=3.9.0,<4.0.0" },
     { name = "anthropic", specifier = ">=0.45.0,<1.0.0" },
+    { name = "azure-identity", marker = "extra == 'azure'", specifier = ">=1.19.0,<2.0.0" },
     { name = "boto3", specifier = ">=1.43.0" },
     { name = "chardet", specifier = ">=3.0.2,<6.0.0" },
     { name = "croniter", specifier = ">=6.0.0,<7.0.0" },
@@ -1437,6 +1440,7 @@ requires-dist = [
     { name = "langsmith", marker = "extra == 'langsmith'", specifier = ">=0.1.0" },
     { name = "lark-oapi", specifier = ">=1.5.0,<2.0.0" },
     { name = "loguru", specifier = ">=0.7.3,<1.0.0" },
+    { name = "lxml-html-clean", specifier = ">=0.4.0,<1.0.0" },
     { name = "matrix-nio", extras = ["e2e"], marker = "sys_platform != 'win32' and extra == 'matrix'", specifier = ">=0.25.2" },
     { name = "mcp", specifier = ">=1.26.0,<2.0.0" },
     { name = "mistune", marker = "extra == 'matrix'", specifier = ">=3.0.0,<4.0.0" },
@@ -1461,7 +1465,7 @@ requires-dist = [
     { name = "python-pptx", specifier = ">=1.0.0,<2.0.0" },
     { name = "python-socketio", specifier = ">=5.16.0,<6.0.0" },
     { name = "python-socks", extras = ["asyncio"], marker = "sys_platform != 'win32'", specifier = ">=2.8.0,<3.0.0" },
-    { name = "python-telegram-bot", extras = ["socks"], specifier = ">=22.6,<23.0" },
+    { name = "python-telegram-bot", extras = ["socks", "webhooks"], specifier = ">=22.6,<23.0" },
     { name = "pyyaml", specifier = ">=6.0,<7.0.0" },
     { name = "qq-botpy", specifier = ">=1.2.0,<2.0.0" },
     { name = "qrcode", extras = ["pil"], marker = "extra == 'weixin'", specifier = ">=8.0" },
@@ -1478,7 +1482,7 @@ requires-dist = [
     { name = "websockets", specifier = ">=16.0,<17.0" },
     { name = "wecom-aibot-sdk-python", marker = "extra == 'wecom'", specifier = ">=0.1.5" },
 ]
-provides-extras = ["api", "wecom", "weixin", "msteams", "matrix", "discord", "langsmith", "pdf", "olostep", "dev"]
+provides-extras = ["api", "azure", "wecom", "weixin", "msteams", "matrix", "discord", "langsmith", "pdf", "olostep", "dev"]
 
 [[package]]
 name = "nanobot-soulboard"
@@ -2109,6 +2113,9 @@ wheels = [
 socks = [
     { name = "httpx", extra = ["socks"] },
 ]
+webhooks = [
+    { name = "tornado" },
+]
 
 [[package]]
 name = "pywin32"
@@ -2649,6 +2656,23 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/28/c0/3c7a39ff68022ddfd7d93f3337ad90389a342f761c4d71de99a3ccc57857/tiktoken-0.12.0-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:54c891b416a0e36b8e2045b12b33dd66fb34a4fe7965565f1b482da50da3e86a", size = 1194908, upload-time = "2025-10-06T20:22:32.073Z" },
     { url = "https://files.pythonhosted.org/packages/ab/0d/c1ad6f4016a3968c048545f5d9b8ffebf577774b2ede3e2e352553b685fe/tiktoken-0.12.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:5edb8743b88d5be814b1a8a8854494719080c28faaa1ccbef02e87354fe71ef0", size = 1253706, upload-time = "2025-10-06T20:22:33.385Z" },
     { url = "https://files.pythonhosted.org/packages/af/df/c7891ef9d2712ad774777271d39fdef63941ffba0a9d59b7ad1fd2765e57/tiktoken-0.12.0-cp314-cp314t-win_amd64.whl", hash = "sha256:f61c0aea5565ac82e2ec50a05e02a6c44734e91b51c10510b084ea1b8e633a71", size = 920667, upload-time = "2025-10-06T20:22:34.444Z" },
+]
+
+[[package]]
+name = "tornado"
+version = "6.5.7"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/64/24/95ec527ad67b76d59299e5465b3935d05e4294b7e0290a3924b7487df30b/tornado-6.5.7.tar.gz", hash = "sha256:66c513a76cda70d53907bc27cf1447557699c2e95aa48ba27a442ff61c3ddfc2", size = 519252, upload-time = "2026-06-08T17:34:51.232Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/02/dc/c7043cab6fed8ae159fc1923ce829ada35c4dbd797d408a43858ffaf9639/tornado-6.5.7-cp39-abi3-macosx_10_9_universal2.whl", hash = "sha256:148b2eb15c2c765a50796172c1e499649b35f30d2e3c3d3e15913cfa56bfb163", size = 448543, upload-time = "2026-06-08T17:34:38.052Z" },
+    { url = "https://files.pythonhosted.org/packages/92/4f/090b1431e5a43df696feceffc268c5383cc079ecb5f08ce58f917109aafe/tornado-6.5.7-cp39-abi3-macosx_10_9_x86_64.whl", hash = "sha256:9da38de27f1da3b78a966f0dae12b5a1ea9afe72ca805d84ff06508272ddf100", size = 446707, upload-time = "2026-06-08T17:34:39.594Z" },
+    { url = "https://files.pythonhosted.org/packages/37/d8/ef374952fd5da67d4463122c2b8e5a96536ec10b4b339254c6dcde81d01c/tornado-6.5.7-cp39-abi3-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:8d759e71906ee783f8867b93bf26a265743da4c1e2f4a018464c1ba019862972", size = 449774, upload-time = "2026-06-08T17:34:41.204Z" },
+    { url = "https://files.pythonhosted.org/packages/35/37/d434c73f4c6e014b745b9b37085f34f40c022f007efff3d7fe65991899f3/tornado-6.5.7-cp39-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:8a46347a18f23fb92b396beebe0fb78f61dda0cc302445202c16203d8a18848b", size = 450745, upload-time = "2026-06-08T17:34:42.531Z" },
+    { url = "https://files.pythonhosted.org/packages/b6/2b/56b9aff361d7f1ab728a805ec7d7ea835f8807afa9f5cc690ea0e630efb9/tornado-6.5.7-cp39-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:7778b30bef919231265e91c69963ce0f49a1e9c07ac900bbe75b19ce2575ba92", size = 450578, upload-time = "2026-06-08T17:34:43.787Z" },
+    { url = "https://files.pythonhosted.org/packages/02/30/a7444fb23aa76860a14198fab96ac79f1866b0a6e19e26c4381b0938e50f/tornado-6.5.7-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:e726f0c75da7726eec023aa62751ff8878bd2737e34fbdd33b1ae5897d2200f5", size = 449985, upload-time = "2026-06-08T17:34:45.326Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/42/5f0e56c01e8d9d36f4e23f367b85ae6cae0c1ecddd5e6977d8388ad27488/tornado-6.5.7-cp39-abi3-win32.whl", hash = "sha256:f8de3bf12d3efdd0cbe7c8887868198f8a91415e3f29fcf258d9b8eb7b1d9ae4", size = 451047, upload-time = "2026-06-08T17:34:46.784Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/a4/b393076ffb21b469eec5b328a0534cf03a3b90bfc6b1f09507cdd075d938/tornado-6.5.7-cp39-abi3-win_amd64.whl", hash = "sha256:de942f843533a039ef9fa3d9c88c7cd8a7c94553fb5ad0154270989b3d99a2c4", size = 451485, upload-time = "2026-06-08T17:34:48.248Z" },
+    { url = "https://files.pythonhosted.org/packages/71/2e/7b1c769803121b809112cf9a00681c472eae1d80e32d7ec0e0bd61d0d0e1/tornado-6.5.7-cp39-abi3-win_arm64.whl", hash = "sha256:ff934fce95643af5f11efdae618eaa73d469dc588641e5c8d19295a0c65c4796", size = 450506, upload-time = "2026-06-08T17:34:49.702Z" },
 ]
 
 [[package]]
