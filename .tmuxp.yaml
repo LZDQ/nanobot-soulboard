@@ -1,8 +1,8 @@
 session_name: soulboard
 start_directory: ./
 
-environment:
-  NANOBOT_MAX_CONCURRENT_REQUESTS: "10"
+# environment:
+#   NANOBOT_MAX_CONCURRENT_REQUESTS: "10"
 
 windows:
   - window_name: main
