@@ -5,7 +5,7 @@ environment:
   NANOBOT_MAX_CONCURRENT_REQUESTS: "10"
 
 windows:
-  - window_name: bash
+  - window_name: main
     focus: true
     panes:
       - blank
