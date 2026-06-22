@@ -5,8 +5,9 @@ After=default.target
 
 [Service]
 Type=oneshot
+WorkingDirectory=%h/nanobot-soulboard
 ExecStartPre=/bin/bash -c 'while ! echo > /dev/tcp/127.0.0.1/7890; do sleep 1; done'
-ExecStart=/usr/bin/tmuxp load -d %h/nanobot-soulboard
+ExecStart=/usr/bin/tmuxp load -d .
 RemainAfterExit=yes
 
 [Install]
