@@ -326,7 +326,6 @@ function getWsBase(): string {
   const apiBase = getApiBase();
   const url = new URL(apiBase || window.location.origin, window.location.origin);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.pathname = "";
   url.search = "";
   url.hash = "";
   return url.toString().replace(/\/$/, "");
@@ -1406,7 +1405,7 @@ export default function App() {
       return;
     }
     setSocketState("connecting");
-    const url = new URL(`${getWsBase()}/ws/souls/${encodeURIComponent(soulId)}/chat`);
+    const url = new URL(`${getWsBase()}/api/ws/souls/${encodeURIComponent(soulId)}/chat`);
     url.searchParams.set("session_key", sessionKey);
     url.searchParams.set("channel", DEFAULT_CHAT_CHANNEL);
     url.searchParams.set("chat_id", DEFAULT_CHAT_ID);

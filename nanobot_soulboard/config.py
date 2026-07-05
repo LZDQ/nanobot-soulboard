@@ -3,10 +3,91 @@
 import json
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _SOUL_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
+
+
+def _default_nano_root() -> Path:
+    return Path.home() / ".nanobot"
+
+
+def normalize_url_prefix(value: str) -> str:
+    """Normalize a public URL path prefix."""
+    prefix = value.strip()
+    if prefix in ("", "/"):
+        return ""
+
+    parsed = urlsplit(prefix)
+    if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
+        raise ValueError("url_prefix must be a path prefix like /soulboard, not a full URL")
+
+    if not prefix.startswith("/"):
+        prefix = f"/{prefix}"
+    return prefix.rstrip("/")
+
+
+class SoulboardSettings(BaseSettings):
+    """Deployment settings loaded from SOULBOARD_* environment variables."""
+
+    model_config = SettingsConfigDict(env_prefix="SOULBOARD_", extra="ignore", validate_default=True)
+
+    nano_root: Path = Field(
+        default_factory=_default_nano_root,
+        description="Nanobot data root. Defaults to ~/.nanobot.",
+    )
+    base_config_path: Path | None = Field(
+        default=None,
+        description="Base nanobot config path. Defaults to {nano_root}/config.json.",
+    )
+    soulboard_config_path: Path | None = Field(
+        default=None,
+        validation_alias=AliasChoices("SOULBOARD_CONFIG_PATH", "SOULBOARD_SOULBOARD_CONFIG_PATH"),
+        description="Soulboard config path. Defaults to {nano_root}/soulboard/config.json.",
+    )
+    url_prefix: str = Field(
+        default="",
+        description="Public URL path prefix for the UI, API, and WebSocket routes.",
+    )
+
+    @field_validator("nano_root")
+    @classmethod
+    def expand_nano_root(cls, value: Path) -> Path:
+        return value.expanduser()
+
+    @field_validator("base_config_path", "soulboard_config_path", mode="before")
+    @classmethod
+    def empty_config_path_to_none(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
+
+    @field_validator("base_config_path", "soulboard_config_path")
+    @classmethod
+    def expand_config_path(cls, value: Path | None) -> Path | None:
+        if value is None:
+            return None
+        return value.expanduser()
+
+    @field_validator("url_prefix")
+    @classmethod
+    def validate_url_prefix(cls, value: str) -> str:
+        return normalize_url_prefix(value)
+
+    @property
+    def resolved_base_config_path(self) -> Path:
+        if self.base_config_path is not None:
+            return self.base_config_path
+        return self.nano_root / "config.json"
+
+    @property
+    def resolved_soulboard_config_path(self) -> Path:
+        if self.soulboard_config_path is not None:
+            return self.soulboard_config_path
+        return self.nano_root / "soulboard" / "config.json"
 
 
 class SoulOverrides(BaseModel):

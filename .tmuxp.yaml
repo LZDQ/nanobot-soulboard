@@ -1,9 +1,6 @@
 session_name: soulboard
 start_directory: ./
 
-# environment:
-#   NANOBOT_MAX_CONCURRENT_REQUESTS: "10"
-
 windows:
   - window_name: main
     focus: true
@@ -15,21 +12,11 @@ windows:
     panes:
       - blank
 
-  - window_name: deploy-backend
+  - window_name: uvicorn
     panes:
-      - shell_command:
+      - environment:
+          SOULBOARD_URL_PREFIX: /soulboard
+          # NANOBOT_MAX_CONCURRENT_REQUESTS: "10"
+        shell_command:
           - source .venv/bin/activate
-          - python -m nanobot_soulboard
-
-  - window_name: deploy-frontend
-    start_directory: ./frontend
-    panes:
-      - shell_command:
-          - source ~/.nvm/nvm.sh
-          - nvm use
-          - pnpm build && pnpm preview
-
-  # - window_name: ttyd
-  #   panes:
-  #     - shell_command:
-  #         - ttyd -i lo -W bash
+          - uvicorn nanobot_soulboard.server:create_app --factory --host 127.0.0.1 --port 18791

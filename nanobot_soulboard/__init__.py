@@ -3,6 +3,7 @@
 from nanobot_soulboard.config import (
     SoulOverrides,
     SoulboardConfig,
+    SoulboardSettings,
     get_soulboard_config_path,
     get_soulboard_root,
     get_souls_root,
@@ -33,6 +34,7 @@ __all__ = [
     "SoulSupervisor",
     "SoulboardConfig",
     "SoulboardContextBuilder",
+    "SoulboardSettings",
     "build_runtime_config",
     "create_app",
     "discover_soul_specs",

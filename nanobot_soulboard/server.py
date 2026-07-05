@@ -5,8 +5,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
 from nanobot.config.loader import load_config
@@ -15,7 +17,7 @@ from nanobot.cron.types import CronJob, CronSchedule
 from nanobot_soulboard.cron import SoulCronPayload
 from nanobot.session.manager import SessionManager
 from nanobot_soulboard.chat_streams import ChatStreamManager
-from nanobot_soulboard.config import load_soulboard_config
+from nanobot_soulboard.config import SoulboardSettings, load_soulboard_config
 from nanobot_soulboard.agent import SOUL_PROMPT_FILES, SoulAgentLoop, SoulSpec, SoulSupervisor
 from nanobot_soulboard.schemas import (
     AddSoulCronJobsFromRegistryRequest,
@@ -100,11 +102,13 @@ class AppState:
     def __init__(
         self,
         supervisor: SoulSupervisor,
+        settings: SoulboardSettings,
         nano_root: Path,
         base_config_path: Path,
         soulboard_config_path: Path,
     ):
         self.supervisor = supervisor
+        self.settings = settings
         self.nano_root = nano_root
         self.base_config_path = base_config_path
         self.soulboard_config_path = soulboard_config_path
@@ -271,16 +275,15 @@ def _to_cron_job_response(job: CronJob, session_key: str | None) -> CronJobRespo
             last_error=job.state.last_error,
         ),
     )
-def create_app(
-    *,
-    nano_root: Path | None = None,
-    base_config_path: Path | None = None,
-    soulboard_config_path: Path | None = None,
-) -> FastAPI:
+
+
+def create_app() -> FastAPI:
     """Create the FastAPI app."""
-    resolved_nano_root = (nano_root or (Path.home() / ".nanobot")).expanduser()
-    resolved_base_config_path = base_config_path or (resolved_nano_root / "config.json")
-    resolved_soulboard_config_path = soulboard_config_path or (resolved_nano_root / "soulboard" / "config.json")
+    settings = SoulboardSettings()
+    normalized_url_prefix = settings.url_prefix
+    resolved_nano_root = settings.nano_root
+    resolved_base_config_path = settings.resolved_base_config_path
+    resolved_soulboard_config_path = settings.resolved_soulboard_config_path
     initial_soulboard_config = load_soulboard_config(resolved_soulboard_config_path)
 
     @asynccontextmanager
@@ -297,6 +300,7 @@ def create_app(
         )
         app.state.soulboard = AppState(
             supervisor=supervisor,
+            settings=settings,
             nano_root=resolved_nano_root,
             base_config_path=resolved_base_config_path,
             soulboard_config_path=resolved_soulboard_config_path,
@@ -318,6 +322,7 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    api = APIRouter(prefix=f"{normalized_url_prefix}/api")
 
     @app.get(
         "/health",
@@ -327,8 +332,8 @@ def create_app(
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.get(
-        "/api/paths",
+    @api.get(
+        "/paths",
         response_model=PathsResponse,
         summary="Get Resolved Config Paths",
         description=(
@@ -344,8 +349,8 @@ def create_app(
             soulboard_config_path=str(state.soulboard_config_path),
         )
 
-    @app.get(
-        "/api/app-links",
+    @api.get(
+        "/app-links",
         response_model=AppLinksResponse,
         summary="List App Links",
         description="Return the configured hero-bar reverse-proxy app links stored in soulboard config.json.",
@@ -354,8 +359,8 @@ def create_app(
         supervisor = _get_supervisor(request)
         return AppLinksResponse(items=supervisor.list_app_links())
 
-    @app.patch(
-        "/api/app-links",
+    @api.patch(
+        "/app-links",
         response_model=AppLinksResponse,
         responses={400: {"model": ErrorResponse}},
         summary="Update App Links",
@@ -369,8 +374,8 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return AppLinksResponse(items=items)
 
-    @app.get(
-        "/api/prompt-link-dirs",
+    @api.get(
+        "/prompt-link-dirs",
         response_model=PromptLinkDirsResponse,
         summary="List Prompt Link Directories",
         description=(
@@ -382,8 +387,8 @@ def create_app(
         supervisor = _get_supervisor(request)
         return _build_prompt_link_dirs_response(supervisor)
 
-    @app.patch(
-        "/api/prompt-link-dirs",
+    @api.patch(
+        "/prompt-link-dirs",
         response_model=PromptLinkDirsResponse,
         responses={400: {"model": ErrorResponse}},
         summary="Update Prompt Link Directories",
@@ -400,8 +405,8 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _build_prompt_link_dirs_response(supervisor)
 
-    @app.get(
-        "/api/skill-registry",
+    @api.get(
+        "/skill-registry",
         response_model=SkillRegistryResponse,
         summary="List Global Skill Pools",
         description=(
@@ -414,8 +419,8 @@ def create_app(
         supervisor = _get_supervisor(request)
         return _build_skill_registry_response(supervisor)
 
-    @app.patch(
-        "/api/skill-registry",
+    @api.patch(
+        "/skill-registry",
         response_model=SkillRegistryResponse,
         responses={400: {"model": ErrorResponse}},
         summary="Update Global Skill Pools",
@@ -433,8 +438,8 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _build_skill_registry_response(supervisor)
 
-    @app.post(
-        "/api/skill-registry/refresh",
+    @api.post(
+        "/skill-registry/refresh",
         response_model=SkillRegistryResponse,
         summary="Refresh Skill Pools",
         description=(
@@ -447,8 +452,8 @@ def create_app(
         supervisor.refresh_skill_pools()
         return _build_skill_registry_response(supervisor)
 
-    @app.get(
-        "/api/cron-job-registry",
+    @api.get(
+        "/cron-job-registry",
         response_model=CronJobRegistryResponse,
         summary="List Global Cron Job Registry",
         description=(
@@ -460,8 +465,8 @@ def create_app(
         supervisor = _get_supervisor(request)
         return CronJobRegistryResponse(items=supervisor.list_cron_job_registry())
 
-    @app.patch(
-        "/api/cron-job-registry",
+    @api.patch(
+        "/cron-job-registry",
         response_model=CronJobRegistryResponse,
         responses={400: {"model": ErrorResponse}},
         summary="Update Global Cron Job Registry",
@@ -481,8 +486,8 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return CronJobRegistryResponse(items=supervisor.list_cron_job_registry())
 
-    @app.get(
-        "/api/souls",
+    @api.get(
+        "/souls",
         response_model=list[SoulResponse],
         summary="List Souls",
         description=(
@@ -494,8 +499,8 @@ def create_app(
         supervisor = _get_supervisor(request)
         return [_to_soul_response(supervisor, spec) for spec in supervisor.list_specs()]
 
-    @app.post(
-        "/api/souls/refresh",
+    @api.post(
+        "/souls/refresh",
         response_model=list[SoulResponse],
         summary="Reload Souls Config",
         description=(
@@ -509,8 +514,8 @@ def create_app(
         supervisor.reload_config()
         return [_to_soul_response(supervisor, spec) for spec in supervisor.list_specs()]
 
-    @app.get(
-        "/api/mcp-servers",
+    @api.get(
+        "/mcp-servers",
         response_model=list[MCPServerResponse],
         summary="List MCP Servers",
         description=(
@@ -525,8 +530,8 @@ def create_app(
             for name, config in supervisor.list_mcp_servers().items()
         ]
 
-    @app.post(
-        "/api/mcp-servers",
+    @api.post(
+        "/mcp-servers",
         response_model=MCPServerResponse,
         responses={400: {"model": ErrorResponse}},
         summary="Create MCP Server",
@@ -543,8 +548,8 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return MCPServerResponse(name=body.name, config=config)
 
-    @app.patch(
-        "/api/mcp-servers/{name}",
+    @api.patch(
+        "/mcp-servers/{name}",
         response_model=MCPServerResponse,
         responses={404: {"model": ErrorResponse}},
         summary="Update MCP Server",
@@ -561,8 +566,8 @@ def create_app(
             _raise_not_found(_error_detail(exc))
         return MCPServerResponse(name=name, config=config)
 
-    @app.delete(
-        "/api/mcp-servers/{name}",
+    @api.delete(
+        "/mcp-servers/{name}",
         status_code=204,
         responses={404: {"model": ErrorResponse}},
         summary="Delete MCP Server",
@@ -578,8 +583,8 @@ def create_app(
         except KeyError as exc:
             _raise_not_found(_error_detail(exc))
 
-    @app.post(
-        "/api/souls",
+    @api.post(
+        "/souls",
         response_model=SoulResponse,
         responses={400: {"model": ErrorResponse}},
         summary="Create Soul",
@@ -611,8 +616,8 @@ def create_app(
             await supervisor.start_soul(spec.soul_id)
         return _to_soul_response(supervisor, spec)
 
-    @app.get(
-        "/api/souls/{soul_id}",
+    @api.get(
+        "/souls/{soul_id}",
         response_model=SoulResponse,
         responses={404: {"model": ErrorResponse}},
         summary="Get Soul",
@@ -629,8 +634,8 @@ def create_app(
             _raise_not_found(_error_detail(exc))
         return _to_soul_response(supervisor, spec)
 
-    @app.get(
-        "/api/souls/{soul_id}/prompt-files",
+    @api.get(
+        "/souls/{soul_id}/prompt-files",
         response_model=SoulPromptFilesResponse,
         responses={404: {"model": ErrorResponse}},
         summary="Get Soul Prompt Files",
@@ -647,8 +652,8 @@ def create_app(
             _raise_not_found(_error_detail(exc))
         return _build_prompt_files_response(files)
 
-    @app.get(
-        "/api/souls/{soul_id}/cron-jobs",
+    @api.get(
+        "/souls/{soul_id}/cron-jobs",
         response_model=list[CronJobResponse],
         responses={404: {"model": ErrorResponse}},
         summary="List Soul Cron Jobs",
@@ -665,8 +670,8 @@ def create_app(
             _raise_not_found(_error_detail(exc))
         return [_to_cron_job_response(job, session_key) for job, session_key in jobs]
 
-    @app.post(
-        "/api/souls/{soul_id}/cron-jobs-from-registry",
+    @api.post(
+        "/souls/{soul_id}/cron-jobs-from-registry",
         response_model=list[CronJobResponse],
         responses={404: {"model": ErrorResponse}, 400: {"model": ErrorResponse}},
         summary="Add Cron Jobs From Registry",
@@ -687,8 +692,8 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return [_to_cron_job_response(job, job.payload.session_key) for job in added]
 
-    @app.post(
-        "/api/souls/{soul_id}/cron-jobs",
+    @api.post(
+        "/souls/{soul_id}/cron-jobs",
         response_model=CronJobResponse,
         responses={404: {"model": ErrorResponse}, 400: {"model": ErrorResponse}},
         summary="Add Soul Cron Job",
@@ -738,8 +743,8 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _to_cron_job_response(job, job.payload.session_key)
 
-    @app.delete(
-        "/api/souls/{soul_id}/cron-jobs/{job_id}",
+    @api.delete(
+        "/souls/{soul_id}/cron-jobs/{job_id}",
         status_code=204,
         responses={404: {"model": ErrorResponse}, 403: {"model": ErrorResponse}},
         summary="Delete Soul Cron Job",
@@ -756,8 +761,8 @@ def create_app(
         if status == "protected":
             raise HTTPException(status_code=403, detail=f"Cron job {job_id!r} is a protected system job")
 
-    @app.patch(
-        "/api/souls/{soul_id}/cron-jobs/{job_id}",
+    @api.patch(
+        "/souls/{soul_id}/cron-jobs/{job_id}",
         response_model=CronJobResponse,
         responses={404: {"model": ErrorResponse}, 403: {"model": ErrorResponse}},
         summary="Update Soul Cron Job",
@@ -775,9 +780,6 @@ def create_app(
                 expr=body.schedule.expr,
                 tz=body.schedule.tz,
             )
-        def _opt(field: str) -> Any:
-            return getattr(body, field) if field in body.model_fields_set else ...
-
         try:
             result = supervisor.update_cron_job(
                 soul_id,
@@ -786,10 +788,14 @@ def create_app(
                 enabled=body.enabled,
                 message=body.message,
                 deliver=body.deliver,
-                channel=_opt("channel"),
-                to=_opt("chat_id"),
-                session_key=_opt("session_key"),
-                recurring_session_key_format=_opt("recurring_session_key_format"),
+                channel=body.channel if "channel" in body.model_fields_set else ...,
+                to=body.chat_id if "chat_id" in body.model_fields_set else ...,
+                session_key=body.session_key if "session_key" in body.model_fields_set else ...,
+                recurring_session_key_format=(
+                    body.recurring_session_key_format
+                    if "recurring_session_key_format" in body.model_fields_set
+                    else ...
+                ),
                 delete_after_run=body.delete_after_run,
                 schedule=schedule,
             )
@@ -802,8 +808,8 @@ def create_app(
         assert isinstance(result, CronJob)
         return _to_cron_job_response(result, result.payload.session_key)
 
-    @app.patch(
-        "/api/souls/{soul_id}/prompt-files",
+    @api.patch(
+        "/souls/{soul_id}/prompt-files",
         response_model=SoulPromptFilesResponse,
         responses={404: {"model": ErrorResponse}, 400: {"model": ErrorResponse}},
         summary="Update Soul Prompt Files",
@@ -825,8 +831,8 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _build_prompt_files_response(files)
 
-    @app.get(
-        "/api/souls/{soul_id}/skills",
+    @api.get(
+        "/souls/{soul_id}/skills",
         response_model=list[SoulSkillResponse],
         responses={404: {"model": ErrorResponse}},
         summary="List Soul Skills",
@@ -844,8 +850,8 @@ def create_app(
             _raise_not_found(_error_detail(exc))
         return _list_soul_skills(spec)
 
-    @app.post(
-        "/api/souls/{soul_id}/skills",
+    @api.post(
+        "/souls/{soul_id}/skills",
         response_model=list[SoulSkillResponse],
         responses={404: {"model": ErrorResponse}, 400: {"model": ErrorResponse}},
         summary="Add Soul Skill From Pools",
@@ -871,8 +877,8 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _list_soul_skills(spec)
 
-    @app.delete(
-        "/api/souls/{soul_id}/skills/{name}",
+    @api.delete(
+        "/souls/{soul_id}/skills/{name}",
         status_code=204,
         responses={404: {"model": ErrorResponse}, 400: {"model": ErrorResponse}},
         summary="Delete Soul Skill",
@@ -891,8 +897,8 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.patch(
-        "/api/souls/{soul_id}",
+    @api.patch(
+        "/souls/{soul_id}",
         response_model=SoulResponse,
         responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
         summary="Update Soul",
@@ -913,8 +919,8 @@ def create_app(
         _sync_soul_workspace(spec)
         return _to_soul_response(supervisor, spec)
 
-    @app.delete(
-        "/api/souls/{soul_id}",
+    @api.delete(
+        "/souls/{soul_id}",
         status_code=204,
         responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
         summary="Delete Soul",
@@ -932,8 +938,8 @@ def create_app(
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    @app.post(
-        "/api/souls/{soul_id}/start",
+    @api.post(
+        "/souls/{soul_id}/start",
         response_model=SoulResponse,
         responses={404: {"model": ErrorResponse}, 400: {"model": ErrorResponse}},
         summary="Start Soul",
@@ -955,8 +961,8 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _to_soul_response(supervisor, spec)
 
-    @app.post(
-        "/api/souls/{soul_id}/stop",
+    @api.post(
+        "/souls/{soul_id}/stop",
         response_model=SoulResponse,
         responses={404: {"model": ErrorResponse}},
         summary="Stop Soul",
@@ -974,8 +980,8 @@ def create_app(
         await supervisor.stop_soul(soul_id)
         return _to_soul_response(supervisor, spec)
 
-    @app.get(
-        "/api/souls/{soul_id}/sessions",
+    @api.get(
+        "/souls/{soul_id}/sessions",
         response_model=SessionListResponse,
         responses={404: {"model": ErrorResponse}},
         summary="List Soul Sessions",
@@ -1011,8 +1017,8 @@ def create_app(
             order=order,
         )
 
-    @app.post(
-        "/api/souls/{soul_id}/sessions",
+    @api.post(
+        "/souls/{soul_id}/sessions",
         response_model=SessionDetailResponse,
         responses={404: {"model": ErrorResponse}},
         summary="Create Empty Session",
@@ -1034,8 +1040,8 @@ def create_app(
         manager.save(session)
         return _build_session_detail_response(session)
 
-    @app.get(
-        "/api/souls/{soul_id}/sessions/{session_key}",
+    @api.get(
+        "/souls/{soul_id}/sessions/{session_key}",
         response_model=SessionDetailResponse,
         responses={404: {"model": ErrorResponse}},
         summary="Get Session Detail",
@@ -1064,8 +1070,8 @@ def create_app(
         session = manager.get_or_create(session_key)
         return _build_session_detail_response(session, before=before, limit=limit)
 
-    @app.post(
-        "/api/souls/{soul_id}/chat",
+    @api.post(
+        "/souls/{soul_id}/chat",
         responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
         summary="Chat With Running Soul",
         description=(
@@ -1089,7 +1095,7 @@ def create_app(
         )
         return {"content": response.content if response is not None else ""}
 
-    @app.websocket("/ws/souls/{soul_id}/chat")
+    @api.websocket("/ws/souls/{soul_id}/chat")
     async def stream_chat(websocket: WebSocket, soul_id: str) -> None:
         await websocket.accept()
         supervisor = websocket.app.state.soulboard.supervisor
@@ -1125,5 +1131,27 @@ def create_app(
                     chat_id=chat_id,
                 ),
             )
+
+    app.include_router(api)
+
+    # Built frontend (vite build outputs to <repo root>/static). check_dir=False so
+    # the server can start before the first frontend build.
+    static_dir = Path(__file__).resolve().parent.parent / "static"
+    frontend_prefix = f"{normalized_url_prefix}/" if normalized_url_prefix else "/"
+    app.mount(
+        f"{normalized_url_prefix}/assets",
+        StaticFiles(directory=static_dir / "assets", check_dir=False),
+        name="assets",
+    )
+
+    @app.get(frontend_prefix, include_in_schema=False)
+    def index() -> FileResponse:
+        index_html = static_dir / "index.html"
+        if not index_html.is_file():
+            raise HTTPException(
+                status_code=404,
+                detail="Frontend is not built. Run `pnpm build` under frontend/ to generate static/.",
+            )
+        return FileResponse(index_html)
 
     return app

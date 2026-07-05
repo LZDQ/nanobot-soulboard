@@ -7,6 +7,7 @@ After=default.target
 Type=oneshot
 WorkingDirectory=%h/nanobot-soulboard
 ExecStartPre=/bin/bash -c 'while ! echo > /dev/tcp/127.0.0.1/7890; do sleep 1; done'
+ExecStartPre=/bin/bash -c 'cd frontend && pnpm build'
 ExecStart=/usr/bin/tmuxp load -d .
 RemainAfterExit=yes
 
