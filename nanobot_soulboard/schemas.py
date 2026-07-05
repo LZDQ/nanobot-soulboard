@@ -99,18 +99,6 @@ class CreateSessionRequest(BaseModel):
     )
 
 
-class AppLinksResponse(BaseModel):
-    """Configured hero-bar app links."""
-
-    items: list[str]
-
-
-class UpdateAppLinksRequest(BaseModel):
-    """Replace the configured hero-bar app links."""
-
-    items: list[str]
-
-
 class PromptLinkDirFileStatusResponse(BaseModel):
     """Markdown-file availability for one prompt-link source directory."""
 

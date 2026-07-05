@@ -23,7 +23,6 @@ from nanobot_soulboard.schemas import (
     AddSoulCronJobsFromRegistryRequest,
     CreateSoulCronJobRequest,
     AddSoulSkillRequest,
-    AppLinksResponse,
     ChatRequest,
     CreateMCPServerRequest,
     CreateSessionRequest,
@@ -49,7 +48,6 @@ from nanobot_soulboard.schemas import (
     SoulResponse,
     SoulSkillResponse,
     StreamInputMessage,
-    UpdateAppLinksRequest,
     UpdateCronJobRegistryRequest,
     UpdateMCPServerRequest,
     UpdatePromptLinkDirsRequest,
@@ -348,31 +346,6 @@ def create_app() -> FastAPI:
             base_config_path=str(state.base_config_path),
             soulboard_config_path=str(state.soulboard_config_path),
         )
-
-    @api.get(
-        "/app-links",
-        response_model=AppLinksResponse,
-        summary="List App Links",
-        description="Return the configured hero-bar reverse-proxy app links stored in soulboard config.json.",
-    )
-    def get_app_links(request: Request) -> AppLinksResponse:
-        supervisor = _get_supervisor(request)
-        return AppLinksResponse(items=supervisor.list_app_links())
-
-    @api.patch(
-        "/app-links",
-        response_model=AppLinksResponse,
-        responses={400: {"model": ErrorResponse}},
-        summary="Update App Links",
-        description="Replace the configured hero-bar reverse-proxy app links stored in soulboard config.json.",
-    )
-    def update_app_links(request: Request, body: UpdateAppLinksRequest) -> AppLinksResponse:
-        supervisor = _get_supervisor(request)
-        try:
-            items = supervisor.update_app_links(body.items)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return AppLinksResponse(items=items)
 
     @api.get(
         "/prompt-link-dirs",

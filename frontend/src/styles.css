@@ -159,13 +159,6 @@ pre {
   justify-items: end;
 }
 
-.app-links {
-  display: flex;
-  gap: 0.7rem;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
 .app-links-editor {
   width: min(32rem, 100%);
   display: grid;

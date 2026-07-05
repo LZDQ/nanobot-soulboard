@@ -186,7 +186,6 @@ class SoulboardConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    app_links: list[str] = Field(default_factory=list)
     prompt_link_dirs: list[str] = Field(default_factory=list)
     skill_registry: list[str] = Field(
         default_factory=list,
@@ -204,11 +203,6 @@ class SoulboardConfig(BaseModel):
     )
     souls: dict[str, SoulOverrides] = Field(default_factory=dict)
 
-    @field_validator("app_links")
-    @classmethod
-    def validate_app_links(cls, value: list[str]) -> list[str]:
-        return _normalize_app_links(value)
-
     @field_validator("prompt_link_dirs")
     @classmethod
     def validate_prompt_link_dirs(cls, value: list[str]) -> list[str]:
@@ -223,23 +217,6 @@ class SoulboardConfig(BaseModel):
     @classmethod
     def validate_cron_job_registry(cls, value: list[CronJobRegistryEntry]) -> list[CronJobRegistryEntry]:
         return _normalize_cron_job_registry(value)
-
-
-def _normalize_app_links(items: list[str]) -> list[str]:
-    """Normalize and validate top-bar app links."""
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for raw in items:
-        item = raw.strip()
-        if not item:
-            continue
-        if not item.startswith("/"):
-            raise ValueError(f"Invalid app link '{raw}'. App links must start with '/'.")
-        if item in seen:
-            continue
-        normalized.append(item)
-        seen.add(item)
-    return normalized
 
 
 def _normalize_prompt_link_dirs(items: list[str]) -> list[str]:
@@ -316,6 +293,8 @@ def load_soulboard_config(path: Path) -> SoulboardConfig:
 
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
+    # Dropped feature: tolerate configs written before app_links was removed.
+    data.pop("app_links", None)
     config = SoulboardConfig.model_validate(data)
     for soul_id in config.souls:
         validate_soul_id(soul_id)
@@ -326,7 +305,6 @@ def save_soulboard_config(config: SoulboardConfig, path: Path) -> None:
     """Persist soulboard config as formatted JSON."""
     for soul_id in config.souls:
         validate_soul_id(soul_id)
-    config.app_links = _normalize_app_links(config.app_links)
     config.prompt_link_dirs = _normalize_prompt_link_dirs(config.prompt_link_dirs)
     config.skill_registry = _normalize_skill_registry(config.skill_registry)
     path.parent.mkdir(parents=True, exist_ok=True)
