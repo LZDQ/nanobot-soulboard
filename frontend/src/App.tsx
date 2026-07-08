@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { createPortal } from "react-dom";
 import { Toaster, toast } from "sonner";
 
 import { CreateSoulDialog } from "./components/CreateSoulDialog";
@@ -893,18 +894,20 @@ export default function App() {
     if (!selectedSoul || !selectedSoul.running) {
       return;
     }
+    const soulId = selectedSoul.soul_id;
     try {
       await runAction("restart", async () => {
-        await api<Soul>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/stop`, {
+        await api<Soul>(`/api/souls/${encodeURIComponent(soulId)}/stop`, {
           method: "POST",
         });
-        await api<Soul>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/start`, {
+        await api<Soul>(`/api/souls/${encodeURIComponent(soulId)}/start`, {
           method: "POST",
         });
-        await refreshSouls(selectedSoul.soul_id);
-        await refreshCronJobs(selectedSoul.soul_id);
-        await refreshPromptFiles(selectedSoul.soul_id, true);
+        await refreshSouls(soulId);
+        await refreshCronJobs(soulId);
+        await refreshPromptFiles(soulId, true);
       });
+      toast.success(`${soulId} restarted`);
     } catch (cause) {
       notifyError(cause);
     }
@@ -1541,7 +1544,7 @@ export default function App() {
                   onClick={() => setActiveSoulDialog("configs")}
                 >
                   <span>Configs</span>
-                  <strong>{selectedSoul.overrides.autostart ? "Auto" : "Manual"}</strong>
+                  <strong>{selectedSoul.overrides.autostart ? "" : "Manual"}</strong>
                 </button>
                 <button
                   type="button"
@@ -1569,7 +1572,7 @@ export default function App() {
                 </button>
               </div>
 
-              {activeSoulDialog === "configs" ? (
+              {activeSoulDialog === "configs" ? createPortal(
                 <div className="modal-backdrop">
                   <section
                     className="registry-modal registry-modal-wide"
@@ -1754,10 +1757,11 @@ export default function App() {
                   )}
                     </div>
                   </section>
-                </div>
+                </div>,
+                document.body,
               ) : null}
 
-              {activeSoulDialog === "skills" ? (
+              {activeSoulDialog === "skills" ? createPortal(
                 <div className="modal-backdrop">
                   <section
                     className="registry-modal registry-modal-wide"
@@ -1897,10 +1901,11 @@ export default function App() {
                       </div>
                     </div>
                   </section>
-                </div>
+                </div>,
+                document.body,
               ) : null}
 
-              {activeSoulDialog === "cron" ? (
+              {activeSoulDialog === "cron" ? createPortal(
                 <div className="modal-backdrop">
                   <section
                     className="registry-modal registry-modal-wide"
@@ -1916,11 +1921,25 @@ export default function App() {
                         <h2 id="soul-cron-title">Cron jobs</h2>
                         <p className="muted">{cronJobs === null ? "Loading" : `${selectedSoulCronJobCount} total`}</p>
                       </div>
-                      <div className="registry-modal-actions">
-                    <div className="action-row">
-                      <label className="check-tile cron-filter-toggle">
-                        <input
-                          type="checkbox"
+	                      <div className="registry-modal-actions">
+	                    <div className="action-row">
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => {
+                          setCronJobCreateDraft({
+                            ...EMPTY_CRON_CREATE_DRAFT,
+                            tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                          });
+                          setIsCreatingCronJob(true);
+                        }}
+                        disabled={!!pending || !selectedSoul || isCreatingCronJob}
+                      >
+                        New job
+                      </button>
+	                      <label className="check-tile cron-filter-toggle">
+	                        <input
+	                          type="checkbox"
                           checked={showOnlySelectedSessionCronJobs}
                           onChange={(event) => {
                             setShowOnlySelectedSessionCronJobs(event.target.checked);
@@ -2172,33 +2191,22 @@ export default function App() {
                     </div>
                   ) : null}
 
-                  <div className="create-box" style={{ marginTop: "0.75rem" }}>
-                    <div className="panel-head">
-                      <h4 style={{ margin: 0 }}>New cron job</h4>
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => {
-                          setIsCreatingCronJob((current) => {
-                            const next = !current;
-                            if (next) {
-                              setCronJobCreateDraft({
-                                ...EMPTY_CRON_CREATE_DRAFT,
-                                tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                              });
-                            }
-                            return next;
-                          });
-                        }}
-                        disabled={!!pending || !selectedSoul}
-                      >
-                        {isCreatingCronJob ? "Cancel" : "New"}
-                      </button>
-                    </div>
-                    {isCreatingCronJob ? (
-                      <div className="details-stack" style={{ gap: "0.5rem" }}>
-                        <label>
-                          <span>Name</span>
+		                  {isCreatingCronJob ? (
+                    <div className="create-box" style={{ marginTop: "0.75rem" }}>
+                      <div className="panel-head">
+                        <h4 style={{ margin: 0 }}>New cron job</h4>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => setIsCreatingCronJob(false)}
+                          disabled={!!pending}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+	                      <div className="details-stack" style={{ gap: "0.5rem" }}>
+	                        <label>
+	                          <span>Name</span>
                           <input
                             value={cronJobCreateDraft.name}
                             onChange={(e) => setCronJobCreateDraft((d) => ({ ...d, name: e.target.value }))}
@@ -2330,17 +2338,18 @@ export default function App() {
                           onClick={() => void createSoulCronJob()}
                           disabled={!!pending}
                         >
-                          Schedule
-                        </button>
-                      </div>
+	                          Schedule
+	                        </button>
+	                      </div>
+		                  </div>
                     ) : null}
-	                  </div>
                     </div>
                   </section>
-                </div>
+                </div>,
+                document.body,
               ) : null}
 
-              {activeSoulDialog === "prompts" ? (
+              {activeSoulDialog === "prompts" ? createPortal(
                 <div className="modal-backdrop">
                   <section
                     className="registry-modal registry-modal-wide"
@@ -2486,7 +2495,8 @@ export default function App() {
                   </div>
                     </div>
                   </section>
-                </div>
+                </div>,
+                document.body,
               ) : null}
             </>
           ) : (
