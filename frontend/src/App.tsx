@@ -96,20 +96,6 @@ type SessionDetail = {
   messages: Array<Record<string, unknown>>;
 };
 
-type PromptLinkDirFileStatus = {
-  name: string;
-  exists: boolean;
-};
-
-type PromptLinkDir = {
-  path: string;
-  files: PromptLinkDirFileStatus[];
-};
-
-type PromptLinkDirsResponse = {
-  items: PromptLinkDir[];
-};
-
 type SoulPromptFile = {
   name: string;
   exists: boolean;
@@ -260,6 +246,12 @@ type DraftOverrides = {
   groups: string[];
 };
 
+type CreateSoulSkillDraft = {
+  enabled: boolean;
+  mode: "symlink" | "copy";
+  target_name: string;
+};
+
 type MCPServerDraft = {
   type: string;
   command: string;
@@ -294,6 +286,19 @@ function getEmptyPromptSelection(): Record<SoulPromptFileName, boolean> {
     "USER.md": false,
     "TOOLS.md": false,
     "SYSTEM.md": false,
+  };
+}
+
+function getEmptyDraftOverrides(): DraftOverrides {
+  return {
+    workspace: "",
+    model: "",
+    provider: "",
+    channels: "",
+    mcp_servers: [],
+    mcp_http_headers: {},
+    autostart: false,
+    groups: [],
   };
 }
 
@@ -852,7 +857,6 @@ export default function App() {
   const [selectedSoulId, setSelectedSoulId] = useState<string>(initialFocusRef.current.soulId);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [mcpServers, setMcpServers] = useState<MCPServer[]>([]);
-  const [promptLinkDirs, setPromptLinkDirs] = useState<PromptLinkDir[]>([]);
   const [skillPools, setSkillPools] = useState<SkillPool[]>([]);
   const [cronJobRegistry, setCronJobRegistry] = useState<CronJobRegistryEntry[]>([]);
   const [promptFiles, setPromptFiles] = useState<SoulPromptFile[]>([]);
@@ -860,7 +864,6 @@ export default function App() {
   const [selectedMcpServerName, setSelectedMcpServerName] = useState<string>("");
   const [createMcpServerName, setCreateMcpServerName] = useState("");
   const [createSessionKey, setCreateSessionKey] = useState("");
-  const [newPromptLinkDir, setNewPromptLinkDir] = useState("");
   const [newSkillRegistryPath, setNewSkillRegistryPath] = useState("");
   const [sessionDetail, setSessionDetail] = useState<SessionDetail | null>(null);
   const [sessionKey, setSessionKey] = useState<string | null>(initialFocusRef.current.sessionKey);
@@ -873,22 +876,13 @@ export default function App() {
   const [pending, setPending] = useState<string>("");
   const [soulError, setSoulError] = useState<string>("");
   const [createSoulId, setCreateSoulId] = useState("");
-  const [draft, setDraft] = useState<DraftOverrides>({
-    workspace: "",
-    model: "",
-    provider: "",
-    channels: "",
-    mcp_servers: [],
-    mcp_http_headers: {},
-    autostart: false,
-    groups: [],
-  });
+  const [draft, setDraft] = useState<DraftOverrides>(getEmptyDraftOverrides());
+  const [createSoulDraft, setCreateSoulDraft] = useState<DraftOverrides>(getEmptyDraftOverrides());
   const [mcpDraft, setMcpDraft] = useState<MCPServerDraft>(getEmptyMcpDraft());
   const [createMcpDraft, setCreateMcpDraft] = useState<MCPServerDraft>(getEmptyMcpDraft());
   const [promptDraft, setPromptDraft] = useState<SoulPromptDraft>(getEmptyPromptDraft());
   const [promptSelection, setPromptSelection] = useState<Record<SoulPromptFileName, boolean>>(getEmptyPromptSelection());
   const [isEditingSoul, setIsEditingSoul] = useState(false);
-  const [isEditingPromptLinkDirs, setIsEditingPromptLinkDirs] = useState(false);
   const [isEditingSkillRegistry, setIsEditingSkillRegistry] = useState(false);
   const [isEditingCronJobRegistry, setIsEditingCronJobRegistry] = useState(false);
   const [cronJobRegistryDraft, setCronJobRegistryDraft] = useState<CronJobRegistryEntryDraft>({
@@ -897,13 +891,12 @@ export default function App() {
   });
   const [addCronJobRegistrySelection, setAddCronJobRegistrySelection] = useState("");
   const [createSoulCronJobNames, setCreateSoulCronJobNames] = useState<string[]>([]);
+  const [createSoulSkillDrafts, setCreateSoulSkillDrafts] = useState<Record<string, CreateSoulSkillDraft>>({});
   const [addSkillSelection, setAddSkillSelection] = useState("");
   const [addSkillMode, setAddSkillMode] = useState<"symlink" | "copy">("symlink");
   const [addSkillTargetName, setAddSkillTargetName] = useState("");
   const [isEditingPromptFiles, setIsEditingPromptFiles] = useState(false);
   const [isCreatingSoul, setIsCreatingSoul] = useState(false);
-  const [createSoulPromptLinkDir, setCreateSoulPromptLinkDir] = useState("");
-  const [createSoulPromptLinkMode, setCreateSoulPromptLinkMode] = useState<"symlink" | "copy">("symlink");
   const [showOnlySelectedSessionCronJobs, setShowOnlySelectedSessionCronJobs] = useState(true);
   const [editingCronJobId, setEditingCronJobId] = useState<string | null>(null);
   const [cronJobEditDraft, setCronJobEditDraft] = useState<CronJobEditDraft>({
@@ -1001,11 +994,6 @@ export default function App() {
     if (soul) {
       setDraft(overridesToDraft(soul.overrides));
     }
-  }
-
-  async function refreshPromptLinkDirs(): Promise<void> {
-    const response = await api<PromptLinkDirsResponse>("/api/prompt-link-dirs");
-    setPromptLinkDirs(response.items);
   }
 
   async function refreshSkillRegistry(): Promise<void> {
@@ -1288,7 +1276,6 @@ export default function App() {
     void (async () => {
       try {
         await refreshSouls();
-        await refreshPromptLinkDirs();
         await refreshSkillRegistry();
         await refreshCronJobRegistry();
         await refreshMcpServers();
@@ -1297,6 +1284,24 @@ export default function App() {
       }
     })();
   }, []);
+
+  useEffect(() => {
+    if (!isCreatingSoul) {
+      return;
+    }
+    const previousOverflow = document.body.style.overflow;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !pending) {
+        closeCreateSoulDialog();
+      }
+    }
+    document.body.style.overflow = "hidden";
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isCreatingSoul, pending]);
 
   useEffect(() => {
     if (!selectedSoul) {
@@ -1446,33 +1451,118 @@ export default function App() {
     }
   }
 
+  function resetCreateSoulForm() {
+    setCreateSoulId("");
+    setCreateSoulDraft(getEmptyDraftOverrides());
+    setCreateSoulCronJobNames([]);
+    setCreateSoulSkillDrafts({});
+  }
+
+  function openCreateSoulDialog() {
+    resetCreateSoulForm();
+    setSoulError("");
+    setIsCreatingSoul(true);
+  }
+
+  function closeCreateSoulDialog() {
+    setIsCreatingSoul(false);
+    resetCreateSoulForm();
+  }
+
+  function toggleCreateSoulSkill(skillPath: string, enabled: boolean) {
+    setCreateSoulSkillDrafts((current) => {
+      if (!enabled) {
+        const next = { ...current };
+        delete next[skillPath];
+        return next;
+      }
+      return {
+        ...current,
+        [skillPath]: {
+          enabled: true,
+          mode: current[skillPath]?.mode ?? "symlink",
+          target_name: current[skillPath]?.target_name ?? "",
+        },
+      };
+    });
+  }
+
+  function updateCreateSoulSkillMode(skillPath: string, mode: "symlink" | "copy") {
+    setCreateSoulSkillDrafts((current) => ({
+      ...current,
+      [skillPath]: {
+        enabled: true,
+        mode,
+        target_name: current[skillPath]?.target_name ?? "",
+      },
+    }));
+  }
+
+  function updateCreateSoulSkillTarget(skillPath: string, targetName: string) {
+    setCreateSoulSkillDrafts((current) => ({
+      ...current,
+      [skillPath]: {
+        enabled: true,
+        mode: current[skillPath]?.mode ?? "symlink",
+        target_name: targetName,
+      },
+    }));
+  }
+
   async function createSoul() {
     if (!createSoulId.trim()) {
       notifyError("soul_id is required");
       return;
     }
+    let createdSoulId: string | null = null;
     try {
       await runAction("create", async () => {
-      const created = await api<Soul>("/api/souls", {
-        method: "POST",
-        body: JSON.stringify({
-          soul_id: createSoulId.trim(),
-          overrides: draftToOverrides(draft),
-          prompt_link_dir: createSoulPromptLinkDir || null,
-          prompt_link_mode: createSoulPromptLinkMode,
-          cron_job_registry_names: createSoulCronJobNames,
-        }),
-      });
-      setCreateSoulId("");
-      setCreateSoulPromptLinkDir("");
-      setCreateSoulPromptLinkMode("symlink");
-      setCreateSoulCronJobNames([]);
-      setIsCreatingSoul(false);
-      await refreshSouls(created.soul_id);
-      await refreshSessions(created.soul_id);
+        const selectedSkills = Object.entries(createSoulSkillDrafts).filter(([, skill]) => skill.enabled);
+        const requestedOverrides = draftToOverrides(createSoulDraft);
+        const shouldDelayAutostart = selectedSkills.length > 0 && requestedOverrides.autostart;
+        const createOverrides = shouldDelayAutostart
+          ? { ...requestedOverrides, autostart: false }
+          : requestedOverrides;
+        const created = await api<Soul>("/api/souls", {
+          method: "POST",
+          body: JSON.stringify({
+            soul_id: createSoulId.trim(),
+            overrides: createOverrides,
+            cron_job_registry_names: createSoulCronJobNames,
+          }),
+        });
+        createdSoulId = created.soul_id;
+        for (const [skillPath, skill] of selectedSkills) {
+          await api<SoulSkill[]>(`/api/souls/${encodeURIComponent(created.soul_id)}/skills`, {
+            method: "POST",
+            body: JSON.stringify({
+              skill_path: skillPath,
+              name: skill.target_name.trim() || null,
+              mode: skill.mode,
+            }),
+          });
+        }
+        if (shouldDelayAutostart) {
+          await api<Soul>(`/api/souls/${encodeURIComponent(created.soul_id)}`, {
+            method: "PATCH",
+            body: JSON.stringify({ overrides: requestedOverrides }),
+          });
+          await api<Soul>(`/api/souls/${encodeURIComponent(created.soul_id)}/start`, {
+            method: "POST",
+          });
+        }
+        resetCreateSoulForm();
+        setIsCreatingSoul(false);
+        await refreshSouls(created.soul_id);
+        await refreshSessions(created.soul_id);
       });
     } catch (cause) {
       notifyError(cause);
+      if (createdSoulId) {
+        await refreshSouls(createdSoulId).catch((refreshCause) => {
+          notifyError(refreshCause);
+        });
+      }
     }
   }
 
@@ -1772,37 +1862,6 @@ export default function App() {
     setChatInput("");
   }
 
-  async function savePromptLinkDirs(items: string[]) {
-    const normalized = items.map((item) => item.trim()).filter(Boolean);
-    await runAction("prompt-link-dirs", async () => {
-      const response = await api<PromptLinkDirsResponse>("/api/prompt-link-dirs", {
-        method: "PATCH",
-        body: JSON.stringify({ items: normalized }),
-      });
-      setPromptLinkDirs(response.items);
-      setIsEditingPromptLinkDirs(false);
-      setNewPromptLinkDir("");
-      if (createSoulPromptLinkDir && !response.items.some((item) => item.path === createSoulPromptLinkDir)) {
-        setCreateSoulPromptLinkDir("");
-      }
-    }).catch((cause) => {
-      notifyError(cause);
-    });
-  }
-
-  async function addPromptLinkDir() {
-    const item = newPromptLinkDir.trim();
-    if (!item) {
-      notifyError("Prompt link directory is required");
-      return;
-    }
-    await savePromptLinkDirs([...promptLinkDirs.map((entry) => entry.path), item]);
-  }
-
-  async function deletePromptLinkDir(path: string) {
-    await savePromptLinkDirs(promptLinkDirs.map((entry) => entry.path).filter((item) => item !== path));
-  }
-
   async function saveSkillRegistry(items: string[]) {
     const normalized = items.map((item) => item.trim()).filter(Boolean);
     await runAction("skill-registry", async () => {
@@ -1819,6 +1878,14 @@ export default function App() {
       if (addSkillSelection && !stillExists) {
         setAddSkillSelection("");
       }
+      setCreateSoulSkillDrafts((current) => {
+        const validSkillPaths = new Set(
+          response.pools.flatMap((pool) => pool.skills.map((skill) => skill.skill_path)),
+        );
+        return Object.fromEntries(
+          Object.entries(current).filter(([skillPath]) => validSkillPaths.has(skillPath)),
+        );
+      });
     }).catch((cause) => {
       notifyError(cause);
     });
@@ -1942,8 +2009,8 @@ export default function App() {
                 void (async () => {
                   try {
                     await refreshSouls(selectedSoulId, true);
-                    await refreshPromptLinkDirs();
                     await refreshSkillRegistry();
+                    toast.success("Souls refreshed");
                   } catch (cause) {
                     notifyError(cause);
                   }
@@ -1988,27 +2055,7 @@ export default function App() {
             <h3>Create soul</h3>
             <button
               onClick={() => {
-                setIsCreatingSoul(true);
-                setSelectedSoulId("");
-                setSessions([]);
-                setSessionDetail(null);
-                setSessionKey(null);
-                setChatContent("");
-                setChatReasoning("");
-                setFinalizedMessages([]);
-                setSoulError("");
-                setCreateSoulPromptLinkDir("");
-                setCreateSoulPromptLinkMode("symlink");
-                setDraft({
-                  workspace: "",
-                  model: "",
-                  provider: "",
-                  channels: "",
-                  mcp_servers: [],
-                  mcp_http_headers: {},
-                  autostart: false,
-                  groups: [],
-                });
+                openCreateSoulDialog();
               }}
               disabled={!!pending}
             >
@@ -2020,21 +2067,8 @@ export default function App() {
 
         <section className="panel sessions-panel">
           <div className="panel-head">
-            <h2>{isCreatingSoul ? "Create new soul" : "Sessions"}</h2>
-            {isCreatingSoul ? (
-              <button
-                className="ghost"
-                onClick={() => {
-                  setIsCreatingSoul(false);
-                  if (selectedSoul) {
-                    setDraft(overridesToDraft(selectedSoul.overrides));
-                  }
-                }}
-                disabled={!!pending}
-              >
-                Cancel
-              </button>
-            ) : selectedSoul ? (
+            <h2>Sessions</h2>
+            {selectedSoul ? (
               <button
                 className="ghost"
                 onClick={() => {
@@ -2048,175 +2082,7 @@ export default function App() {
               </button>
             ) : null}
           </div>
-          {isCreatingSoul ? (
-            <div className="details-stack">
-              <label>
-                <span>Soul ID</span>
-                <input value={createSoulId} onChange={(event) => setCreateSoulId(event.target.value)} placeholder="reviewer" />
-              </label>
-              <label>
-                <span>Prompt source directory</span>
-                <select
-                  value={createSoulPromptLinkDir}
-                  onChange={(event) => setCreateSoulPromptLinkDir(event.target.value)}
-                >
-                  <option value="">None</option>
-                  {promptLinkDirs.map((item) => (
-                    <option key={item.path} value={item.path}>
-                      {item.path}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <fieldset className="prompt-link-mode" disabled={!createSoulPromptLinkDir}>
-                <legend>Prompt source mode</legend>
-                <label className="prompt-link-mode-option">
-                  <input
-                    type="radio"
-                    name="prompt-link-mode"
-                    value="symlink"
-                    checked={createSoulPromptLinkMode === "symlink"}
-                    onChange={() => setCreateSoulPromptLinkMode("symlink")}
-                  />
-                  <span>
-                    <strong>Soft link</strong> &mdash; soul tracks the source directory live
-                  </span>
-                </label>
-                <label className="prompt-link-mode-option">
-                  <input
-                    type="radio"
-                    name="prompt-link-mode"
-                    value="copy"
-                    checked={createSoulPromptLinkMode === "copy"}
-                    onChange={() => setCreateSoulPromptLinkMode("copy")}
-                  />
-                  <span>
-                    <strong>Copy</strong> &mdash; soul gets its own independent copy
-                  </span>
-                </label>
-              </fieldset>
-              <div className="field-grid">
-                <label>
-                  <span>Workspace override</span>
-                  <input
-                    value={draft.workspace}
-                    onChange={(event) => setDraft((current) => ({ ...current, workspace: event.target.value }))}
-                    placeholder="inherits soulboard default workspace"
-                  />
-                </label>
-                <label>
-                  <span>Model</span>
-                  <input
-                    value={draft.model}
-                    onChange={(event) => setDraft((current) => ({ ...current, model: event.target.value }))}
-                    placeholder="inherits from base config"
-                  />
-                </label>
-                <label>
-                  <span>Provider</span>
-                  <input
-                    value={draft.provider}
-                    onChange={(event) => setDraft((current) => ({ ...current, provider: event.target.value }))}
-                    placeholder="inherits from base config"
-                  />
-                </label>
-                <label>
-                  <span>Channels</span>
-                  <input
-                    value={draft.channels}
-                    onChange={(event) => setDraft((current) => ({ ...current, channels: event.target.value }))}
-                    placeholder="cli, telegram"
-                  />
-                </label>
-                <label htmlFor="create-soul-groups-input">
-                  <span>Groups (display only)</span>
-                  <GroupListEditor
-                    inputId="create-soul-groups-input"
-                    value={draft.groups}
-                    onChange={(next) => setDraft((current) => ({ ...current, groups: next }))}
-                    suggestions={allSoulGroups}
-                  />
-                </label>
-                <label>
-                  <span>MCP servers</span>
-                  <div className="selection-grid">
-                    {mcpServers.map((server) => (
-                      <label key={server.name} className="check-tile">
-                        <input
-                          type="checkbox"
-                          checked={draft.mcp_servers.includes(server.name)}
-                          onChange={(event) => {
-                            setDraft((current) => updateSoulMcpSelection(current, server.name, event.target.checked));
-                          }}
-                        />
-                        <span>{server.name}</span>
-                      </label>
-                    ))}
-                    {!mcpServers.length ? <p className="muted">No MCP server definitions available.</p> : null}
-                  </div>
-                </label>
-                {draft.mcp_servers.length ? (
-                  <div className="field-grid">
-                    {draft.mcp_servers.map((serverName) => (
-                      <label key={serverName}>
-                        <span>MCP headers: {serverName}</span>
-                        <textarea
-                          value={draft.mcp_http_headers[serverName] ?? "{}"}
-                          onChange={(event) => {
-                            const value = event.target.value;
-                            setDraft((current) => ({
-                              ...current,
-                              mcp_http_headers: {
-                                ...current.mcp_http_headers,
-                                [serverName]: value,
-                              },
-                            }));
-                          }}
-                          rows={6}
-                          spellCheck={false}
-                        />
-                      </label>
-                    ))}
-                  </div>
-                ) : null}
-                <label className="checkbox">
-                  <input
-                    type="checkbox"
-                    checked={draft.autostart}
-                    onChange={(event) => setDraft((current) => ({ ...current, autostart: event.target.checked }))}
-                  />
-                  <span>Autostart on server boot</span>
-                </label>
-              </div>
-              {cronJobRegistry.length > 0 ? (
-                <div>
-                  <h4 style={{ margin: "0.5rem 0 0.25rem" }}>Cron jobs from registry</h4>
-                  <div className="prompt-link-file-pills" style={{ flexDirection: "column", gap: "0.25rem" }}>
-                    {cronJobRegistry.map((entry) => (
-                      <label key={entry.name} className="checkbox">
-                        <input
-                          type="checkbox"
-                          checked={createSoulCronJobNames.includes(entry.name)}
-                          onChange={(event) => {
-                            setCreateSoulCronJobNames((current) =>
-                              event.target.checked
-                                ? [...current, entry.name]
-                                : current.filter((n) => n !== entry.name)
-                            );
-                          }}
-                        />
-                        <span><code>{entry.name}</code>{entry.label ? ` — ${entry.label}` : ""}{entry.cron_expr ? ` (${entry.cron_expr})` : entry.every_seconds ? ` (every ${entry.every_seconds}s)` : ""}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-              <button onClick={() => void createSoul()} disabled={!!pending}>
-                Create soul
-              </button>
-            </div>
-          ) : (
-            <>
+          <>
               {sessionsTotal > 0 ? (
                 <div className="session-toolbar">
                   <label className="session-toolbar-field">
@@ -2290,8 +2156,7 @@ export default function App() {
                   Open session
                 </button>
               </div>
-            </>
-          )}
+          </>
         </section>
 
         <section className="panel tools-panel">
@@ -2301,66 +2166,6 @@ export default function App() {
               <span className="muted tools-fold-hint">click to expand</span>
             </summary>
             <div className="tools-stack">
-              <details className="tools-subpanel">
-                <summary className="panel-head tools-summary">
-                  <h3>Prompt sources</h3>
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={(event) => {
-                      event.preventDefault();
-                      setIsEditingPromptLinkDirs((current) => !current);
-                    }}
-                    disabled={!!pending}
-                  >
-                    {isEditingPromptLinkDirs ? "Done" : "Edit"}
-                  </button>
-                </summary>
-                <div className="tools-subpanel-body">
-                  {isEditingPromptLinkDirs ? (
-                    <div className="app-links-editor">
-                      <div className="app-links-editor-row">
-                        <input
-                          value={newPromptLinkDir}
-                          onChange={(event) => setNewPromptLinkDir(event.target.value)}
-                          placeholder="~/prompts/reviewer"
-                          disabled={!!pending}
-                        />
-                        <button type="button" onClick={() => void addPromptLinkDir()} disabled={!!pending}>
-                          Add
-                        </button>
-                      </div>
-                    </div>
-                  ) : null}
-                  <div className="prompt-link-dir-list">
-                    {promptLinkDirs.length ? promptLinkDirs.map((item) => (
-                      <article key={item.path} className="prompt-link-dir-card">
-                        <div className="prompt-link-dir-head">
-                          <code>{item.path}</code>
-                          {isEditingPromptLinkDirs ? (
-                            <button
-                              type="button"
-                              className="ghost"
-                              onClick={() => void deletePromptLinkDir(item.path)}
-                              disabled={!!pending}
-                            >
-                              Delete
-                            </button>
-                          ) : null}
-                        </div>
-                        <div className="prompt-link-file-pills">
-                          {item.files.map((file) => (
-                            <span key={`${item.path}:${file.name}`} className={`pill ${file.exists ? "live" : "idle"}`}>
-                              {file.name} {file.exists ? "present" : "missing"}
-                            </span>
-                          ))}
-                        </div>
-                      </article>
-                    )) : <p className="muted">No prompt source directories configured.</p>}
-                  </div>
-                </div>
-              </details>
-
               <details className="tools-subpanel">
                 <summary className="panel-head tools-summary">
                   <h3>Skill pools</h3>
@@ -2405,10 +2210,10 @@ export default function App() {
                       </div>
                     </div>
                   ) : null}
-                  <div className="prompt-link-dir-list">
+                  <div className="registry-card-list">
                     {skillPools.length ? skillPools.map((pool) => (
-                      <article key={pool.path} className="prompt-link-dir-card">
-                        <div className="prompt-link-dir-head">
+                      <article key={pool.path} className="registry-card">
+                        <div className="registry-card-head">
                           <code>{pool.path}</code>
                           {isEditingSkillRegistry ? (
                             <button
@@ -2421,7 +2226,7 @@ export default function App() {
                             </button>
                           ) : null}
                         </div>
-                        <div className="prompt-link-file-pills">
+                        <div className="registry-pills">
                           <span className={`pill ${pool.exists ? "live" : "idle"}`}>
                             {pool.exists ? "pool present" : "missing"}
                           </span>
@@ -2587,10 +2392,10 @@ export default function App() {
                       </div>
                     </div>
                   ) : null}
-                  <div className="prompt-link-dir-list">
+                  <div className="registry-card-list">
                     {cronJobRegistry.length ? cronJobRegistry.map((entry) => (
-                      <article key={entry.name} className="prompt-link-dir-card">
-                        <div className="prompt-link-dir-head">
+                      <article key={entry.name} className="registry-card">
+                        <div className="registry-card-head">
                           <code>{entry.name}</code>
                           {isEditingCronJobRegistry ? (
                             <div style={{ display: "flex", gap: "0.4rem" }}>
@@ -2623,7 +2428,7 @@ export default function App() {
                             </div>
                           ) : null}
                         </div>
-                        <div className="prompt-link-file-pills">
+                        <div className="registry-pills">
                           {entry.label ? <span className="pill live">{entry.label}</span> : null}
                           {entry.cron_expr ? <span className="pill idle">{entry.cron_expr}{entry.tz ? ` (${entry.tz})` : ""}</span> : null}
                           {entry.every_seconds ? <span className="pill idle">every {entry.every_seconds}s</span> : null}
@@ -3258,9 +3063,9 @@ export default function App() {
                               disabled={!!pending}
                             />
                           ) : null}
-                          {addSkillSelection ? (<fieldset className="prompt-link-mode" disabled={!!pending}>
+                          {addSkillSelection ? (<fieldset className="registry-mode" disabled={!!pending}>
                             <legend>Mode</legend>
-                            <label className="prompt-link-mode-option">
+                            <label className="registry-mode-option">
                               <input
                                 type="radio"
                                 name="add-skill-mode"
@@ -3270,7 +3075,7 @@ export default function App() {
                               />
                               <span><strong>Soft link</strong> &mdash; track the pool source live</span>
                             </label>
-                            <label className="prompt-link-mode-option">
+                            <label className="registry-mode-option">
                               <input
                                 type="radio"
                                 name="add-skill-mode"
@@ -3872,7 +3677,7 @@ export default function App() {
                 </div>
             </>
           ) : (
-            <p className="muted">Select a soul to inspect or create one from the draft form.</p>
+            <p className="muted">Select a soul to inspect or create one from the Souls panel.</p>
           )}
         </section>
 
@@ -4018,6 +3823,265 @@ export default function App() {
         ) : null}
 
       </main>
+      {isCreatingSoul ? (
+        <div className="modal-backdrop">
+          <section
+            className="create-soul-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="create-soul-title"
+          >
+            <div className="create-soul-modal-head">
+              <button
+                type="button"
+                className="ghost"
+                onClick={closeCreateSoulDialog}
+                disabled={!!pending}
+              >
+                Cancel
+              </button>
+              <div>
+                <h2 id="create-soul-title">Create new soul</h2>
+                <p className="muted">Prompt files are configured after creation from the soul details panel.</p>
+              </div>
+            </div>
+
+            <div className="create-soul-modal-body">
+              <section className="create-soul-block">
+                <div className="create-soul-block-head">
+                  <h3>Options</h3>
+                  <span className="muted">Identity, runtime overrides, groups, and MCP access.</span>
+                </div>
+                <div className="field-grid create-soul-options-grid">
+                  <label>
+                    <span>Soul ID</span>
+                    <input
+                      autoFocus
+                      value={createSoulId}
+                      onChange={(event) => setCreateSoulId(event.target.value)}
+                      placeholder="reviewer"
+                    />
+                  </label>
+                  <label>
+                    <span>Workspace override</span>
+                    <input
+                      value={createSoulDraft.workspace}
+                      onChange={(event) => setCreateSoulDraft((current) => ({ ...current, workspace: event.target.value }))}
+                      placeholder="inherits soulboard default workspace"
+                    />
+                  </label>
+                  <label>
+                    <span>Model</span>
+                    <input
+                      value={createSoulDraft.model}
+                      onChange={(event) => setCreateSoulDraft((current) => ({ ...current, model: event.target.value }))}
+                      placeholder="inherits from base config"
+                    />
+                  </label>
+                  <label>
+                    <span>Provider</span>
+                    <input
+                      value={createSoulDraft.provider}
+                      onChange={(event) => setCreateSoulDraft((current) => ({ ...current, provider: event.target.value }))}
+                      placeholder="inherits from base config"
+                    />
+                  </label>
+                  <label>
+                    <span>Channels</span>
+                    <input
+                      value={createSoulDraft.channels}
+                      onChange={(event) => setCreateSoulDraft((current) => ({ ...current, channels: event.target.value }))}
+                      placeholder="cli, telegram"
+                    />
+                  </label>
+                  <label htmlFor="create-soul-modal-groups-input">
+                    <span>Groups (display only)</span>
+                    <GroupListEditor
+                      inputId="create-soul-modal-groups-input"
+                      value={createSoulDraft.groups}
+                      onChange={(next) => setCreateSoulDraft((current) => ({ ...current, groups: next }))}
+                      suggestions={allSoulGroups}
+                    />
+                  </label>
+                  <label className="create-soul-wide-field">
+                    <span>MCP servers</span>
+                    <div className="selection-grid">
+                      {mcpServers.map((server) => (
+                        <label key={server.name} className="check-tile">
+                          <input
+                            type="checkbox"
+                            checked={createSoulDraft.mcp_servers.includes(server.name)}
+                            onChange={(event) => {
+                              setCreateSoulDraft((current) => updateSoulMcpSelection(current, server.name, event.target.checked));
+                            }}
+                          />
+                          <span>{server.name}</span>
+                        </label>
+                      ))}
+                      {!mcpServers.length ? <p className="muted">No MCP server definitions available.</p> : null}
+                    </div>
+                  </label>
+                  {createSoulDraft.mcp_servers.length ? (
+                    <div className="field-grid create-soul-wide-field">
+                      {createSoulDraft.mcp_servers.map((serverName) => (
+                        <label key={serverName}>
+                          <span>MCP headers: {serverName}</span>
+                          <textarea
+                            value={createSoulDraft.mcp_http_headers[serverName] ?? "{}"}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              setCreateSoulDraft((current) => ({
+                                ...current,
+                                mcp_http_headers: {
+                                  ...current.mcp_http_headers,
+                                  [serverName]: value,
+                                },
+                              }));
+                            }}
+                            rows={6}
+                            spellCheck={false}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  ) : null}
+                  <label className="checkbox create-soul-wide-field">
+                    <input
+                      type="checkbox"
+                      checked={createSoulDraft.autostart}
+                      onChange={(event) => setCreateSoulDraft((current) => ({ ...current, autostart: event.target.checked }))}
+                    />
+                    <span>Autostart on server boot</span>
+                  </label>
+                </div>
+              </section>
+
+              <section className="create-soul-block">
+                <div className="create-soul-block-head">
+                  <h3>Cron jobs</h3>
+                  <span className="muted">{createSoulCronJobNames.length} selected</span>
+                </div>
+                {cronJobRegistry.length > 0 ? (
+                  <div className="create-soul-toggle-list">
+                    {cronJobRegistry.map((entry) => (
+                      <label key={entry.name} className="create-soul-toggle-row">
+                        <input
+                          type="checkbox"
+                          checked={createSoulCronJobNames.includes(entry.name)}
+                          onChange={(event) => {
+                            setCreateSoulCronJobNames((current) =>
+                              event.target.checked
+                                ? [...current, entry.name]
+                                : current.filter((name) => name !== entry.name)
+                            );
+                          }}
+                        />
+                        <span>
+                          <strong>{entry.label || entry.name}</strong>
+                          <code>{entry.name}</code>
+                          {entry.cron_expr ? <small>{entry.cron_expr}{entry.tz ? ` (${entry.tz})` : ""}</small> : null}
+                          {entry.every_seconds ? <small>every {entry.every_seconds}s</small> : null}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="muted">No cron job templates registered.</p>
+                )}
+              </section>
+
+              <section className="create-soul-block">
+                <div className="create-soul-block-head">
+                  <h3>Skills</h3>
+                  <span className="muted">
+                    {Object.values(createSoulSkillDrafts).filter((skill) => skill.enabled).length} selected
+                  </span>
+                </div>
+                {skillPools.some((pool) => pool.skills.length) ? (
+                  <div className="create-soul-skill-list">
+                    {skillPools.map((pool) => (
+                      pool.skills.length ? (
+                        <div key={pool.path} className="create-soul-skill-pool">
+                          <h4><code>{pool.path}</code></h4>
+                          {pool.skills.map((skill) => {
+                            const skillDraft = createSoulSkillDrafts[skill.skill_path];
+                            const enabled = skillDraft?.enabled ?? false;
+                            const mode = skillDraft?.mode ?? "symlink";
+                            return (
+                              <article key={skill.skill_path} className={`create-soul-skill-row ${enabled ? "enabled" : ""}`}>
+                                <label className="create-soul-skill-choice">
+                                  <input
+                                    type="checkbox"
+                                    checked={enabled}
+                                    onChange={(event) => toggleCreateSoulSkill(skill.skill_path, event.target.checked)}
+                                  />
+                                  <span>
+                                    <strong>{skill.name}</strong>
+                                    <code>{skill.relative_path}</code>
+                                    {skill.description ? <small>{skill.description}</small> : null}
+                                  </span>
+                                </label>
+                                {enabled ? (
+                                  <div className="create-soul-skill-controls">
+                                    <fieldset className="registry-mode" disabled={!!pending}>
+                                      <legend>Mode</legend>
+                                      <label className="registry-mode-option">
+                                        <input
+                                          type="radio"
+                                          name={`create-soul-skill-mode-${skill.skill_path}`}
+                                          value="symlink"
+                                          checked={mode === "symlink"}
+                                          onChange={() => updateCreateSoulSkillMode(skill.skill_path, "symlink")}
+                                        />
+                                        <span><strong>Soft link</strong> &mdash; track the pool source live</span>
+                                      </label>
+                                      <label className="registry-mode-option">
+                                        <input
+                                          type="radio"
+                                          name={`create-soul-skill-mode-${skill.skill_path}`}
+                                          value="copy"
+                                          checked={mode === "copy"}
+                                          onChange={() => updateCreateSoulSkillMode(skill.skill_path, "copy")}
+                                        />
+                                        <span><strong>Copy</strong> &mdash; soul-specific writable copy</span>
+                                      </label>
+                                    </fieldset>
+                                    <label>
+                                      <span>Skill folder name</span>
+                                      <input
+                                        value={skillDraft?.target_name ?? ""}
+                                        onChange={(event) => updateCreateSoulSkillTarget(skill.skill_path, event.target.value)}
+                                        placeholder="optional rename"
+                                        disabled={!!pending}
+                                      />
+                                    </label>
+                                  </div>
+                                ) : null}
+                              </article>
+                            );
+                          })}
+                        </div>
+                      ) : null
+                    ))}
+                  </div>
+                ) : (
+                  <p className="muted">No skills loaded from pools yet.</p>
+                )}
+              </section>
+            </div>
+
+            <div className="create-soul-modal-actions">
+              <button
+                type="button"
+                onClick={() => void createSoul()}
+                disabled={!!pending || !createSoulId.trim()}
+              >
+                {pending === "create" ? "Creating..." : "Create soul"}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }

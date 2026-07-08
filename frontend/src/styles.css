@@ -520,13 +520,171 @@ pre {
   border-top: 1px solid var(--panel-border);
 }
 
-.prompt-link-dir-list {
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  background: rgba(38, 23, 13, 0.42);
+  backdrop-filter: blur(12px);
+}
+
+.create-soul-modal {
+  width: min(1120px, calc(100vw - 2.5rem));
+  max-height: calc(100vh - 2.5rem);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  border-radius: 26px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  background: rgba(255, 251, 245, 0.96);
+  box-shadow: 0 32px 110px rgba(38, 23, 13, 0.34);
+  overflow: hidden;
+}
+
+.create-soul-modal-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 1rem;
+  padding: 1rem 1.1rem;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.create-soul-modal-head h2,
+.create-soul-modal-head p,
+.create-soul-block-head h3,
+.create-soul-block-head span,
+.create-soul-skill-pool h4 {
+  margin: 0;
+}
+
+.create-soul-modal-body {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+  overflow: auto;
+}
+
+.create-soul-block {
+  width: 100%;
+  display: grid;
+  gap: 0.9rem;
+  padding: 1rem;
+  border-radius: 20px;
+  border: 1px solid rgba(85, 52, 25, 0.1);
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.create-soul-block-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.create-soul-block-head span {
+  font-size: 0.85rem;
+  text-align: right;
+}
+
+.create-soul-options-grid {
+  margin-top: 0;
+}
+
+.create-soul-wide-field {
+  grid-column: 1 / -1;
+}
+
+.create-soul-toggle-list,
+.create-soul-skill-list,
+.create-soul-skill-pool {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.create-soul-toggle-row,
+.create-soul-skill-row {
+  width: 100%;
+  border-radius: 18px;
+  border: 1px solid rgba(85, 52, 25, 0.09);
+  background: rgba(255, 255, 255, 0.66);
+}
+
+.create-soul-toggle-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0.75rem;
+  padding: 0.85rem 0.95rem;
+  cursor: pointer;
+}
+
+.create-soul-toggle-row input,
+.create-soul-skill-choice input {
+  width: auto;
+  margin-top: 0.2rem;
+}
+
+.create-soul-toggle-row > span,
+.create-soul-skill-choice > span {
+  min-width: 0;
+  display: grid;
+  gap: 0.25rem;
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+.create-soul-toggle-row code,
+.create-soul-skill-choice code,
+.create-soul-toggle-row small,
+.create-soul-skill-choice small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.create-soul-skill-row {
+  display: grid;
+  gap: 0.85rem;
+  padding: 0.9rem 0.95rem;
+}
+
+.create-soul-skill-row.enabled {
+  border-color: rgba(183, 77, 18, 0.28);
+  background: rgba(255, 248, 240, 0.86);
+}
+
+.create-soul-skill-choice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0.75rem;
+  cursor: pointer;
+}
+
+.create-soul-skill-controls {
+  display: grid;
+  grid-template-columns: minmax(18rem, 1fr) minmax(14rem, 0.7fr);
+  gap: 0.9rem;
+  padding-left: 1.8rem;
+}
+
+.create-soul-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 1rem 1.1rem;
+  border-top: 1px solid var(--panel-border);
+  background: rgba(255, 251, 245, 0.94);
+}
+
+.registry-card-list {
   display: grid;
   gap: 0.75rem;
   margin-top: 0.9rem;
 }
 
-.prompt-link-dir-card {
+.registry-card {
   display: grid;
   gap: 0.7rem;
   padding: 0.95rem 1rem;
@@ -535,26 +693,26 @@ pre {
   background: rgba(255, 255, 255, 0.55);
 }
 
-.prompt-link-dir-head {
+.registry-card-head {
   display: flex;
   align-items: start;
   justify-content: space-between;
   gap: 0.75rem;
 }
 
-.prompt-link-dir-head code {
+.registry-card-head code {
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--muted);
 }
 
-.prompt-link-file-pills {
+.registry-pills {
   display: flex;
   flex-wrap: wrap;
   gap: 0.55rem;
 }
 
-.prompt-link-mode {
+.registry-mode {
   display: grid;
   gap: 0.45rem;
   margin: 0;
@@ -564,24 +722,24 @@ pre {
   background: rgba(255, 255, 255, 0.45);
 }
 
-.prompt-link-mode[disabled] {
+.registry-mode[disabled] {
   opacity: 0.55;
 }
 
-.prompt-link-mode legend {
+.registry-mode legend {
   padding: 0 0.4rem;
   font-size: 0.85rem;
   color: var(--muted);
 }
 
-.prompt-link-mode-option {
+.registry-mode-option {
   display: flex;
   align-items: center;
   gap: 0.55rem;
   cursor: pointer;
 }
 
-.prompt-link-mode-option input[type="radio"] {
+.registry-mode-option input[type="radio"] {
   margin: 0;
 }
 
@@ -1042,8 +1200,37 @@ label span {
   .field-grid,
   .override-grid,
   .selection-grid,
-  .mcp-layout {
+  .mcp-layout,
+  .create-soul-skill-controls {
     grid-template-columns: 1fr;
+  }
+
+  .modal-backdrop {
+    padding: 0.6rem;
+    align-items: stretch;
+  }
+
+  .create-soul-modal {
+    width: 100%;
+    max-height: calc(100vh - 1.2rem);
+    border-radius: 18px;
+  }
+
+  .create-soul-modal-head {
+    grid-template-columns: 1fr;
+  }
+
+  .create-soul-block-head {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .create-soul-block-head span {
+    text-align: left;
+  }
+
+  .create-soul-skill-controls {
+    padding-left: 0;
   }
 
   .mcp-editor {

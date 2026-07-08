@@ -24,22 +24,6 @@ class CreateSoulRequest(BaseModel):
             "using the base nanobot setting."
         ),
     )
-    prompt_link_dir: str | None = Field(
-        default=None,
-        description=(
-            "Optional configured source directory whose markdown prompt files should be materialized into "
-            "the new soul workspace. Materialization mode is controlled by prompt_link_mode."
-        ),
-    )
-    prompt_link_mode: Literal["symlink", "copy"] = Field(
-        default="symlink",
-        description=(
-            "How to materialize prompt files from prompt_link_dir into the new soul workspace. "
-            "'symlink' creates soft links so edits in the source directory are reflected live (default, "
-            "preserves prior behavior). 'copy' copies the files so the soul workspace owns its own "
-            "independent copy that can drift from the source."
-        ),
-    )
     cron_job_registry_names: list[str] = Field(
         default_factory=list,
         description=(
@@ -97,32 +81,6 @@ class CreateSessionRequest(BaseModel):
         min_length=1,
         description="Session key used by nanobot SessionManager, typically in channel:chat_id form.",
     )
-
-
-class PromptLinkDirFileStatusResponse(BaseModel):
-    """Markdown-file availability for one prompt-link source directory."""
-
-    name: str
-    exists: bool
-
-
-class PromptLinkDirResponse(BaseModel):
-    """One configured prompt-link source directory with file existence summary."""
-
-    path: str
-    files: list[PromptLinkDirFileStatusResponse]
-
-
-class PromptLinkDirsResponse(BaseModel):
-    """Configured prompt-link source directories."""
-
-    items: list[PromptLinkDirResponse]
-
-
-class UpdatePromptLinkDirsRequest(BaseModel):
-    """Replace the configured prompt-link source directory list."""
-
-    items: list[str]
 
 
 class StreamChunkResponse(BaseModel):

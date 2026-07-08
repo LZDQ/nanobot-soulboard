@@ -34,9 +34,6 @@ from nanobot_soulboard.schemas import (
     ErrorResponse,
     MCPServerResponse,
     PathsResponse,
-    PromptLinkDirFileStatusResponse,
-    PromptLinkDirResponse,
-    PromptLinkDirsResponse,
     SessionDetailResponse,
     SessionListResponse,
     SessionSummaryResponse,
@@ -50,7 +47,6 @@ from nanobot_soulboard.schemas import (
     StreamInputMessage,
     UpdateCronJobRegistryRequest,
     UpdateMCPServerRequest,
-    UpdatePromptLinkDirsRequest,
     UpdateSkillRegistryRequest,
     UpdateSoulCronJobRequest,
     UpdateSoulPromptFilesRequest,
@@ -232,20 +228,6 @@ def _build_prompt_files_response(files: dict[str, str | None]) -> SoulPromptFile
     )
 
 
-def _build_prompt_link_dirs_response(supervisor: SoulSupervisor) -> PromptLinkDirsResponse:
-    items: list[PromptLinkDirResponse] = []
-    for raw_path in supervisor.list_prompt_link_dirs():
-        root = Path(raw_path).expanduser()
-        items.append(PromptLinkDirResponse(
-            path=raw_path,
-            files=[
-                PromptLinkDirFileStatusResponse(name=name, exists=(root / name).exists())
-                for name in SOUL_PROMPT_FILES
-            ],
-        ))
-    return PromptLinkDirsResponse(items=items)
-
-
 def _to_cron_job_response(job: CronJob, session_key: str | None) -> CronJobResponse:
     assert isinstance(job.payload, SoulCronPayload)
     return CronJobResponse(
@@ -346,37 +328,6 @@ def create_app() -> FastAPI:
             base_config_path=str(state.base_config_path),
             soulboard_config_path=str(state.soulboard_config_path),
         )
-
-    @api.get(
-        "/prompt-link-dirs",
-        response_model=PromptLinkDirsResponse,
-        summary="List Prompt Link Directories",
-        description=(
-            "Return the configured source directories whose standard markdown prompt files may be soft-linked "
-            "into new soul workspaces, along with per-file existence flags."
-        ),
-    )
-    def get_prompt_link_dirs(request: Request) -> PromptLinkDirsResponse:
-        supervisor = _get_supervisor(request)
-        return _build_prompt_link_dirs_response(supervisor)
-
-    @api.patch(
-        "/prompt-link-dirs",
-        response_model=PromptLinkDirsResponse,
-        responses={400: {"model": ErrorResponse}},
-        summary="Update Prompt Link Directories",
-        description=(
-            "Replace the configured list of source directories whose standard markdown prompt files may be "
-            "soft-linked into new soul workspaces."
-        ),
-    )
-    def update_prompt_link_dirs(request: Request, body: UpdatePromptLinkDirsRequest) -> PromptLinkDirsResponse:
-        supervisor = _get_supervisor(request)
-        try:
-            supervisor.update_prompt_link_dirs(body.items)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return _build_prompt_link_dirs_response(supervisor)
 
     @api.get(
         "/skill-registry",
@@ -572,8 +523,6 @@ def create_app() -> FastAPI:
             spec = supervisor.create_soul(
                 body.soul_id,
                 body.overrides,
-                prompt_link_dir=body.prompt_link_dir,
-                prompt_link_mode=body.prompt_link_mode,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -302,16 +302,6 @@ class SoulSupervisor:
         if dirty:
             save_soulboard_config(self.soulboard_config, self.config_path)
 
-    def list_prompt_link_dirs(self) -> list[str]:
-        """Return configured prompt-link source directories."""
-        return list(self.soulboard_config.prompt_link_dirs)
-
-    def update_prompt_link_dirs(self, items: list[str]) -> list[str]:
-        """Replace configured prompt-link source directories."""
-        self.soulboard_config = self.soulboard_config.model_copy(update={"prompt_link_dirs": items})
-        save_soulboard_config(self.soulboard_config, self.config_path)
-        return list(self.soulboard_config.prompt_link_dirs)
-
     def list_skill_pools(self) -> list[str]:
         """Return the configured global skill pool paths."""
         return list(self.soulboard_config.skill_registry)
@@ -496,31 +486,6 @@ class SoulSupervisor:
             return Path(overrides.workspace).expanduser()
         return get_souls_root(self.nano_root) / soul_id
 
-    def _link_prompt_files(
-        self,
-        spec: SoulSpec,
-        source_dir: str,
-        mode: Literal["symlink", "copy"] = "symlink",
-    ) -> None:
-        configured = set(self.soulboard_config.prompt_link_dirs)
-        if source_dir not in configured:
-            raise ValueError(f"Unknown prompt link directory: {source_dir}")
-        if mode not in ("symlink", "copy"):
-            raise ValueError(f"Unknown prompt link mode: {mode}")
-        source_root = Path(source_dir).expanduser()
-        spec.workspace.mkdir(parents=True, exist_ok=True)
-        for filename in SOUL_PROMPT_FILES:
-            source_path = source_root / filename
-            if not source_path.exists():
-                continue
-            target_path = spec.workspace / filename
-            if target_path.exists() or target_path.is_symlink():
-                raise ValueError(f"Cannot link prompt file because it already exists: {target_path}")
-            if mode == "symlink":
-                target_path.symlink_to(source_path)
-            else:
-                shutil.copyfile(source_path, target_path)
-
     def read_soul_prompt_files(self, soul_id: str) -> dict[str, str | None]:
         """Read the soul markdown prompt pack from its workspace."""
         spec = self.get_spec(soul_id)
@@ -557,8 +522,6 @@ class SoulSupervisor:
         self,
         soul_id: str,
         overrides: SoulOverrides | None = None,
-        prompt_link_dir: str | None = None,
-        prompt_link_mode: Literal["symlink", "copy"] = "symlink",
     ) -> SoulSpec:
         """Create and persist a new soul definition."""
         validate_soul_id(soul_id)
@@ -571,8 +534,6 @@ class SoulSupervisor:
             workspace=self._resolve_soul_workspace(soul_id, resolved_overrides),
             overrides=resolved_overrides,
         )
-        if prompt_link_dir:
-            self._link_prompt_files(spec, prompt_link_dir, mode=prompt_link_mode)
         self.soulboard_config.souls[soul_id] = resolved_overrides
         save_soulboard_config(self.soulboard_config, self.config_path)
         return spec
