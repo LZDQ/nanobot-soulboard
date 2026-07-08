@@ -4,6 +4,9 @@ import { Toaster, toast } from "sonner";
 import { CreateSoulDialog } from "./components/CreateSoulDialog";
 import { GroupListEditor } from "./components/GroupListEditor";
 import { MarkdownMessage } from "./components/MarkdownMessage";
+import { CronJobRegistryDialog } from "./components/registries/CronJobRegistryDialog";
+import { McpServersDialog } from "./components/registries/McpServersDialog";
+import { SkillPoolsDialog } from "./components/registries/SkillPoolsDialog";
 import { api, getWsBase } from "./lib/api";
 import { copyToClipboard } from "./lib/clipboard";
 import {
@@ -23,12 +26,12 @@ import { getErrorMessage, notifyError } from "./lib/errors";
 import {
   formatCronSchedule,
   formatDate,
+  formatSkillTextStats,
   formatTimestampMs,
   getMessageReasoning,
   renderContent,
   renderEnabledList,
   renderHeaderOverrideSummary,
-  renderMcpTypeLabel,
   renderOverrideValue,
   summarizeToolResult,
 } from "./lib/format";
@@ -71,6 +74,7 @@ export default function App() {
   const [selectedSoulId, setSelectedSoulId] = useState<string>(initialFocusRef.current.soulId);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [mcpServers, setMcpServers] = useState<MCPServer[]>([]);
+  const [enabledChannels, setEnabledChannels] = useState<string[]>([]);
   const [skillPools, setSkillPools] = useState<SkillPool[]>([]);
   const [cronJobRegistry, setCronJobRegistry] = useState<CronJobRegistryEntry[]>([]);
   const [promptFiles, setPromptFiles] = useState<SoulPromptFile[]>([]);
@@ -120,6 +124,8 @@ export default function App() {
   const [isCreatingCronJob, setIsCreatingCronJob] = useState(false);
   const [cronJobCreateDraft, setCronJobCreateDraft] = useState<CronJobCreateDraft>(EMPTY_CRON_CREATE_DRAFT);
   const [mcpMode, setMcpMode] = useState<"view" | "edit" | "create">("view");
+  const [activeRegistryDialog, setActiveRegistryDialog] = useState<"skills" | "cron" | "mcp" | null>(null);
+  const [activeSoulDialog, setActiveSoulDialog] = useState<"configs" | "skills" | "cron" | "prompts" | null>(null);
   const [socketState, setSocketState] = useState<"closed" | "connecting" | "open">("closed");
   const [soulGroupFilter, setSoulGroupFilter] = useState<string>("");
   const [sessionsPage, setSessionsPage] = useState<number>(0);
@@ -230,6 +236,19 @@ export default function App() {
   async function refreshCronJobRegistry(): Promise<void> {
     const response = await api<CronJobRegistryResponse>("/api/cron-job-registry");
     setCronJobRegistry(response.items);
+  }
+
+  async function refreshChannels(): Promise<void> {
+    const response = await api<string[]>("/api/channels");
+    setEnabledChannels(response);
+    setCreateSoulDraft((current) => ({
+      ...current,
+      channels: current.channels
+        .split(",")
+        .map((channel) => channel.trim())
+        .filter((channel) => response.includes(channel))
+        .join(", "),
+    }));
   }
 
   async function saveCronJobRegistry(items: CronJobRegistryEntry[]) {
@@ -490,6 +509,7 @@ export default function App() {
     void (async () => {
       try {
         await refreshSouls();
+        await refreshChannels();
         await refreshSkillRegistry();
         await refreshCronJobRegistry();
         await refreshMcpServers();
@@ -500,13 +520,19 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!isCreatingSoul) {
+    if (!isCreatingSoul && !activeRegistryDialog && !activeSoulDialog) {
       return;
     }
     const previousOverflow = document.body.style.overflow;
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape" && !pending) {
-        closeCreateSoulDialog();
+        if (isCreatingSoul) {
+          closeCreateSoulDialog();
+        } else if (activeRegistryDialog) {
+          setActiveRegistryDialog(null);
+        } else {
+          setActiveSoulDialog(null);
+        }
       }
     }
     document.body.style.overflow = "hidden";
@@ -515,7 +541,7 @@ export default function App() {
       document.body.style.overflow = previousOverflow;
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isCreatingSoul, pending]);
+  }, [activeRegistryDialog, activeSoulDialog, isCreatingSoul, pending]);
 
   useEffect(() => {
     if (!selectedSoul) {
@@ -1173,8 +1199,12 @@ export default function App() {
   const chatHistory = [...(sessionDetail?.messages ?? []), ...finalizedMessages] as Array<Record<string, unknown>>;
   const hasStreamingTurn = !!chatReasoning || !!chatContent;
   const canLoadOlderMessages = !!sessionDetail && sessionDetail.history_start > 0;
-  const selectedMcpServer = mcpServers.find((server) => server.name === selectedMcpServerName) ?? null;
-  const activeMcpDraft = mcpMode === "create" ? createMcpDraft : mcpDraft;
+  const skillPoolCount = skillPools.length;
+  const cronRegistryCount = cronJobRegistry.length;
+  const mcpServerCount = mcpServers.length;
+  const selectedSoulSkillCount = selectedSoul?.skills.length ?? 0;
+  const selectedSoulCronJobCount = cronJobs?.length ?? 0;
+  const selectedSoulPromptFileCount = promptFiles.filter((file) => file.exists).length;
 
   return (
     <div className="app-shell">
@@ -1223,6 +1253,7 @@ export default function App() {
                 void (async () => {
                   try {
                     await refreshSouls(selectedSoulId, true);
+                    await refreshChannels();
                     await refreshSkillRegistry();
                     toast.success("Souls refreshed");
                   } catch (cause) {
@@ -1286,9 +1317,13 @@ export default function App() {
               <button
                 className="ghost"
                 onClick={() => {
-                  void refreshSessions(selectedSoul.soul_id).catch((cause) => {
-                    notifyError(cause);
-                  });
+                  void refreshSessions(selectedSoul.soul_id)
+                    .then(() => {
+                      toast.success("Sessions reloaded");
+                    })
+                    .catch((cause) => {
+                      notifyError(cause);
+                    });
                 }}
                 disabled={!!pending}
               >
@@ -1374,654 +1409,108 @@ export default function App() {
         </section>
 
         <section className="panel tools-panel">
-          <details className="tools-master">
-            <summary className="panel-head tools-summary tools-master-summary">
-              <h2>Registries & MCP servers</h2>
-              <span className="muted tools-fold-hint">click to expand</span>
-            </summary>
-            <div className="tools-stack">
-              <details className="tools-subpanel">
-                <summary className="panel-head tools-summary">
-                  <h3>Skill pools</h3>
-                  <div style={{ display: "flex", gap: "0.5rem" }}>
-                    <button
-                      type="button"
-                      className="ghost"
-                      onClick={(event) => {
-                        event.preventDefault();
-                        void reloadSkillPools();
-                      }}
-                      disabled={!!pending}
-                    >
-                      Refresh
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost"
-                      onClick={(event) => {
-                        event.preventDefault();
-                        setIsEditingSkillRegistry((current) => !current);
-                      }}
-                      disabled={!!pending}
-                    >
-                      {isEditingSkillRegistry ? "Done" : "Edit"}
-                    </button>
-                  </div>
-                </summary>
-                <div className="tools-subpanel-body">
-                  {isEditingSkillRegistry ? (
-                    <div className="app-links-editor">
-                      <div className="app-links-editor-row">
-                        <input
-                          value={newSkillRegistryPath}
-                          onChange={(event) => setNewSkillRegistryPath(event.target.value)}
-                          placeholder="~/skills"
-                          disabled={!!pending}
-                        />
-                        <button type="button" onClick={() => void addSkillRegistryEntry()} disabled={!!pending}>
-                          Add pool
-                        </button>
-                      </div>
-                    </div>
-                  ) : null}
-                  <div className="registry-card-list">
-                    {skillPools.length ? skillPools.map((pool) => (
-                      <article key={pool.path} className="registry-card">
-                        <div className="registry-card-head">
-                          <code>{pool.path}</code>
-                          {isEditingSkillRegistry ? (
-                            <button
-                              type="button"
-                              className="ghost"
-                              onClick={() => void deleteSkillRegistryEntry(pool.path)}
-                              disabled={!!pending}
-                            >
-                              Remove
-                            </button>
-                          ) : null}
-                        </div>
-                        <div className="registry-pills">
-                          <span className={`pill ${pool.exists ? "live" : "idle"}`}>
-                            {pool.exists ? "pool present" : "missing"}
-                          </span>
-                          <span className="pill idle">
-                            {pool.skills.length} skill{pool.skills.length === 1 ? "" : "s"}
-                          </span>
-                        </div>
-                        {pool.skills.length ? (
-                          <div className="skill-list" style={{ marginTop: "0.5rem" }}>
-                            {pool.skills.map((skill) => (
-                              <details key={skill.skill_path} className="skill-entry-details">
-                                <summary className="skill-entry-summary">
-                                  <div>
-                                    <strong>{skill.name}</strong>
-                                    <code style={{ marginLeft: "0.5rem" }}>{skill.relative_path}</code>
-                                    {skill.token_count !== null && skill.token_count !== undefined ? (
-                                      <span className="pill idle" style={{ marginLeft: "0.5rem" }}>
-                                        {skill.token_count.toLocaleString()} tokens
-                                      </span>
-                                    ) : null}
-                                  </div>
-                                </summary>
-                                {skill.description ? (
-                                  <p className="muted skill-registry-desc">{skill.description}</p>
-                                ) : null}
-                                <p className="muted skill-entry-target">
-                                  <code>{skill.skill_path}</code>
-                                </p>
-                              </details>
-                            ))}
-                          </div>
-                        ) : pool.exists ? (
-                          <p className="muted skill-registry-desc">No skills with valid SKILL.md frontmatter.</p>
-                        ) : null}
-                      </article>
-                    )) : <p className="muted">No skill pools configured.</p>}
-                  </div>
-                </div>
-              </details>
-
-              <details className="tools-subpanel">
-                <summary className="panel-head tools-summary">
-                  <h3>Cron job registry</h3>
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={(event) => {
-                      event.preventDefault();
-                      setIsEditingCronJobRegistry((current) => !current);
-                    }}
-                    disabled={!!pending}
-                  >
-                    {isEditingCronJobRegistry ? "Done" : "Edit"}
-                  </button>
-                </summary>
-                <div className="tools-subpanel-body">
-                  {isEditingCronJobRegistry ? (
-                    <div className="app-links-editor">
-                      <div className="details-stack" style={{ gap: "0.5rem" }}>
-                        <label>
-                          <span>Name (unique ID)</span>
-                          <input
-                            value={cronJobRegistryDraft.name}
-                            onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, name: e.target.value }))}
-                            placeholder="daily-digest"
-                            disabled={!!pending}
-                          />
-                        </label>
-                        <label>
-                          <span>Label (display name)</span>
-                          <input
-                            value={cronJobRegistryDraft.label}
-                            onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, label: e.target.value }))}
-                            placeholder="Daily digest"
-                            disabled={!!pending}
-                          />
-                        </label>
-                        <label>
-                          <span>Cron expr</span>
-                          <input
-                            value={cronJobRegistryDraft.cron_expr}
-                            onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, cron_expr: e.target.value }))}
-                            placeholder="0 9 * * 1-5"
-                            disabled={!!pending}
-                          />
-                        </label>
-                        <label>
-                          <span>Every (seconds)</span>
-                          <input
-                            type="number"
-                            value={cronJobRegistryDraft.every_seconds}
-                            onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, every_seconds: e.target.value }))}
-                            placeholder="3600"
-                            disabled={!!pending}
-                          />
-                        </label>
-                        <label>
-                          <span>Timezone</span>
-                          <input
-                            value={cronJobRegistryDraft.tz}
-                            onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, tz: e.target.value }))}
-                            placeholder="e.g. America/New_York"
-                            disabled={!!pending}
-                          />
-                        </label>
-                        <label>
-                          <span>Message</span>
-                          <input
-                            value={cronJobRegistryDraft.message}
-                            onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, message: e.target.value }))}
-                            placeholder="Run the daily summary"
-                            disabled={!!pending}
-                          />
-                        </label>
-                        <label>
-                          <span>Channel</span>
-                          <input
-                            value={cronJobRegistryDraft.channel}
-                            onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, channel: e.target.value }))}
-                            placeholder="whatsapp"
-                            disabled={!!pending}
-                          />
-                        </label>
-                        <label>
-                          <span>Chat ID</span>
-                          <input
-                            value={cronJobRegistryDraft.chat_id}
-                            onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, chat_id: e.target.value }))}
-                            placeholder="(optional, channel-local id)"
-                            disabled={!!pending}
-                          />
-                        </label>
-                        <label>
-                          <span>Session key</span>
-                          <input
-                            value={cronJobRegistryDraft.session_key}
-                            onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, session_key: e.target.value }))}
-                            placeholder="(optional, e.g. cli:direct)"
-                            disabled={!!pending}
-                          />
-                        </label>
-                        <label>
-                          <span>Recurring session key format</span>
-                          <input
-                            value={cronJobRegistryDraft.recurring_session_key_format}
-                            onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, recurring_session_key_format: e.target.value }))}
-                            placeholder="%Y-%m-%d"
-                            disabled={!!pending}
-                          />
-                        </label>
-                        <label className="checkbox">
-                          <input
-                            type="checkbox"
-                            checked={cronJobRegistryDraft.deliver}
-                            onChange={(e) => setCronJobRegistryDraft((d) => ({ ...d, deliver: e.target.checked }))}
-                            disabled={!!pending}
-                          />
-                          <span>Deliver response</span>
-                        </label>
-                        <button type="button" onClick={() => void addCronJobRegistryEntry()} disabled={!!pending}>
-                          Add entry
-                        </button>
-                      </div>
-                    </div>
-                  ) : null}
-                  <div className="registry-card-list">
-                    {cronJobRegistry.length ? cronJobRegistry.map((entry) => (
-                      <article key={entry.name} className="registry-card">
-                        <div className="registry-card-head">
-                          <code>{entry.name}</code>
-                          {isEditingCronJobRegistry ? (
-                            <div style={{ display: "flex", gap: "0.4rem" }}>
-                              <button
-                                type="button"
-                                className="ghost"
-                                onClick={() => void moveCronJobRegistryEntry(entry.name, -1)}
-                                disabled={!!pending || cronJobRegistry.indexOf(entry) === 0}
-                                aria-label="Move up"
-                              >
-                                ↑
-                              </button>
-                              <button
-                                type="button"
-                                className="ghost"
-                                onClick={() => void moveCronJobRegistryEntry(entry.name, 1)}
-                                disabled={!!pending || cronJobRegistry.indexOf(entry) === cronJobRegistry.length - 1}
-                                aria-label="Move down"
-                              >
-                                ↓
-                              </button>
-                              <button
-                                type="button"
-                                className="ghost"
-                                onClick={() => void deleteCronJobRegistryEntry(entry.name)}
-                                disabled={!!pending}
-                              >
-                                Remove
-                              </button>
-                            </div>
-                          ) : null}
-                        </div>
-                        <div className="registry-pills">
-                          {entry.label ? <span className="pill live">{entry.label}</span> : null}
-                          {entry.cron_expr ? <span className="pill idle">{entry.cron_expr}{entry.tz ? ` (${entry.tz})` : ""}</span> : null}
-                          {entry.every_seconds ? <span className="pill idle">every {entry.every_seconds}s</span> : null}
-                          {entry.recurring_session_key_format ? <span className="pill live">session: {entry.recurring_session_key_format}</span> : null}
-                          {entry.channel ? <span className="pill idle">{entry.channel}</span> : null}
-                        </div>
-                        {entry.message ? <p className="muted skill-registry-desc">{entry.message}</p> : null}
-                      </article>
-                    )) : <p className="muted">No cron job templates registered.</p>}
-                  </div>
-                </div>
-              </details>
-
-              <details className="tools-subpanel">
-                <summary className="panel-head tools-summary">
-                  <h3>MCP servers</h3>
-                  <button
-                    className="ghost"
-                    onClick={(event) => {
-                      event.preventDefault();
-                      void refreshMcpServers(selectedMcpServerName).catch((cause) => {
-                        notifyError(cause);
-                      });
-                    }}
-                    disabled={!!pending}
-                  >
-                    Reload
-                  </button>
-                </summary>
-                <div className="tools-subpanel-body">
-                  <div className="mcp-layout">
-                    <div className="mcp-list">
-                      {mcpServers.map((server) => (
-                        <button
-                          key={server.name}
-                          className={`session-card ${selectedMcpServerName === server.name ? "active" : ""}`}
-                          onClick={() => {
-                            setSelectedMcpServerName(server.name);
-                            setMcpMode("view");
-                          }}
-                        >
-                          <strong>{server.name}</strong>
-                          <span>{server.config.type || "auto"} transport</span>
-                          <code>{server.config.command || server.config.url || "no endpoint configured"}</code>
-                        </button>
-                      ))}
-                      {!mcpServers.length ? <p className="muted">No MCP server definitions found in the base nanobot config.</p> : null}
-
-                      <div className="create-box">
-                        <h3>Create MCP server</h3>
-                        <button
-                          className="ghost"
-                          onClick={() => {
-                            setMcpMode("create");
-                            setCreateMcpServerName("");
-                            setCreateMcpDraft(getEmptyMcpDraft());
-                          }}
-                          disabled={!!pending}
-                        >
-                          New MCP server
-                        </button>
-                      </div>
-                    </div>
-
-                    {mcpMode === "create" ? (
-                      <div className="mcp-editor">
-                        <div className="panel-head">
-                          <h3>Create definition</h3>
-                          <code>{createMcpServerName || "new server"}</code>
-                        </div>
-                        <div className="field-grid">
-                          <label>
-                            <span>Name</span>
-                            <input
-                              value={createMcpServerName}
-                              onChange={(event) => setCreateMcpServerName(event.target.value)}
-                              placeholder="github"
-                            />
-                          </label>
-                          <label>
-                            <span>Type</span>
-                            <select
-                              value={createMcpDraft.type}
-                              onChange={(event) => setCreateMcpDraft((current) => ({ ...current, type: event.target.value }))}
-                            >
-                              <option value="stdio">stdio</option>
-                              <option value="sse">sse</option>
-                              <option value="streamableHttp">streamableHttp</option>
-                            </select>
-                          </label>
-                          <label>
-                            <span>Tool timeout</span>
-                            <input
-                              value={createMcpDraft.tool_timeout}
-                              onChange={(event) =>
-                                setCreateMcpDraft((current) => ({ ...current, tool_timeout: event.target.value }))
-                              }
-                              placeholder="30"
-                            />
-                          </label>
-                          {createMcpDraft.type === "stdio" ? (
-                            <>
-                              <label>
-                                <span>Command</span>
-                                <input
-                                  value={createMcpDraft.command}
-                                  onChange={(event) =>
-                                    setCreateMcpDraft((current) => ({ ...current, command: event.target.value }))
-                                  }
-                                  placeholder="npx"
-                                />
-                              </label>
-                              <label>
-                                <span>Args, one per line</span>
-                                <textarea
-                                  value={createMcpDraft.args}
-                                  onChange={(event) =>
-                                    setCreateMcpDraft((current) => ({ ...current, args: event.target.value }))
-                                  }
-                                />
-                              </label>
-                              <label>
-                                <span>Env JSON</span>
-                                <textarea
-                                  value={createMcpDraft.env}
-                                  onChange={(event) =>
-                                    setCreateMcpDraft((current) => ({ ...current, env: event.target.value }))
-                                  }
-                                />
-                              </label>
-                            </>
-                          ) : (
-                            <>
-                              <label>
-                                <span>URL</span>
-                                <input
-                                  value={createMcpDraft.url}
-                                  onChange={(event) => setCreateMcpDraft((current) => ({ ...current, url: event.target.value }))}
-                                  placeholder="https://example.com/mcp"
-                                />
-                              </label>
-                              <label>
-                                <span>Headers JSON</span>
-                                <textarea
-                                  value={createMcpDraft.headers}
-                                  onChange={(event) =>
-                                    setCreateMcpDraft((current) => ({ ...current, headers: event.target.value }))
-                                  }
-                                />
-                              </label>
-                            </>
-                          )}
-                          <label className="checkbox">
-                            <input
-                              type="checkbox"
-                              checked={createMcpDraft.use_enabled_tools}
-                              onChange={(event) =>
-                                setCreateMcpDraft((current) => ({
-                                  ...current,
-                                  use_enabled_tools: event.target.checked,
-                                  enabled_tools: event.target.checked ? current.enabled_tools : "",
-                                }))
-                              }
-                            />
-                            <span>Whitelist tools</span>
-                          </label>
-                          {createMcpDraft.use_enabled_tools ? (
-                            <label>
-                              <span>Whitelisted tools, one per line</span>
-                              <textarea
-                                value={createMcpDraft.enabled_tools}
-                                onChange={(event) =>
-                                  setCreateMcpDraft((current) => ({ ...current, enabled_tools: event.target.value }))
-                                }
-                              />
-                            </label>
-                          ) : null}
-                        </div>
-                        <div className="action-row">
-                          <button
-                            className="ghost"
-                            onClick={() => {
-                              setCreateMcpServerName("");
-                              setCreateMcpDraft(getEmptyMcpDraft());
-                              setMcpMode(selectedMcpServer ? "view" : "create");
-                            }}
-                            disabled={!!pending}
-                          >
-                            Cancel
-                          </button>
-                          <button onClick={() => void createMcpServer()} disabled={!!pending}>
-                            Create MCP server
-                          </button>
-                        </div>
-                      </div>
-                    ) : selectedMcpServer ? (
-                      <div className="mcp-editor">
-                        <div className="panel-head">
-                          <h3>{mcpMode === "edit" ? "Edit definition" : "Definition"}</h3>
-                          <code>{selectedMcpServer.name}</code>
-                        </div>
-                        {mcpMode === "edit" ? (
-                          <div className="field-grid">
-                            <label>
-                              <span>Type</span>
-                              <select
-                                value={activeMcpDraft.type}
-                                onChange={(event) => setMcpDraft((current) => ({ ...current, type: event.target.value }))}
-                              >
-                                <option value="stdio">stdio</option>
-                                <option value="sse">sse</option>
-                                <option value="streamableHttp">streamableHttp</option>
-                              </select>
-                            </label>
-                            <label>
-                              <span>Tool timeout</span>
-                              <input
-                                value={activeMcpDraft.tool_timeout}
-                                onChange={(event) => setMcpDraft((current) => ({ ...current, tool_timeout: event.target.value }))}
-                                placeholder="30"
-                              />
-                            </label>
-                            {activeMcpDraft.type === "stdio" ? (
-                              <>
-                                <label>
-                                  <span>Command</span>
-                                  <input
-                                    value={activeMcpDraft.command}
-                                    onChange={(event) => setMcpDraft((current) => ({ ...current, command: event.target.value }))}
-                                    placeholder="npx"
-                                  />
-                                </label>
-                                <label>
-                                  <span>Args, one per line</span>
-                                  <textarea
-                                    value={activeMcpDraft.args}
-                                    onChange={(event) => setMcpDraft((current) => ({ ...current, args: event.target.value }))}
-                                  />
-                                </label>
-                                <label>
-                                  <span>Env JSON</span>
-                                  <textarea
-                                    value={activeMcpDraft.env}
-                                    onChange={(event) => setMcpDraft((current) => ({ ...current, env: event.target.value }))}
-                                  />
-                                </label>
-                              </>
-                            ) : (
-                              <>
-                                <label>
-                                  <span>URL</span>
-                                  <input
-                                    value={activeMcpDraft.url}
-                                    onChange={(event) => setMcpDraft((current) => ({ ...current, url: event.target.value }))}
-                                    placeholder="https://example.com/mcp"
-                                  />
-                                </label>
-                                <label>
-                                  <span>Headers JSON</span>
-                                  <textarea
-                                    value={activeMcpDraft.headers}
-                                    onChange={(event) => setMcpDraft((current) => ({ ...current, headers: event.target.value }))}
-                                  />
-                                </label>
-                              </>
-                            )}
-                            <label className="checkbox">
-                              <input
-                                type="checkbox"
-                                checked={activeMcpDraft.use_enabled_tools}
-                                onChange={(event) =>
-                                  setMcpDraft((current) => ({
-                                    ...current,
-                                    use_enabled_tools: event.target.checked,
-                                    enabled_tools: event.target.checked ? current.enabled_tools : "",
-                                  }))
-                                }
-                              />
-                              <span>Whitelist tools</span>
-                            </label>
-                            {activeMcpDraft.use_enabled_tools ? (
-                              <label>
-                                <span>Whitelisted tools, one per line</span>
-                                <textarea
-                                  value={activeMcpDraft.enabled_tools}
-                                  onChange={(event) =>
-                                    setMcpDraft((current) => ({ ...current, enabled_tools: event.target.value }))
-                                  }
-                                />
-                              </label>
-                            ) : null}
-                          </div>
-                        ) : (
-                          <div className="override-grid">
-                            <article className="override-card">
-                              <span>Type</span>
-                              <strong>{renderMcpTypeLabel(selectedMcpServer.config.type)}</strong>
-                            </article>
-                            <article className="override-card">
-                              <span>Command</span>
-                              <strong>{selectedMcpServer.config.command || "n/a"}</strong>
-                            </article>
-                            <article className="override-card">
-                              <span>URL</span>
-                              <strong>{selectedMcpServer.config.url || "n/a"}</strong>
-                            </article>
-                            <article className="override-card">
-                              <span>Tool timeout</span>
-                              <strong>{String(selectedMcpServer.config.toolTimeout)}</strong>
-                            </article>
-                            <article className="override-card">
-                              <span>Args</span>
-                              <strong>{renderEnabledList(selectedMcpServer.config.args)}</strong>
-                            </article>
-                            <article className="override-card">
-                              <span>Whitelist</span>
-                              <strong>
-                                {selectedMcpServer.config.enabledTools.length === 1 &&
-                                selectedMcpServer.config.enabledTools[0] === "*"
-                                  ? "all tools"
-                                  : renderEnabledList(selectedMcpServer.config.enabledTools)}
-                              </strong>
-                            </article>
-                            <article className="override-card">
-                              <span>Env</span>
-                              <strong>{Object.keys(selectedMcpServer.config.env).length ? JSON.stringify(selectedMcpServer.config.env) : "none"}</strong>
-                            </article>
-                            <article className="override-card">
-                              <span>Headers</span>
-                              <strong>{Object.keys(selectedMcpServer.config.headers).length ? JSON.stringify(selectedMcpServer.config.headers) : "none"}</strong>
-                            </article>
-                          </div>
-                        )}
-                        <div className="action-row">
-                          {mcpMode === "edit" ? (
-                            <>
-                              <button
-                                className="ghost"
-                                onClick={() => {
-                                  setMcpDraft(mcpConfigToDraft(selectedMcpServer.config));
-                                  setMcpMode("view");
-                                }}
-                                disabled={!!pending}
-                              >
-                                Cancel
-                              </button>
-                              <button onClick={() => void updateMcpServer()} disabled={!!pending}>
-                                Save MCP server
-                              </button>
-                              <button className="danger" onClick={() => void deleteMcpServer()} disabled={!!pending}>
-                                Delete
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              <button
-                                className="ghost"
-                                onClick={() => {
-                                  setMcpDraft(mcpConfigToDraft(selectedMcpServer.config));
-                                  setMcpMode("edit");
-                                }}
-                                disabled={!!pending}
-                              >
-                                Edit
-                              </button>
-                              <button className="danger" onClick={() => void deleteMcpServer()} disabled={!!pending}>
-                                Delete
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-              </details>
-            </div>
-          </details>
+          <div className="panel-head">
+            <h2>Registries & MCP servers</h2>
+          </div>
+          <div className="registry-launch-grid">
+            <button
+              type="button"
+              className="registry-launch-card"
+              onClick={() => setActiveRegistryDialog("skills")}
+            >
+              <span>Skill pools</span>
+              <strong>{skillPoolCount}</strong>
+            </button>
+            <button
+              type="button"
+              className="registry-launch-card"
+              onClick={() => setActiveRegistryDialog("cron")}
+            >
+              <span>Cron job registry</span>
+              <strong>{cronRegistryCount}</strong>
+            </button>
+            <button
+              type="button"
+              className="registry-launch-card"
+              onClick={() => setActiveRegistryDialog("mcp")}
+            >
+              <span>MCP servers</span>
+              <strong>{mcpServerCount}</strong>
+            </button>
+          </div>
         </section>
+
+        {activeRegistryDialog === "skills" ? (
+          <SkillPoolsDialog
+            pending={pending}
+            skillPools={skillPools}
+            skillPoolCount={skillPoolCount}
+            isEditing={isEditingSkillRegistry}
+            newSkillRegistryPath={newSkillRegistryPath}
+            onClose={() => setActiveRegistryDialog(null)}
+            onRefresh={() => void reloadSkillPools()}
+            onToggleEdit={() => setIsEditingSkillRegistry((current) => !current)}
+            onNewSkillRegistryPathChange={setNewSkillRegistryPath}
+            onAddSkillRegistryEntry={() => void addSkillRegistryEntry()}
+            onDeleteSkillRegistryEntry={(path) => void deleteSkillRegistryEntry(path)}
+          />
+        ) : null}
+
+        {activeRegistryDialog === "cron" ? (
+          <CronJobRegistryDialog
+            pending={pending}
+            cronJobRegistry={cronJobRegistry}
+            cronRegistryCount={cronRegistryCount}
+            isEditing={isEditingCronJobRegistry}
+            draft={cronJobRegistryDraft}
+            setDraft={setCronJobRegistryDraft}
+            onClose={() => setActiveRegistryDialog(null)}
+            onRefresh={() => {
+              void refreshCronJobRegistry()
+                .then(() => {
+                  toast.success("Cron job registry refreshed");
+                })
+                .catch((cause) => {
+                  notifyError(cause);
+                });
+            }}
+            onToggleEdit={() => setIsEditingCronJobRegistry((current) => !current)}
+            onAddEntry={() => void addCronJobRegistryEntry()}
+            onDeleteEntry={(name) => void deleteCronJobRegistryEntry(name)}
+            onMoveEntry={(name, direction) => void moveCronJobRegistryEntry(name, direction)}
+          />
+        ) : null}
+
+        {activeRegistryDialog === "mcp" ? (
+          <McpServersDialog
+            pending={pending}
+            mcpServers={mcpServers}
+            mcpServerCount={mcpServerCount}
+            selectedMcpServerName={selectedMcpServerName}
+            createMcpServerName={createMcpServerName}
+            mcpMode={mcpMode}
+            mcpDraft={mcpDraft}
+            createMcpDraft={createMcpDraft}
+            setSelectedMcpServerName={setSelectedMcpServerName}
+            setCreateMcpServerName={setCreateMcpServerName}
+            setMcpMode={setMcpMode}
+            setMcpDraft={setMcpDraft}
+            setCreateMcpDraft={setCreateMcpDraft}
+            onClose={() => setActiveRegistryDialog(null)}
+            onReload={() => {
+              void refreshMcpServers(selectedMcpServerName)
+                .then(() => {
+                  toast.success("MCP servers reloaded");
+                })
+                .catch((cause) => {
+                  notifyError(cause);
+                });
+            }}
+            onCreate={() => void createMcpServer()}
+            onUpdate={() => void updateMcpServer()}
+            onDelete={() => void deleteMcpServer()}
+          />
+        ) : null}
 
         <section className="panel details-panel">
           {soulError ? <section className="banner error">{soulError}</section> : null}
@@ -2045,10 +1534,58 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="details-stack">
-                <section className="subpanel">
-                  <div className="panel-head">
-                    <h3>Overrides</h3>
+              <div className="soul-launch-grid">
+                <button
+                  type="button"
+                  className="registry-launch-card soul-launch-card"
+                  onClick={() => setActiveSoulDialog("configs")}
+                >
+                  <span>Configs</span>
+                  <strong>{selectedSoul.overrides.autostart ? "Auto" : "Manual"}</strong>
+                </button>
+                <button
+                  type="button"
+                  className="registry-launch-card soul-launch-card"
+                  onClick={() => setActiveSoulDialog("skills")}
+                >
+                  <span>Skills</span>
+                  <strong>{selectedSoulSkillCount}</strong>
+                </button>
+                <button
+                  type="button"
+                  className="registry-launch-card soul-launch-card"
+                  onClick={() => setActiveSoulDialog("cron")}
+                >
+                  <span>Cron jobs</span>
+                  <strong>{cronJobs === null ? "..." : selectedSoulCronJobCount}</strong>
+                </button>
+                <button
+                  type="button"
+                  className="registry-launch-card soul-launch-card"
+                  onClick={() => setActiveSoulDialog("prompts")}
+                >
+                  <span>Prompt files</span>
+                  <strong>{promptFiles.length ? selectedSoulPromptFileCount : "..."}</strong>
+                </button>
+              </div>
+
+              {activeSoulDialog === "configs" ? (
+                <div className="modal-backdrop">
+                  <section
+                    className="registry-modal registry-modal-wide"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="soul-configs-title"
+                  >
+                    <div className="registry-modal-head">
+                      <button type="button" className="ghost" onClick={() => setActiveSoulDialog(null)} disabled={!!pending}>
+                        Close
+                      </button>
+                      <div>
+                        <h2 id="soul-configs-title">Configs</h2>
+                        <p className="muted">{selectedSoul.soul_id}</p>
+                      </div>
+                      <div className="registry-modal-actions">
                     {isEditingSoul ? (
                       <div className="action-row">
                         <button
@@ -2077,12 +1614,14 @@ export default function App() {
                         Edit
                       </button>
                     )}
+                      </div>
                   </div>
 
+                    <div className="registry-modal-body">
                   {isEditingSoul ? (
                     <div className="field-grid">
                       <label>
-                        <span>Workspace override</span>
+                        <span>Workspace</span>
                         <input
                           value={draft.workspace}
                           onChange={(event) => setDraft((current) => ({ ...current, workspace: event.target.value }))}
@@ -2176,103 +1715,155 @@ export default function App() {
                   ) : (
                     <div className="override-grid">
                       <article className="override-card">
-                        <span>Workspace override</span>
+                        <span>Workspace</span>
                         <strong>{renderOverrideValue(selectedSoul.overrides.workspace)}</strong>
                       </article>
                       <article className="override-card">
                         <span>Resolved workspace</span>
                         <strong>{selectedSoul.workspace}</strong>
                       </article>
-                      <article className="override-card override-card-wide">
-                        <span>Skills</span>
-                        {selectedSoul.skills.length ? (
-                          <div className="skill-list">
-                            {selectedSoul.skills.map((skill) => (
-                              <details key={skill.path} className="skill-entry-details">
-                                <summary className="skill-entry-summary">
-                                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-                                    <strong>{skill.name}</strong>
-                                    <span className={`pill ${skill.link_target ? "live" : "idle"}`}>
-                                      {skill.link_target ? "soft link" : "copy"}
-                                    </span>
-                                    {skill.token_count !== null && skill.token_count !== undefined ? (
-                                      <span className="pill idle">{skill.token_count.toLocaleString()} tokens</span>
-                                    ) : null}
-                                    <button
-                                      type="button"
-                                      className="ghost skill-delete-button"
-                                      onClick={(event) => {
-                                        event.preventDefault();
-                                        void deleteSoulSkill(skill.name);
-                                      }}
-                                      disabled={!!pending}
-                                    >
-                                      Delete
-                                    </button>
-                                  </div>
+                      <article className="override-card">
+                        <span>Model</span>
+                        <strong>{renderOverrideValue(selectedSoul.overrides.model)}</strong>
+                      </article>
+                      <article className="override-card">
+                        <span>Provider</span>
+                        <strong>{renderOverrideValue(selectedSoul.overrides.provider)}</strong>
+                      </article>
+                      <article className="override-card">
+                        <span>Channels</span>
+                        <strong>{renderEnabledList(selectedSoul.overrides.channels)}</strong>
+                      </article>
+                      <article className="override-card">
+                        <span>Groups</span>
+                        <strong>{renderEnabledList(selectedSoul.overrides.groups ?? [])}</strong>
+                      </article>
+                      <article className="override-card">
+                        <span>Enabled MCP servers</span>
+                        <strong>{renderEnabledList(selectedSoul.overrides.mcp_servers)}</strong>
+                      </article>
+                      <article className="override-card">
+                        <span>MCP headers</span>
+                        <strong>{renderHeaderOverrideSummary(selectedSoul.overrides.mcp_http_headers ?? {})}</strong>
+                      </article>
+                      <article className="override-card">
+                        <span>Autostart</span>
+                        <strong>{renderOverrideValue(selectedSoul.overrides.autostart)}</strong>
+                      </article>
+                    </div>
+                  )}
+                    </div>
+                  </section>
+                </div>
+              ) : null}
+
+              {activeSoulDialog === "skills" ? (
+                <div className="modal-backdrop">
+                  <section
+                    className="registry-modal registry-modal-wide"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="soul-skills-title"
+                  >
+                    <div className="registry-modal-head">
+                      <button type="button" className="ghost" onClick={() => setActiveSoulDialog(null)} disabled={!!pending}>
+                        Close
+                      </button>
+                      <div>
+                        <h2 id="soul-skills-title">Skills</h2>
+                        <p className="muted">{selectedSoulSkillCount} skill{selectedSoulSkillCount === 1 ? "" : "s"}</p>
+                      </div>
+                    </div>
+                    <div className="registry-modal-body">
+                      {selectedSoul.skills.length ? (
+                        <div className="skill-list">
+                          {selectedSoul.skills.map((skill) => (
+                            <details key={skill.path} className="skill-entry-details">
+                              <summary className="skill-entry-summary">
+                                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                                  <strong>{skill.name}</strong>
+                                  <span className={`pill ${skill.link_target ? "live" : "idle"}`}>
+                                    {skill.link_target ? "soft link" : "copy"}
+                                  </span>
+                                  {formatSkillTextStats(skill).length ? (
+                                    <span className="skill-text-stats">{formatSkillTextStats(skill).join(" / ")}</span>
+                                  ) : null}
                                   <button
                                     type="button"
-                                    className="ghost skill-path-button"
-                                    title={`Copy ${skill.path}`}
+                                    className="ghost skill-delete-button"
                                     onClick={(event) => {
                                       event.preventDefault();
-                                      void copyToClipboard(skill.path).then(() => {
-                                        toast.success(`Copied ${skill.name} path`);
-                                      });
+                                      void deleteSoulSkill(skill.name);
                                     }}
+                                    disabled={!!pending}
                                   >
-                                    <code>{skill.path}</code>
+                                    Delete
                                   </button>
-                                </summary>
-                                {skill.description ? (
-                                  <p className="muted skill-entry-desc">{skill.description}</p>
-                                ) : null}
-                                {skill.link_target ? (
-                                  <p className="muted skill-entry-target">
-                                    soft link → <code>{skill.link_target}</code>
-                                  </p>
-                                ) : null}
-                                <div className="skill-content">
-                                  <MarkdownMessage content={skill.content} />
                                 </div>
-                              </details>
-                            ))}
-                          </div>
-                        ) : (
-                          <strong>none</strong>
-                        )}
-                        <div className="skill-add-form">
-                          <select
-                            value={addSkillSelection}
-                            onChange={(event) => setAddSkillSelection(event.target.value)}
-                            disabled={!skillPools.some((pool) => pool.skills.length) || !!pending}
-                          >
-                            <option value="">
-                              {skillPools.some((pool) => pool.skills.length)
-                                ? "Add from pools…"
-                                : "No skills loaded"}
-                            </option>
-                            {skillPools.map((pool) => (
-                              pool.skills.length ? (
-                                <optgroup key={pool.path} label={pool.path}>
-                                  {pool.skills.map((skill) => (
-                                    <option key={skill.skill_path} value={skill.skill_path}>
-                                      {skill.name} ({skill.relative_path})
-                                    </option>
-                                  ))}
-                                </optgroup>
-                              ) : null
-                            ))}
-                          </select>
-                          {addSkillSelection ? (
-                            <input
-                              value={addSkillTargetName}
-                              onChange={(event) => setAddSkillTargetName(event.target.value)}
-                              placeholder="rename (optional)"
-                              disabled={!!pending}
-                            />
-                          ) : null}
-                          {addSkillSelection ? (<fieldset className="registry-mode" disabled={!!pending}>
+                                <button
+                                  type="button"
+                                  className="ghost skill-path-button"
+                                  title={`Copy ${skill.path}`}
+                                  onClick={(event) => {
+                                    event.preventDefault();
+                                    void copyToClipboard(skill.path).then(() => {
+                                      toast.success(`Copied ${skill.name} path`);
+                                    });
+                                  }}
+                                >
+                                  <code>{skill.path}</code>
+                                </button>
+                              </summary>
+                              {skill.description ? (
+                                <p className="muted skill-entry-desc">{skill.description}</p>
+                              ) : null}
+                              {skill.link_target ? (
+                                <p className="muted skill-entry-target">
+                                  soft link → <code>{skill.link_target}</code>
+                                </p>
+                              ) : null}
+                              <div className="skill-content">
+                                <MarkdownMessage content={skill.content} />
+                              </div>
+                            </details>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="muted">No skills are attached to this soul.</p>
+                      )}
+                      <div className="skill-add-form">
+                        <select
+                          value={addSkillSelection}
+                          onChange={(event) => setAddSkillSelection(event.target.value)}
+                          disabled={!skillPools.some((pool) => pool.skills.length) || !!pending}
+                        >
+                          <option value="">
+                            {skillPools.some((pool) => pool.skills.length)
+                              ? "Add from pools…"
+                              : "No skills loaded"}
+                          </option>
+                          {skillPools.map((pool) => (
+                            pool.skills.length ? (
+                              <optgroup key={pool.path} label={pool.path}>
+                                {pool.skills.map((skill) => (
+                                  <option key={skill.skill_path} value={skill.skill_path}>
+                                    {skill.name} ({skill.relative_path})
+                                  </option>
+                                ))}
+                              </optgroup>
+                            ) : null
+                          ))}
+                        </select>
+                        {addSkillSelection ? (
+                          <input
+                            value={addSkillTargetName}
+                            onChange={(event) => setAddSkillTargetName(event.target.value)}
+                            placeholder="rename (optional)"
+                            disabled={!!pending}
+                          />
+                        ) : null}
+                        {addSkillSelection ? (
+                          <fieldset className="registry-mode" disabled={!!pending}>
                             <legend>Mode</legend>
                             <label className="registry-mode-option">
                               <input
@@ -2294,55 +1885,38 @@ export default function App() {
                               />
                               <span><strong>Copy</strong> &mdash; soul-specific writable copy</span>
                             </label>
-                          </fieldset>) : null}
-                          <button
-                            type="button"
-                            onClick={() => void addSoulSkill()}
-                            disabled={!addSkillSelection || !!pending}
-                          >
-                            Add skill
-                          </button>
-                        </div>
-                      </article>
-                      <article className="override-card">
-                        <span>Model override</span>
-                        <strong>{renderOverrideValue(selectedSoul.overrides.model)}</strong>
-                      </article>
-                      <article className="override-card">
-                        <span>Provider override</span>
-                        <strong>{renderOverrideValue(selectedSoul.overrides.provider)}</strong>
-                      </article>
-                      <article className="override-card">
-                        <span>Channel overrides</span>
-                        <strong>{renderEnabledList(selectedSoul.overrides.channels)}</strong>
-                      </article>
-                      <article className="override-card">
-                        <span>Groups</span>
-                        <strong>{renderEnabledList(selectedSoul.overrides.groups ?? [])}</strong>
-                      </article>
-                      <article className="override-card">
-                        <span>Enabled MCP servers</span>
-                        <strong>{renderEnabledList(selectedSoul.overrides.mcp_servers)}</strong>
-                      </article>
-                      <article className="override-card">
-                        <span>MCP header overrides</span>
-                        <strong>{renderHeaderOverrideSummary(selectedSoul.overrides.mcp_http_headers ?? {})}</strong>
-                      </article>
-                      <article className="override-card">
-                        <span>Autostart</span>
-                        <strong>{renderOverrideValue(selectedSoul.overrides.autostart)}</strong>
-                      </article>
-                      <article className="override-card">
-                        <span>Runtime status</span>
-                        <strong>{selectedSoul.running ? "running" : "stopped"}</strong>
-                      </article>
+                          </fieldset>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => void addSoulSkill()}
+                          disabled={!addSkillSelection || !!pending}
+                        >
+                          Add skill
+                        </button>
+                      </div>
                     </div>
-                  )}
-                </section>
+                  </section>
+                </div>
+              ) : null}
 
-                <section className="subpanel">
-                  <div className="panel-head">
-                    <h3>Cron jobs</h3>
+              {activeSoulDialog === "cron" ? (
+                <div className="modal-backdrop">
+                  <section
+                    className="registry-modal registry-modal-wide"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="soul-cron-title"
+                  >
+                    <div className="registry-modal-head">
+                      <button type="button" className="ghost" onClick={() => setActiveSoulDialog(null)} disabled={!!pending}>
+                        Close
+                      </button>
+                      <div>
+                        <h2 id="soul-cron-title">Cron jobs</h2>
+                        <p className="muted">{cronJobs === null ? "Loading" : `${selectedSoulCronJobCount} total`}</p>
+                      </div>
+                      <div className="registry-modal-actions">
                     <div className="action-row">
                       <label className="check-tile cron-filter-toggle">
                         <input
@@ -2360,18 +1934,24 @@ export default function App() {
                           if (!selectedSoul) {
                             return;
                           }
-                          void refreshCronJobs(selectedSoul.soul_id).catch((cause) => {
-                            notifyError(cause);
-                          });
+                          void refreshCronJobs(selectedSoul.soul_id)
+                            .then(() => {
+                              toast.success("Cron jobs refreshed");
+                            })
+                            .catch((cause) => {
+                              notifyError(cause);
+                            });
                         }}
                         disabled={!!pending || !selectedSoul}
                       >
                         Refresh
                       </button>
+	                    </div>
+	                  </div>
                     </div>
-                  </div>
+                    <div className="registry-modal-body">
 
-                  {visibleCronJobs === null ? (
+	                  {visibleCronJobs === null ? (
                     <p className="muted">Loading cron jobs…</p>
                   ) : visibleCronJobs.length ? (
                     <div className="session-list">
@@ -2754,22 +2334,44 @@ export default function App() {
                         </button>
                       </div>
                     ) : null}
-                  </div>
-                </section>
+	                  </div>
+                    </div>
+                  </section>
+                </div>
+              ) : null}
 
-                <section className="subpanel">
-                  <div className="panel-head">
-                    <h3>Prompt files</h3>
-                    <div className="action-row">
+              {activeSoulDialog === "prompts" ? (
+                <div className="modal-backdrop">
+                  <section
+                    className="registry-modal registry-modal-wide"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="soul-prompts-title"
+                  >
+                    <div className="registry-modal-head">
+                      <button type="button" className="ghost" onClick={() => setActiveSoulDialog(null)} disabled={!!pending}>
+                        Close
+                      </button>
+                      <div>
+                        <h2 id="soul-prompts-title">Prompt files</h2>
+                        <p className="muted">
+                          {promptFiles.length ? `${selectedSoulPromptFileCount} present` : "Loading"}
+                        </p>
+                      </div>
+                      <div className="registry-modal-actions">
                       <button
                         className="ghost"
                         onClick={() => {
                           if (!selectedSoul) {
                             return;
                           }
-                          void refreshPromptFiles(selectedSoul.soul_id, true).catch((cause) => {
-                            notifyError(cause);
-                          });
+                          void refreshPromptFiles(selectedSoul.soul_id, true)
+                            .then(() => {
+                              toast.success("Prompt files refreshed");
+                            })
+                            .catch((cause) => {
+                              notifyError(cause);
+                            });
                         }}
                         disabled={!!pending || !selectedSoul}
                       >
@@ -2811,6 +2413,7 @@ export default function App() {
                     </div>
                   </div>
 
+                    <div className="registry-modal-body">
                   <div className="md-file-list">
                     {promptFiles.length ? (
                       SOUL_PROMPT_FILE_NAMES.map((name) => {
@@ -2881,9 +2484,10 @@ export default function App() {
                       <p className="muted">Loading prompt files…</p>
                     )}
                   </div>
-                </section>
-
+                    </div>
+                  </section>
                 </div>
+              ) : null}
             </>
           ) : (
             <p className="muted">Select a soul to inspect or create one from the Souls panel.</p>
@@ -3037,6 +2641,7 @@ export default function App() {
           pending={pending}
           soulId={createSoulId}
           draft={createSoulDraft}
+          enabledChannels={enabledChannels}
           allSoulGroups={allSoulGroups}
           mcpServers={mcpServers}
           cronJobRegistry={cronJobRegistry}

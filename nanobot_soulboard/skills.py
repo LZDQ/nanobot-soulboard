@@ -2,23 +2,25 @@
 
 import os
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 
-import tiktoken
 import yaml
 from loguru import logger
 
 from nanobot.agent.skills import _STRIP_SKILL_FRONTMATTER
 
 
-@lru_cache(maxsize=1)
-def _skill_encoding() -> tiktoken.Encoding:
-    return tiktoken.get_encoding("cl100k_base")
+@dataclass(frozen=True)
+class SkillTextStats:
+    """Simple SKILL.md text metrics."""
+
+    char_count: int
+    word_count: int
+    line_count: int
 
 
-def count_skill_md_tokens(skill_dir: Path) -> int | None:
-    """Return the tiktoken count of SKILL.md, or None if it can't be read."""
+def count_skill_md_text_stats(skill_dir: Path) -> SkillTextStats | None:
+    """Return SKILL.md text metrics, or None if it can't be read."""
     skill_md = skill_dir / "SKILL.md"
     if not skill_md.is_file():
         return None
@@ -26,12 +28,16 @@ def count_skill_md_tokens(skill_dir: Path) -> int | None:
         content = skill_md.read_text(encoding="utf-8")
     except OSError:
         return None
-    return len(_skill_encoding().encode(content))
+    return count_text_stats(content)
 
 
-def count_text_tokens(text: str) -> int:
-    """Return the tiktoken count of an already-loaded SKILL.md body."""
-    return len(_skill_encoding().encode(text))
+def count_text_stats(text: str) -> SkillTextStats:
+    """Return simple text metrics for an already-loaded SKILL.md body."""
+    return SkillTextStats(
+        char_count=len(text),
+        word_count=len(text.split()),
+        line_count=len(text.splitlines()),
+    )
 
 
 def parse_skill_metadata(skill_dir: Path) -> dict | None:
@@ -81,7 +87,9 @@ class DiscoveredSkill:
     relative_path: str
     name: str
     description: str | None
-    token_count: int | None
+    char_count: int | None
+    word_count: int | None
+    line_count: int | None
 
 
 def _is_valid_skill_header(meta: dict | None) -> bool:
@@ -121,6 +129,7 @@ def discover_skills_in_pool(pool_path: str, pool_root: Path) -> list[DiscoveredS
         assert meta is not None
         relative = cur_path.relative_to(pool_root).as_posix()
         description = meta.get("description")
+        stats = count_skill_md_text_stats(cur_path)
         discovered.append(
             DiscoveredSkill(
                 pool_path=pool_path,
@@ -129,7 +138,9 @@ def discover_skills_in_pool(pool_path: str, pool_root: Path) -> list[DiscoveredS
                 relative_path=relative,
                 name=str(meta["name"]).strip(),
                 description=str(description) if description is not None else None,
-                token_count=count_skill_md_tokens(cur_path),
+                char_count=stats.char_count if stats is not None else None,
+                word_count=stats.word_count if stats is not None else None,
+                line_count=stats.line_count if stats is not None else None,
             )
         )
         dirs[:] = []

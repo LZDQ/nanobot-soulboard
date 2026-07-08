@@ -5,6 +5,10 @@ type GroupListEditorProps = {
   onChange: (next: string[]) => void;
   suggestions: string[];
   inputId?: string;
+  allowCustom?: boolean;
+  placeholder?: string;
+  emptyLabel?: string;
+  suggestionsLabel?: string;
 };
 
 export function GroupListEditor({
@@ -12,14 +16,19 @@ export function GroupListEditor({
   onChange,
   suggestions,
   inputId,
+  allowCustom = true,
+  placeholder = "Type a group name, press Enter",
+  emptyLabel = "No groups",
+  suggestionsLabel = "Existing:",
 }: GroupListEditorProps) {
   const [input, setInput] = useState("");
 
   function addRaw(raw: string) {
+    const allowed = new Set(suggestions);
     const additions = raw
       .split(",")
       .map((token) => token.trim())
-      .filter(Boolean);
+      .filter((token) => token && (allowCustom || allowed.has(token)));
     if (!additions.length) {
       setInput("");
       return;
@@ -43,6 +52,13 @@ export function GroupListEditor({
   }
 
   const available = suggestions.filter((group) => !value.includes(group));
+  const inputTokens = input
+    .split(",")
+    .map((token) => token.trim())
+    .filter(Boolean);
+  const canAddInput = allowCustom
+    ? inputTokens.length > 0
+    : inputTokens.some((token) => available.includes(token));
 
   return (
     <div className="group-editor">
@@ -62,7 +78,7 @@ export function GroupListEditor({
             </span>
           ))
         ) : (
-          <span className="muted group-editor-empty">No groups</span>
+          <span className="muted group-editor-empty">{emptyLabel}</span>
         )}
       </div>
       <div className="group-editor-input">
@@ -82,20 +98,20 @@ export function GroupListEditor({
           onBlur={() => {
             if (input.trim()) addRaw(input);
           }}
-          placeholder="Type a group name, press Enter"
+          placeholder={placeholder}
         />
         <button
           type="button"
           className="ghost"
           onClick={() => addRaw(input)}
-          disabled={!input.trim()}
+          disabled={!canAddInput}
         >
           Add
         </button>
       </div>
       {available.length ? (
         <div className="group-editor-suggestions">
-          <span className="muted">Existing:</span>
+          <span className="muted">{suggestionsLabel}</span>
           {available.map((group) => (
             <button
               key={group}

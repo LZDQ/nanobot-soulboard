@@ -52,7 +52,7 @@ from nanobot_soulboard.schemas import (
     UpdateSoulPromptFilesRequest,
     UpdateSoulRequest,
 )
-from nanobot_soulboard.skills import count_text_tokens, skill_summary
+from nanobot_soulboard.skills import count_text_stats, skill_summary
 
 
 def _build_session_metadata(key: str) -> dict[str, str]:
@@ -163,12 +163,15 @@ def _list_soul_skills(spec: SoulSpec) -> list[SoulSkillResponse]:
                 link_target = str(skill_dir.readlink())
         _, description = skill_summary(skill_dir)
         content = skill_path.read_text(encoding="utf-8")
+        stats = count_text_stats(content)
         skills.append(SoulSkillResponse(
             name=skill_dir.name,
             path=str(skill_path),
             content=content,
             description=description,
-            token_count=count_text_tokens(content),
+            char_count=stats.char_count,
+            word_count=stats.word_count,
+            line_count=stats.line_count,
             link_target=link_target,
         ))
     return skills
@@ -187,7 +190,9 @@ def _build_skill_registry_response(supervisor: SoulSupervisor) -> SkillRegistryR
                 relative_path=entry.relative_path,
                 name=entry.name,
                 description=entry.description,
-                token_count=entry.token_count,
+                char_count=entry.char_count,
+                word_count=entry.word_count,
+                line_count=entry.line_count,
             )
             for entry in entries
         ]
@@ -437,6 +442,19 @@ def create_app() -> FastAPI:
         supervisor = _get_supervisor(request)
         supervisor.reload_config()
         return [_to_soul_response(supervisor, spec) for spec in supervisor.list_specs()]
+
+    @api.get(
+        "/channels",
+        response_model=list[str],
+        summary="List Enabled Channels",
+        description=(
+            "List channel names enabled in the base nanobot config.json. Souls select from these names "
+            "when enabling channel runtimes in their overrides."
+        ),
+    )
+    def list_enabled_channels(request: Request) -> list[str]:
+        supervisor = _get_supervisor(request)
+        return supervisor.list_enabled_channels()
 
     @api.get(
         "/mcp-servers",

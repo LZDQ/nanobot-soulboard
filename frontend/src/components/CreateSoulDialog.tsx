@@ -14,6 +14,7 @@ type CreateSoulDialogProps = {
   pending: string;
   soulId: string;
   draft: DraftOverrides;
+  enabledChannels: string[];
   allSoulGroups: string[];
   mcpServers: MCPServer[];
   cronJobRegistry: CronJobRegistryEntry[];
@@ -34,6 +35,7 @@ export function CreateSoulDialog({
   pending,
   soulId,
   draft,
+  enabledChannels,
   allSoulGroups,
   mcpServers,
   cronJobRegistry,
@@ -50,6 +52,10 @@ export function CreateSoulDialog({
   onCreate,
 }: CreateSoulDialogProps) {
   const selectedSkillCount = Object.values(skillDrafts).filter((skill) => skill.enabled).length;
+  const selectedChannels = draft.channels
+    .split(",")
+    .map((channel) => channel.trim())
+    .filter(Boolean);
 
   return (
     <div className="modal-backdrop">
@@ -116,11 +122,18 @@ export function CreateSoulDialog({
               </label>
               <label>
                 <span>Channels</span>
-                <input
-                  value={draft.channels}
-                  onChange={(event) => setDraft((current) => ({ ...current, channels: event.target.value }))}
-                  placeholder="cli, telegram"
+                <GroupListEditor
+                  value={selectedChannels}
+                  onChange={(next) => setDraft((current) => ({ ...current, channels: next.join(", ") }))}
+                  suggestions={enabledChannels}
+                  allowCustom={false}
+                  placeholder="Type an enabled channel, press Enter"
+                  emptyLabel="No channels"
+                  suggestionsLabel="Available:"
                 />
+                {!enabledChannels.length ? (
+                  <span className="muted">No enabled channels found in the base config.</span>
+                ) : null}
               </label>
               <label htmlFor="create-soul-modal-groups-input">
                 <span>Groups (display only)</span>

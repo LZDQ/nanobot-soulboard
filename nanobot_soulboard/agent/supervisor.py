@@ -554,6 +554,15 @@ class SoulSupervisor:
         """Return MCP server definitions from the base nanobot config."""
         return dict(sorted(self.base_config.tools.mcp_servers.items()))
 
+    def list_enabled_channels(self) -> list[str]:
+        """Return channel names enabled in the base nanobot config."""
+        channel_data = self.base_config.channels.model_dump(by_alias=True)
+        names: list[str] = []
+        for name, value in sorted(channel_data.items()):
+            if isinstance(value, dict) and value.get("enabled") is True:
+                names.append(name)
+        return names
+
     def create_mcp_server(self, name: str, definition: MCPServerConfig) -> MCPServerConfig:
         """Create one MCP server definition in the base nanobot config."""
         if name in self.base_config.tools.mcp_servers:

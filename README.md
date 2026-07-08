@@ -34,6 +34,14 @@ Example (with default host and port and custom url prefix):
 SOULBOARD_URL_PREFIX=/soulboard uvicorn nanobot_soulboard.server:create_app --factory --host 127.0.0.1 --port 18791
 ```
 
+Dev:
+
+```sh
+uvicorn nanobot_soulboard.server:create_app --factory --host 127.0.0.1 --port 18791 --reload --reload-dir nanobot_soulboard
+```
+
+
+
 ## Web UI Frontend
 
 The web UI lives under `frontend/` and talks to the FastAPI backend over HTTP and WebSocket.

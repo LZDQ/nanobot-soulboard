@@ -43,6 +43,30 @@ export function renderEnabledList(values: string[]): string {
   return values.length ? values.join(", ") : "none enabled";
 }
 
+type SkillTextStats = {
+  char_count: number | null;
+  word_count: number | null;
+  line_count: number | null;
+};
+
+function formatCount(value: number, singular: string, plural: string): string {
+  return `${value.toLocaleString()} ${value === 1 ? singular : plural}`;
+}
+
+export function formatSkillTextStats(skill: SkillTextStats): string[] {
+  const values: string[] = [];
+  if (skill.char_count !== null && skill.char_count !== undefined) {
+    values.push(formatCount(skill.char_count, "char", "chars"));
+  }
+  if (skill.word_count !== null && skill.word_count !== undefined) {
+    values.push(formatCount(skill.word_count, "word", "words"));
+  }
+  if (skill.line_count !== null && skill.line_count !== undefined) {
+    values.push(formatCount(skill.line_count, "line", "lines"));
+  }
+  return values;
+}
+
 export function renderHeaderOverrideSummary(headersByServer: Record<string, Record<string, string>>): string {
   const serverNames = Object.keys(headersByServer);
   if (!serverNames.length) {

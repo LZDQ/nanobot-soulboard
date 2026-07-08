@@ -30,7 +30,9 @@ export type SoulSkill = {
   path: string;
   content: string;
   description: string | null;
-  token_count: number | null;
+  char_count: number | null;
+  word_count: number | null;
+  line_count: number | null;
   link_target: string | null;
 };
 
@@ -39,7 +41,9 @@ export type SkillPoolEntry = {
   relative_path: string;
   name: string;
   description: string | null;
-  token_count: number | null;
+  char_count: number | null;
+  word_count: number | null;
+  line_count: number | null;
 };
 
 export type SkillPool = {

@@ -116,9 +116,17 @@ class SoulSkillResponse(BaseModel):
     path: str
     content: str
     description: str | None = None
-    token_count: int | None = Field(
+    char_count: int | None = Field(
         default=None,
-        description="tiktoken (cl100k_base) count for SKILL.md only; excludes any sibling files.",
+        description="Character count for SKILL.md only; excludes any sibling files.",
+    )
+    word_count: int | None = Field(
+        default=None,
+        description="Whitespace-delimited word count for SKILL.md only; excludes any sibling files.",
+    )
+    line_count: int | None = Field(
+        default=None,
+        description="Line count for SKILL.md only; excludes any sibling files.",
     )
     link_target: str | None = Field(
         default=None,
@@ -136,9 +144,17 @@ class SkillPoolEntryResponse(BaseModel):
     relative_path: str = Field(description="Path relative to the pool root, posix-style.")
     name: str = Field(description="Skill name from SKILL.md frontmatter.")
     description: str | None = None
-    token_count: int | None = Field(
+    char_count: int | None = Field(
         default=None,
-        description="tiktoken (cl100k_base) count for SKILL.md only; excludes any sibling files.",
+        description="Character count for SKILL.md only; excludes any sibling files.",
+    )
+    word_count: int | None = Field(
+        default=None,
+        description="Whitespace-delimited word count for SKILL.md only; excludes any sibling files.",
+    )
+    line_count: int | None = Field(
+        default=None,
+        description="Line count for SKILL.md only; excludes any sibling files.",
     )
 
 
