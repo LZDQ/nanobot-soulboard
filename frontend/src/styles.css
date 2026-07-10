@@ -843,6 +843,46 @@ pre {
   color: var(--text);
 }
 
+.tool-config-field {
+  grid-column: 1 / -1;
+}
+
+.tool-selection-grid {
+  align-items: stretch;
+}
+
+.tool-check-tile {
+  align-items: flex-start;
+}
+
+.check-tile .tool-choice-body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.check-tile .tool-choice-body strong {
+  font-size: 0.92rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.check-tile .tool-choice-body small {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.25;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.tool-check-tile select {
+  flex: 0 0 8.5rem;
+  margin-left: auto;
+}
+
 .cron-filter-toggle {
   padding: 0.55rem 0.8rem;
   border-radius: 999px;

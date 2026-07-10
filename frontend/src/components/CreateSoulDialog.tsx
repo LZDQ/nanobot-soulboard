@@ -1,12 +1,19 @@
 import type { Dispatch, SetStateAction } from "react";
 
-import { updateSoulMcpSelection } from "../lib/drafts";
+import {
+  getToolChoices,
+  getToolOverrideState,
+  updateDraftToolOverride,
+  updateSoulMcpSelection,
+} from "../lib/drafts";
 import type {
   CreateSoulSkillDraft,
   CronJobRegistryEntry,
   DraftOverrides,
   MCPServer,
+  NanobotTool,
   SkillPool,
+  ToolOverrideState,
 } from "../types";
 import { GroupListEditor } from "./GroupListEditor";
 
@@ -17,6 +24,8 @@ type CreateSoulDialogProps = {
   enabledChannels: string[];
   allSoulGroups: string[];
   mcpServers: MCPServer[];
+  nanobotTools: NanobotTool[];
+  globalToolOverrides: Record<string, boolean>;
   cronJobRegistry: CronJobRegistryEntry[];
   cronJobNames: string[];
   skillPools: SkillPool[];
@@ -38,6 +47,8 @@ export function CreateSoulDialog({
   enabledChannels,
   allSoulGroups,
   mcpServers,
+  nanobotTools,
+  globalToolOverrides,
   cronJobRegistry,
   cronJobNames,
   skillPools,
@@ -56,6 +67,7 @@ export function CreateSoulDialog({
     .split(",")
     .map((channel) => channel.trim())
     .filter(Boolean);
+  const toolChoices = getToolChoices(nanobotTools, globalToolOverrides, draft.tool_overrides);
 
   return (
     <div className="modal-backdrop">
@@ -186,6 +198,30 @@ export function CreateSoulDialog({
                   ))}
                 </div>
               ) : null}
+              <label className="create-soul-wide-field">
+                <span>Nanobot tool overrides</span>
+                <div className="selection-grid tool-selection-grid">
+                  {toolChoices.map((tool) => (
+                    <label key={tool.name} className="check-tile tool-check-tile">
+                      <span className="tool-choice-body">
+                        <strong>{tool.name}</strong>
+                        {tool.description ? <small title={tool.description}>{tool.description}</small> : null}
+                      </span>
+                      <select
+                        value={getToolOverrideState(draft.tool_overrides, tool.name)}
+                        onChange={(event) => {
+                          setDraft((current) => updateDraftToolOverride(current, tool.name, event.target.value as ToolOverrideState));
+                        }}
+                      >
+                        <option value="inherit">Inherit{tool.name in globalToolOverrides ? ` (${globalToolOverrides[tool.name] ? "enabled" : "disabled"})` : ""}</option>
+                        <option value="enabled">Enable</option>
+                        <option value="disabled">Disable</option>
+                      </select>
+                    </label>
+                  ))}
+                  {!toolChoices.length ? <p className="muted">No nanobot tools reported by the backend.</p> : null}
+                </div>
+              </label>
               <label className="checkbox create-soul-wide-field">
                 <input
                   type="checkbox"

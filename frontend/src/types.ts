@@ -5,6 +5,7 @@ export type SoulOverrides = {
   channels: string[];
   mcp_servers: string[];
   mcp_http_headers: Record<string, Record<string, string>>;
+  tool_overrides: Record<string, boolean>;
   autostart: boolean;
   groups: string[];
 };
@@ -63,6 +64,17 @@ export type Soul = {
   running: boolean;
   overrides: SoulOverrides;
 };
+
+export type NanobotTool = {
+  name: string;
+  description: string;
+};
+
+export type ToolOverridesResponse = {
+  overrides: Record<string, boolean>;
+};
+
+export type ToolOverrideState = "inherit" | "enabled" | "disabled";
 
 export type SessionSummary = {
   key: string;
@@ -236,6 +248,7 @@ export type DraftOverrides = {
   channels: string;
   mcp_servers: string[];
   mcp_http_headers: Record<string, string>;
+  tool_overrides: Record<string, boolean>;
   autostart: boolean;
   groups: string[];
 };

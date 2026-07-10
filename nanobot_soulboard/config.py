@@ -122,6 +122,13 @@ class SoulOverrides(BaseModel):
             "Headers are merged on top of the shared base MCP server definition."
         ),
     )
+    tool_overrides: dict[str, bool] = Field(
+        default_factory=dict,
+        description=(
+            "Sparse per-soul tool enabled/disabled overrides. Missing tool names inherit the global "
+            "soulboard tool_overrides setting, and missing global names leave nanobot defaults unchanged."
+        ),
+    )
     autostart: bool = Field(
         default=False,
         description="Whether soulboard should automatically start this soul runtime.",
@@ -145,6 +152,17 @@ class SoulOverrides(BaseModel):
                 continue
             normalized.append(item)
             seen.add(item)
+        return normalized
+
+    @field_validator("tool_overrides")
+    @classmethod
+    def _validate_tool_overrides(cls, value: dict[str, bool]) -> dict[str, bool]:
+        normalized: dict[str, bool] = {}
+        for raw, enabled in value.items():
+            name = raw.strip()
+            if not name:
+                continue
+            normalized[name] = bool(enabled)
         return normalized
 
 
@@ -200,6 +218,13 @@ class SoulboardConfig(BaseModel):
             "recurring tasks, including those with dynamic session keys via recurring_session_key_format."
         ),
     )
+    tool_overrides: dict[str, bool] = Field(
+        default_factory=dict,
+        description=(
+            "Sparse global nanobot tool enabled/disabled map. Missing tool names leave nanobot defaults "
+            "unchanged. Per-soul tool_overrides can override these values for one soul."
+        ),
+    )
     souls: dict[str, SoulOverrides] = Field(default_factory=dict)
 
     @field_validator("skill_registry")
@@ -211,6 +236,11 @@ class SoulboardConfig(BaseModel):
     @classmethod
     def validate_cron_job_registry(cls, value: list[CronJobRegistryEntry]) -> list[CronJobRegistryEntry]:
         return _normalize_cron_job_registry(value)
+
+    @field_validator("tool_overrides")
+    @classmethod
+    def validate_tool_overrides(cls, value: dict[str, bool]) -> dict[str, bool]:
+        return _normalize_tool_overrides(value)
 
 
 def _normalize_skill_registry(items: list[str]) -> list[str]:
@@ -239,6 +269,42 @@ def _normalize_cron_job_registry(entries: list[CronJobRegistryEntry]) -> list[Cr
         normalized.append(entry)
         seen.add(name)
     return normalized
+
+
+def _normalize_tool_overrides(items: dict[str, bool]) -> dict[str, bool]:
+    """Normalize sparse tool override maps."""
+    normalized: dict[str, bool] = {}
+    for raw, enabled in items.items():
+        name = raw.strip()
+        if not name:
+            continue
+        normalized[name] = bool(enabled)
+    return normalized
+
+
+def _migrate_legacy_disabled_tools(data: dict) -> dict:
+    """Convert old per-soul disabled_tools arrays into sparse false overrides."""
+    souls = data.get("souls")
+    if not isinstance(souls, dict):
+        return data
+    for soul_data in souls.values():
+        if not isinstance(soul_data, dict):
+            continue
+        disabled_tools = soul_data.pop("disabled_tools", None)
+        if not isinstance(disabled_tools, list):
+            continue
+        overrides = soul_data.setdefault("tool_overrides", {})
+        if not isinstance(overrides, dict):
+            overrides = {}
+            soul_data["tool_overrides"] = overrides
+        for raw_name in disabled_tools:
+            if not isinstance(raw_name, str):
+                continue
+            name = raw_name.strip()
+            if not name or name in overrides:
+                continue
+            overrides[name] = False
+    return data
 
 
 def validate_soul_id(soul_id: str) -> str:
@@ -276,6 +342,7 @@ def load_soulboard_config(path: Path) -> SoulboardConfig:
     data.pop("app_links", None)
     # Dropped feature: tolerate configs written with the legacy prompt_link_dirs key.
     data.pop("prompt_link_dirs", None)
+    data = _migrate_legacy_disabled_tools(data)
     config = SoulboardConfig.model_validate(data)
     for soul_id in config.souls:
         validate_soul_id(soul_id)
@@ -287,6 +354,7 @@ def save_soulboard_config(config: SoulboardConfig, path: Path) -> None:
     for soul_id in config.souls:
         validate_soul_id(soul_id)
     config.skill_registry = _normalize_skill_registry(config.skill_registry)
+    config.tool_overrides = _normalize_tool_overrides(config.tool_overrides)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = config.model_dump(mode="json", exclude_none=True, by_alias=True)
     with open(path, "w", encoding="utf-8") as f:

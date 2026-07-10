@@ -374,6 +374,25 @@ class PathsResponse(BaseModel):
     soulboard_config_path: str
 
 
+class ToolCatalogItemResponse(BaseModel):
+    """One nanobot tool available for enabled/disabled overrides."""
+
+    name: str
+    description: str
+
+
+class ToolOverridesResponse(BaseModel):
+    """Sparse nanobot tool enabled/disabled overrides."""
+
+    overrides: dict[str, bool]
+
+
+class UpdateToolOverridesRequest(BaseModel):
+    """Replace sparse global nanobot tool enabled/disabled overrides."""
+
+    overrides: dict[str, bool]
+
+
 class MCPServerResponse(BaseModel):
     """Named MCP server definition from base nanobot config."""
 

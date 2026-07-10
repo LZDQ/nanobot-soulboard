@@ -11,7 +11,11 @@ from typing import Callable, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from loguru import logger
+from nanobot.agent.tools.context import ToolContext
 from nanobot.agent.tools.cron import CronTool
+from nanobot.agent.tools.loader import ToolLoader
+from nanobot.agent.tools.registry import ToolRegistry
+from nanobot.agent.tools.self import MyTool
 from nanobot.bus.events import InboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.manager import ChannelManager
@@ -22,7 +26,8 @@ from nanobot.providers.base import LLMProvider
 from nanobot.providers.image_generation import image_gen_provider_configs
 from nanobot.session.manager import SessionManager
 
-from nanobot_soulboard.agent.loop import SoulAgentLoop
+from nanobot_soulboard.agent.loop import SoulAgentLoop, SoulMcpReconnectRequest
+from nanobot_soulboard.agent.shell import SoulExecTool
 from nanobot_soulboard.config import (
     CronJobRegistryEntry,
     SoulOverrides,
@@ -33,7 +38,7 @@ from nanobot_soulboard.config import (
     save_soulboard_config,
     validate_soul_id,
 )
-from nanobot_soulboard.cron import SoulCronPayload, SoulCronService
+from nanobot_soulboard.cron import SoulCronPayload, SoulCronService, SoulCronTool
 from nanobot_soulboard.skills import DiscoveredSkill, discover_skills_in_pool
 
 SOUL_PROMPT_FILES = ("AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "SYSTEM.md")
@@ -46,6 +51,14 @@ class SoulSpec:
     soul_id: str
     workspace: Path
     overrides: SoulOverrides
+
+
+@dataclass(frozen=True)
+class ToolCatalogItem:
+    """One nanobot tool available for enabled/disabled overrides."""
+
+    name: str
+    description: str
 
 
 def discover_soul_specs(nano_root: Path, config: SoulboardConfig | None = None) -> list[SoulSpec]:
@@ -163,13 +176,116 @@ class RunningSoul:
     channels_task: asyncio.Task | None = None
     mcp_owner_task: asyncio.Task | None = None
     mcp_shutdown: asyncio.Event | None = None
+    mcp_connect_requested: asyncio.Event | None = None
+    mcp_reconnect_requests: asyncio.Queue[SoulMcpReconnectRequest] | None = None
     cron_started: bool = False
+
+
+def _current_task_is_cancelling() -> bool:
+    task = asyncio.current_task()
+    return task is not None and task.cancelling() > 0
+
+
+async def _connect_mcp_from_owner(agent_loop: SoulAgentLoop, ready: asyncio.Future) -> None:
+    try:
+        await agent_loop.connect_mcp_from_owner()
+    except asyncio.CancelledError as e:
+        if _current_task_is_cancelling():
+            if not ready.done():
+                ready.set_exception(e)
+            raise
+        logger.warning("Soul '{}' MCP owner connect was cancelled by SDK", agent_loop.soul_id)
+        if not ready.done():
+            ready.set_result(None)
+    except BaseException as e:
+        if not ready.done():
+            ready.set_exception(e)
+        else:
+            logger.warning("Soul '{}' MCP owner connect failed: {}", agent_loop.soul_id, e)
+    else:
+        if not ready.done():
+            ready.set_result(None)
+
+
+async def _reconnect_mcp_from_owner(
+    agent_loop: SoulAgentLoop,
+    request: SoulMcpReconnectRequest,
+) -> None:
+    if request.future.done():
+        return
+    try:
+        tool = await agent_loop.reconnect_mcp_server_from_owner(
+            request.server_name,
+            request.tool_name,
+        )
+    except asyncio.CancelledError:
+        if _current_task_is_cancelling():
+            if not request.future.done():
+                request.future.set_result(None)
+            raise
+        logger.warning(
+            "Soul '{}' MCP owner reconnect for server '{}' was cancelled by SDK",
+            agent_loop.soul_id,
+            request.server_name,
+        )
+        if not request.future.done():
+            request.future.set_result(None)
+        return
+    except BaseException as e:
+        logger.warning(
+            "Soul '{}' MCP owner reconnect failed for server '{}': {}",
+            agent_loop.soul_id,
+            request.server_name,
+            e,
+        )
+        if not request.future.done():
+            request.future.set_result(None)
+        return
+    if not request.future.done():
+        request.future.set_result(tool)
+
+
+async def _wait_for_mcp_owner_request(
+    connect_requested: asyncio.Event,
+    reconnect_requests: asyncio.Queue[SoulMcpReconnectRequest],
+    shutdown: asyncio.Event,
+) -> tuple[str, SoulMcpReconnectRequest | None]:
+    connect_task = asyncio.create_task(connect_requested.wait())
+    reconnect_task = asyncio.create_task(reconnect_requests.get())
+    shutdown_task = asyncio.create_task(shutdown.wait())
+    tasks = {connect_task, reconnect_task, shutdown_task}
+    try:
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        if shutdown_task in done and shutdown.is_set():
+            return "shutdown", None
+        if reconnect_task in done:
+            return "reconnect", reconnect_task.result()
+        return "connect", None
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def _drain_mcp_reconnect_requests(
+    reconnect_requests: asyncio.Queue[SoulMcpReconnectRequest],
+) -> None:
+    while True:
+        try:
+            request = reconnect_requests.get_nowait()
+        except asyncio.QueueEmpty:
+            return
+        if not request.future.done():
+            request.future.set_result(None)
 
 
 async def _own_mcp_lifecycle(
     agent_loop: SoulAgentLoop,
     ready: asyncio.Future,
     shutdown: asyncio.Event,
+    connect_requested: asyncio.Event,
+    reconnect_requests: asyncio.Queue[SoulMcpReconnectRequest],
 ) -> None:
     """Long-lived task that owns this soul's MCP cancel scopes.
 
@@ -181,17 +297,24 @@ async def _own_mcp_lifecycle(
     exit, so this task does both. See HKUDS/nanobot#3638.
     """
     try:
-        await agent_loop._connect_mcp()
-    except BaseException as e:
-        if not ready.done():
-            ready.set_exception(e)
-        return
-    if not ready.done():
-        ready.set_result(None)
-    try:
-        await shutdown.wait()
+        await _connect_mcp_from_owner(agent_loop, ready)
+        while not shutdown.is_set():
+            request_kind, request = await _wait_for_mcp_owner_request(
+                connect_requested,
+                reconnect_requests,
+                shutdown,
+            )
+            if request_kind == "shutdown":
+                break
+            if request_kind == "reconnect" and request is not None:
+                await _reconnect_mcp_from_owner(agent_loop, request)
+                continue
+            connect_requested.clear()
+            await _connect_mcp_from_owner(agent_loop, ready)
     except asyncio.CancelledError:
         pass
+    finally:
+        _drain_mcp_reconnect_requests(reconnect_requests)
     try:
         await agent_loop.close_mcp()
     except (RuntimeError, BaseExceptionGroup):
@@ -563,6 +686,83 @@ class SoulSupervisor:
                 names.append(name)
         return names
 
+    def list_nanobot_tools(self) -> list[ToolCatalogItem]:
+        """Return the dynamically registered core tool names for UI controls."""
+        registry = ToolRegistry()
+        tools_config = self.base_config.tools
+        catalog_workspace = self.nano_root / "soulboard" / ".tool-catalog"
+        cron_service = SoulCronService(
+            catalog_workspace / "cron" / "jobs.json",
+            soul_id="tool-catalog",
+        )
+        ctx = ToolContext(
+            config=tools_config,
+            workspace=str(catalog_workspace),
+            bus=MessageBus(),
+            subagent_manager=object(),
+            cron_service=cron_service,
+            sessions=object(),
+            timezone=self.base_config.agents.defaults.timezone,
+        )
+        ToolLoader().load(ctx, registry)
+
+        if tools_config.my.enable:
+            registry.register(
+                MyTool(runtime_state=self, modify_allowed=tools_config.my.allow_set)
+            )
+        if tools_config.exec.enable:
+            registry.unregister("exec")
+            registry.register(
+                SoulExecTool(
+                    workspace=catalog_workspace,
+                    timeout=tools_config.exec.timeout,
+                    restrict_to_workspace=tools_config.restrict_to_workspace,
+                    sandbox=tools_config.exec.sandbox,
+                    path_append=tools_config.exec.path_append,
+                    allowed_env_keys=tools_config.exec.allowed_env_keys,
+                    allow_patterns=tools_config.exec.allow_patterns,
+                    deny_patterns=tools_config.exec.deny_patterns,
+                )
+            )
+        registry.unregister("spawn")
+        if registry.has("cron"):
+            registry.unregister("cron")
+            registry.register(
+                SoulCronTool(
+                    cron_service,
+                    default_timezone=self.base_config.agents.defaults.timezone or "UTC",
+                )
+            )
+
+        items: list[ToolCatalogItem] = []
+        for name in registry.tool_names:
+            tool = registry.get(name)
+            if tool is None:
+                continue
+            try:
+                description = tool.description
+            except Exception:
+                description = ""
+            items.append(ToolCatalogItem(name=name, description=description))
+        return sorted(items, key=lambda item: item.name)
+
+    def get_tool_overrides(self) -> dict[str, bool]:
+        """Return the global sparse nanobot tool override map."""
+        return dict(sorted(self.soulboard_config.tool_overrides.items()))
+
+    def update_tool_overrides(self, overrides: dict[str, bool]) -> dict[str, bool]:
+        """Replace the global sparse nanobot tool override map and persist."""
+        normalized = {
+            name.strip(): bool(enabled)
+            for name, enabled in overrides.items()
+            if name.strip()
+        }
+        self.soulboard_config = self.soulboard_config.model_copy(
+            update={"tool_overrides": normalized}
+        )
+        save_soulboard_config(self.soulboard_config, self.config_path)
+        return self.get_tool_overrides()
+
     def create_mcp_server(self, name: str, definition: MCPServerConfig) -> MCPServerConfig:
         """Create one MCP server definition in the base nanobot config."""
         if name in self.base_config.tools.mcp_servers:
@@ -697,6 +897,10 @@ class SoulSupervisor:
             consolidation_ratio=config.agents.defaults.consolidation_ratio,
             unified_session=config.agents.defaults.unified_session,
             disabled_skills=config.agents.defaults.disabled_skills,
+            tool_overrides={
+                **self.soulboard_config.tool_overrides,
+                **spec.overrides.tool_overrides,
+            },
             tools_config=config.tools,
             image_generation_provider_configs=image_gen_provider_configs(config),
         )
@@ -822,9 +1026,21 @@ class SoulSupervisor:
             not running.mcp_owner_task or running.mcp_owner_task.done()
         ):
             running.mcp_shutdown = asyncio.Event()
+            running.mcp_connect_requested = asyncio.Event()
+            running.mcp_reconnect_requests = asyncio.Queue()
+            running.agent_loop.use_soulboard_mcp_lifecycle(
+                running.mcp_connect_requested,
+                running.mcp_reconnect_requests,
+            )
             ready = asyncio.get_running_loop().create_future()
             running.mcp_owner_task = asyncio.create_task(
-                _own_mcp_lifecycle(running.agent_loop, ready, running.mcp_shutdown),
+                _own_mcp_lifecycle(
+                    running.agent_loop,
+                    ready,
+                    running.mcp_shutdown,
+                    running.mcp_connect_requested,
+                    running.mcp_reconnect_requests,
+                ),
                 name=f"mcp-owner:{soul_id}",
             )
             try:

@@ -45,9 +45,12 @@ from nanobot_soulboard.schemas import (
     SoulResponse,
     SoulSkillResponse,
     StreamInputMessage,
+    ToolCatalogItemResponse,
+    ToolOverridesResponse,
     UpdateCronJobRegistryRequest,
     UpdateMCPServerRequest,
     UpdateSkillRegistryRequest,
+    UpdateToolOverridesRequest,
     UpdateSoulCronJobRequest,
     UpdateSoulPromptFilesRequest,
     UpdateSoulRequest,
@@ -106,6 +109,16 @@ class AppState:
         self.nano_root = nano_root
         self.base_config_path = base_config_path
         self.soulboard_config_path = soulboard_config_path
+
+
+def _ensure_nano_root_exists(nano_root: Path) -> None:
+    """Refuse to start before nanobot has been onboarded."""
+    if nano_root.exists():
+        return
+    raise RuntimeError(
+        f"Nanobot data root does not exist: {nano_root}. "
+        'Run "nanobot onboard" first.'
+    )
 
 
 def _sync_soul_workspace(spec: SoulSpec) -> None:
@@ -269,6 +282,7 @@ def create_app() -> FastAPI:
     resolved_nano_root = settings.nano_root
     resolved_base_config_path = settings.resolved_base_config_path
     resolved_soulboard_config_path = settings.resolved_soulboard_config_path
+    _ensure_nano_root_exists(resolved_nano_root)
     initial_soulboard_config = load_soulboard_config(resolved_soulboard_config_path)
 
     @asynccontextmanager
@@ -333,6 +347,52 @@ def create_app() -> FastAPI:
             base_config_path=str(state.base_config_path),
             soulboard_config_path=str(state.soulboard_config_path),
         )
+
+    @api.get(
+        "/nanobot-tools",
+        response_model=list[ToolCatalogItemResponse],
+        summary="List Nanobot Tools",
+        description=(
+            "Return the dynamically registered nanobot tool names that can be enabled or disabled. "
+            "The list is derived from the current base nanobot tool loader and soulboard tool overrides."
+        ),
+    )
+    def list_nanobot_tools(request: Request) -> list[ToolCatalogItemResponse]:
+        supervisor = _get_supervisor(request)
+        return [
+            ToolCatalogItemResponse(name=item.name, description=item.description)
+            for item in supervisor.list_nanobot_tools()
+        ]
+
+    @api.get(
+        "/nanobot-tool-overrides",
+        response_model=ToolOverridesResponse,
+        summary="Get Global Nanobot Tool Overrides",
+        description=(
+            "Return the sparse global nanobot tool enabled/disabled map. Missing tool names leave "
+            "nanobot defaults unchanged; per-soul maps can override these values."
+        ),
+    )
+    def get_nanobot_tool_overrides(request: Request) -> ToolOverridesResponse:
+        supervisor = _get_supervisor(request)
+        return ToolOverridesResponse(overrides=supervisor.get_tool_overrides())
+
+    @api.patch(
+        "/nanobot-tool-overrides",
+        response_model=ToolOverridesResponse,
+        responses={400: {"model": ErrorResponse}},
+        summary="Update Global Nanobot Tool Overrides",
+        description=(
+            "Replace the sparse global nanobot tool enabled/disabled map. Missing tool names leave "
+            "nanobot defaults unchanged."
+        ),
+    )
+    def update_nanobot_tool_overrides(
+        request: Request,
+        body: UpdateToolOverridesRequest,
+    ) -> ToolOverridesResponse:
+        supervisor = _get_supervisor(request)
+        return ToolOverridesResponse(overrides=supervisor.update_tool_overrides(body.overrides))
 
     @api.get(
         "/skill-registry",

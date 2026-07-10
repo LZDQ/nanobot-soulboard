@@ -3,10 +3,12 @@ import {
   type DraftOverrides,
   type MCPServerConfig,
   type MCPServerDraft,
+  type NanobotTool,
   type SoulOverrides,
   type SoulPromptDraft,
   type SoulPromptFile,
   type SoulPromptFileName,
+  type ToolOverrideState,
 } from "../types";
 
 function splitCsv(value: string): string[] {
@@ -55,6 +57,7 @@ export function getEmptyDraftOverrides(): DraftOverrides {
     channels: "",
     mcp_servers: [],
     mcp_http_headers: {},
+    tool_overrides: {},
     autostart: false,
     groups: [],
   };
@@ -87,6 +90,7 @@ export function overridesToDraft(overrides: SoulOverrides): DraftOverrides {
         JSON.stringify(headers, null, 2),
       ]),
     ),
+    tool_overrides: { ...(overrides.tool_overrides ?? {}) },
     autostart: overrides.autostart,
     groups: [...(overrides.groups ?? [])],
   };
@@ -123,6 +127,52 @@ export function updateSoulMcpSelection(
   };
 }
 
+export function getToolChoices(
+  tools: NanobotTool[],
+  ...overrideMaps: Array<Record<string, boolean>>
+): NanobotTool[] {
+  const known = new Set(tools.map((tool) => tool.name));
+  const extraNames = Array.from(new Set(overrideMaps.flatMap((map) => Object.keys(map))));
+  return [
+    ...tools,
+    ...extraNames
+      .filter((name) => name && !known.has(name))
+      .map((name) => ({ name, description: "" })),
+  ].sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export function getToolOverrideState(overrides: Record<string, boolean>, toolName: string): ToolOverrideState {
+  if (!Object.prototype.hasOwnProperty.call(overrides, toolName)) {
+    return "inherit";
+  }
+  return overrides[toolName] ? "enabled" : "disabled";
+}
+
+export function updateToolOverrideMap(
+  overrides: Record<string, boolean>,
+  toolName: string,
+  state: ToolOverrideState,
+): Record<string, boolean> {
+  const next = { ...overrides };
+  if (state === "inherit") {
+    delete next[toolName];
+  } else {
+    next[toolName] = state === "enabled";
+  }
+  return next;
+}
+
+export function updateDraftToolOverride(
+  draft: DraftOverrides,
+  toolName: string,
+  state: ToolOverrideState,
+): DraftOverrides {
+  return {
+    ...draft,
+    tool_overrides: updateToolOverrideMap(draft.tool_overrides, toolName, state),
+  };
+}
+
 export function draftToOverrides(draft: DraftOverrides): SoulOverrides {
   const mcpHttpHeaders = Object.fromEntries(
     Object.entries(normalizeSoulMcpHeaderDraft(draft.mcp_servers, draft.mcp_http_headers)).map(
@@ -136,6 +186,7 @@ export function draftToOverrides(draft: DraftOverrides): SoulOverrides {
     channels: splitCsv(draft.channels),
     mcp_servers: [...draft.mcp_servers],
     mcp_http_headers: mcpHttpHeaders,
+    tool_overrides: { ...draft.tool_overrides },
     autostart: draft.autostart,
     groups: [...draft.groups],
   };
