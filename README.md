@@ -59,16 +59,20 @@ For frontend development, run the Vite dev server against a locally running back
 ```sh
 cd frontend
 pnpm install
-echo 'VITE_API_BASE=http://127.0.0.1:18791' > .env
+echo 'VITE_API_BASE=http://127.0.0.1:18791' > .env  # .env.example
 pnpm dev
 ```
 
 ### Serving under a path prefix
 
-`VITE_API_BASE` sets both the domain and path prefix the frontend uses for API and WebSocket calls, at build time:
+`VITE_API_BASE` is the single build-time setting for both HTTP API and WebSocket calls. It controls the domain and the path prefix:
 
-- empty/unset → `/api/...` (same origin — the default for production builds)
+- empty/unset → same origin and the backend-injected page mount prefix
 - `/prefix` → `/prefix/api/...`
 - `http://example.com/aaa` → `http://example.com/aaa/api/...`
 
-To serve the app under a path prefix behind a reverse proxy (which strips the prefix before forwarding, e.g. Caddy `handle_path`), build the frontend with `VITE_API_BASE` set to that prefix and run the backend with the same URL prefix.
+Production builds need no frontend environment variables. The backend injects `<base href>` into the built `index.html` response at runtime, so assets, client routes, API calls, and WebSocket calls all inherit `SOULBOARD_URL_PREFIX`.
+
+The included `.env.example` points Vite at the default local development backend on `http://127.0.0.1:18792`. Change that one value when developing the frontend against a different backend origin or mount prefix.
+
+The UI home page is `/soulboard` under the injected mount prefix. Soul-specific configuration, sessions, and chat live at `/<soul-id>/soulboard`, with the selected session kept in the `session-key` query parameter.

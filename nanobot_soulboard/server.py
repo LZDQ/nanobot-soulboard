@@ -1,13 +1,15 @@
 """FastAPI server for nanobot-soulboard."""
 
-from importlib.resources import files as pkg_files
+import re
 from contextlib import asynccontextmanager
+from html import escape
+from importlib.resources import files as pkg_files
 from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
@@ -1145,13 +1147,29 @@ def create_app() -> FastAPI:
     )
 
     @app.get(frontend_prefix, include_in_schema=False)
-    def index() -> FileResponse:
+    @app.get(f"{normalized_url_prefix}/{{frontend_path:path}}", include_in_schema=False)
+    def index(frontend_path: str = "") -> HTMLResponse:
+        if frontend_path == "api" or frontend_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not found")
         index_html = static_dir / "index.html"
         if not index_html.is_file():
             raise HTTPException(
                 status_code=404,
                 detail="Frontend is not built. Run `pnpm build` under frontend/ to generate static/.",
             )
-        return FileResponse(index_html)
+        base_href = frontend_prefix
+        content = index_html.read_text(encoding="utf-8")
+        base_tag = f'<base href="{escape(base_href, quote=True)}" />'
+        if re.search(r"<base\s+href=[\"'][^\"']*[\"']\s*/?>", content, re.IGNORECASE):
+            content = re.sub(
+                r"<base\s+href=[\"'][^\"']*[\"']\s*/?>",
+                base_tag,
+                content,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+        else:
+            content = content.replace("<head>", f"<head>\n    {base_tag}", 1)
+        return HTMLResponse(content)
 
     return app

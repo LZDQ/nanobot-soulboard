@@ -1,6 +1,7 @@
 """nanobot-soulboard runtime helpers."""
 
 from nanobot_soulboard.config import (
+    RESERVED_SOUL_IDS,
     SoulOverrides,
     SoulboardConfig,
     SoulboardSettings,
@@ -25,6 +26,7 @@ from nanobot_soulboard.agent import (
 from nanobot_soulboard.server import create_app
 
 __all__ = [
+    "RESERVED_SOUL_IDS",
     "SOUL_PROMPT_FILES",
     "SoulAgentLoop",
     "SoulCronService",

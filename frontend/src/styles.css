@@ -260,6 +260,18 @@ pre {
   align-items: start;
 }
 
+.soul-page .home-only,
+.home-page .soul-only {
+  display: none;
+}
+
+.home-page .souls-panel,
+.home-page .tools-panel,
+.soul-page .details-panel,
+.soul-page .chat-panel {
+  grid-column: 1 / -1;
+}
+
 .panel {
   border-radius: 28px;
   padding: 1rem;

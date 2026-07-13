@@ -9,6 +9,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _SOUL_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
+RESERVED_SOUL_IDS = frozenset({"api", "soulboard"})
 
 
 def _default_nano_root() -> Path:
@@ -312,6 +313,10 @@ def validate_soul_id(soul_id: str) -> str:
     if not _SOUL_ID_RE.fullmatch(soul_id):
         raise ValueError(
             f"Invalid soul_id '{soul_id}'. Use lowercase letters, digits, '-' or '_', with no spaces."
+        )
+    if soul_id.lower() in RESERVED_SOUL_IDS:
+        raise ValueError(
+            f"Invalid soul_id '{soul_id}'. Reserved soul IDs: {', '.join(sorted(RESERVED_SOUL_IDS))}."
         )
     return soul_id
 

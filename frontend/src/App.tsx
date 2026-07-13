@@ -42,7 +42,7 @@ import {
   summarizeToolResult,
 } from "./lib/format";
 import { appendMessages, prependSessionWindow } from "./lib/sessionWindows";
-import { getFocusFromUrl, syncFocusToUrl } from "./lib/urlFocus";
+import { getFocusFromUrl, navigateToFocus, syncFocusToUrl } from "./lib/urlFocus";
 import {
   DEFAULT_CHAT_CHANNEL,
   DEFAULT_CHAT_ID,
@@ -229,7 +229,7 @@ export default function App() {
         ? preferredSoulId
         : selectedSoulId && nextSouls.some((soul) => soul.soul_id === selectedSoulId)
           ? selectedSoulId
-          : nextSouls[0].soul_id;
+          : "";
     setSelectedSoulId(nextSelected);
     const soul = nextSouls.find((item) => item.soul_id === nextSelected);
     if (soul) {
@@ -569,6 +569,17 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    function handlePopState() {
+      const focus = getFocusFromUrl();
+      initialFocusRef.current = focus;
+      setSelectedSoulId(focus.soulId);
+      setSessionKey(focus.sessionKey);
+    }
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  useEffect(() => {
     if (!isCreatingSoul && !activeRegistryDialog && !activeSoulDialog) {
       return;
     }
@@ -628,7 +639,7 @@ export default function App() {
     if (pendingSessionKey) {
       void loadSession(pendingSessionKey);
     }
-    initialFocusRef.current = { soulId: "", sessionKey: null };
+    initialFocusRef.current = { soulId: "", subPath: "", sessionKey: null };
   }, [selectedSoul?.soul_id]);
 
   useEffect(() => {
@@ -842,6 +853,7 @@ export default function App() {
         }
         resetCreateSoulForm();
         setIsCreatingSoul(false);
+        navigateToFocus(created.soul_id);
         await refreshSouls(created.soul_id);
         await refreshSessions(created.soul_id);
       });
@@ -972,6 +984,7 @@ export default function App() {
     try {
       await runAction("delete", async () => {
         await api<void>(`/api/souls/${encodeURIComponent(soulId)}`, { method: "DELETE" });
+        navigateToFocus("");
         await refreshSouls();
       });
     } catch (cause) {
@@ -1257,6 +1270,7 @@ export default function App() {
   const selectedSoulSkillCount = selectedSoul?.skills.length ?? 0;
   const selectedSoulCronJobCount = cronJobs?.length ?? 0;
   const selectedSoulPromptFileCount = promptFiles.filter((file) => file.exists).length;
+  const isSoulPage = Boolean(selectedSoulId);
 
   return (
     <div className="app-shell">
@@ -1264,9 +1278,26 @@ export default function App() {
       <header className="hero">
         <div>
           <p className="eyebrow">nanobot soulboard</p>
-          <h1>Operator console for soul switching, session review, and streamed chat.</h1>
+          <h1>
+            {isSoulPage
+              ? `${selectedSoulId} soul console.`
+              : "Operator console for soul switching and global configuration."}
+          </h1>
         </div>
         <div className="hero-side">
+          {isSoulPage ? (
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => {
+                navigateToFocus("");
+                setSelectedSoulId("");
+                setSessionKey(null);
+              }}
+            >
+              ← All souls
+            </button>
+          ) : null}
           <div className="hero-stats">
             <div className="stat-card">
               <span>souls</span>
@@ -1280,8 +1311,8 @@ export default function App() {
         </div>
       </header>
 
-      <main className="grid">
-        <section className="panel souls-panel">
+      <main className={`grid ${isSoulPage ? "soul-page" : "home-page"}`}>
+        <section className="panel souls-panel home-only">
           <div className="panel-head">
             <h2>Souls</h2>
             {allSoulGroups.length ? (
@@ -1325,7 +1356,11 @@ export default function App() {
               <button
                 key={soul.soul_id}
                 className={`soul-card ${selectedSoulId === soul.soul_id ? "active" : ""}`}
-                onClick={() => setSelectedSoulId(soul.soul_id)}
+                onClick={() => {
+                  navigateToFocus(soul.soul_id);
+                  setSelectedSoulId(soul.soul_id);
+                  setSessionKey(null);
+                }}
               >
                 <div className="soul-card-head">
                   <strong>{soul.soul_id}</strong>
@@ -1364,7 +1399,7 @@ export default function App() {
 
         </section>
 
-        <section className="panel sessions-panel">
+        <section className="panel sessions-panel soul-only">
           <div className="panel-head">
             <h2>Sessions</h2>
             {selectedSoul ? (
@@ -1462,7 +1497,7 @@ export default function App() {
           </>
         </section>
 
-        <section className="panel tools-panel">
+        <section className="panel tools-panel home-only">
           <div className="panel-head">
             <h2>Registries & MCP servers</h2>
           </div>
@@ -1505,7 +1540,7 @@ export default function App() {
           </div>
         </section>
 
-        {activeRegistryDialog === "skills" ? (
+        {!isSoulPage && activeRegistryDialog === "skills" ? (
           <SkillPoolsDialog
             pending={pending}
             skillPools={skillPools}
@@ -1521,7 +1556,7 @@ export default function App() {
           />
         ) : null}
 
-        {activeRegistryDialog === "cron" ? (
+        {!isSoulPage && activeRegistryDialog === "cron" ? (
           <CronJobRegistryDialog
             pending={pending}
             cronJobRegistry={cronJobRegistry}
@@ -1546,7 +1581,7 @@ export default function App() {
           />
         ) : null}
 
-        {activeRegistryDialog === "mcp" ? (
+        {!isSoulPage && activeRegistryDialog === "mcp" ? (
           <McpServersDialog
             pending={pending}
             mcpServers={mcpServers}
@@ -1577,7 +1612,7 @@ export default function App() {
           />
         ) : null}
 
-        {activeRegistryDialog === "tools" ? (
+        {!isSoulPage && activeRegistryDialog === "tools" ? (
           <div className="modal-backdrop">
             <section
               className="registry-modal registry-modal-wide"
@@ -1682,7 +1717,7 @@ export default function App() {
           </div>
         ) : null}
 
-        <section className="panel details-panel">
+        <section className="panel details-panel soul-only">
           {soulError ? <section className="banner error">{soulError}</section> : null}
           <div className="panel-head">
             <h2>Selected soul</h2>
@@ -2700,7 +2735,7 @@ export default function App() {
         </section>
 
         {sessionKey ? (
-        <section className="panel chat-panel">
+        <section className="panel chat-panel soul-only">
           <div className="panel-head">
             <h2>Live chat</h2>
             <div className="chat-meta">
@@ -2841,7 +2876,7 @@ export default function App() {
         ) : null}
 
       </main>
-      {isCreatingSoul ? (
+      {!isSoulPage && isCreatingSoul ? (
         <CreateSoulDialog
           pending={pending}
           soulId={createSoulId}

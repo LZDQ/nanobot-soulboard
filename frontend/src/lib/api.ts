@@ -1,5 +1,11 @@
 function getApiBase(): string {
-  return (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, "") ?? "";
+  const configuredBase = (import.meta.env.VITE_API_BASE as string | undefined)?.trim() ?? "";
+  if (configuredBase) {
+    return configuredBase.replace(/\/+$/, "");
+  }
+
+  const runtimeBase = new URL(document.baseURI);
+  return runtimeBase.pathname === "/" ? "" : runtimeBase.pathname.replace(/\/+$/, "");
 }
 
 export function getWsBase(): string {
