@@ -75,4 +75,4 @@ Production builds need no frontend environment variables. The backend injects `<
 
 The included `.env.example` points Vite at the default local development backend on `http://127.0.0.1:18792`. Change that one value when developing the frontend against a different backend origin or mount prefix.
 
-The UI home page is `/soulboard` under the injected mount prefix. Soul-specific configuration, sessions, and chat live at `/<soul-id>/soulboard`, with the selected session kept in the `session-key` query parameter.
+The UI home page is the injected mount root. Soul-specific configuration, sessions, and chat live at `/<soul-id>/soulboard` beneath that root, with the selected session kept in the `session-key` query parameter. For example, `SOULBOARD_URL_PREFIX=/soulboard` serves the home page at `/soulboard/` and soul pages at `/soulboard/<soul-id>/soulboard`.

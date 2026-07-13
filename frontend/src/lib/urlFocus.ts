@@ -26,7 +26,7 @@ function buildFocusUrl(soulId: string, sessionKey: string | null): URL {
   const basePath = baseUrl.pathname.endsWith("/") ? baseUrl.pathname : `${baseUrl.pathname}/`;
   url.pathname = soulId
     ? `${basePath}${encodeURIComponent(soulId)}/${SOULBOARD_SUB_PATH}`
-    : `${basePath}${SOULBOARD_SUB_PATH}`;
+    : basePath;
   if (soulId && sessionKey) {
     url.searchParams.set("session-key", sessionKey);
   } else {
@@ -36,12 +36,11 @@ function buildFocusUrl(soulId: string, sessionKey: string | null): URL {
 }
 
 export function getFocusFromUrl(): UrlFocus {
-  const [firstSegment = "", ...subPathSegments] = getRelativePathSegments();
-  const isHomePage = firstSegment === SOULBOARD_SUB_PATH;
+  const [soulId = "", ...subPathSegments] = getRelativePathSegments();
   const params = new URLSearchParams(window.location.search);
   return {
-    soulId: isHomePage ? "" : firstSegment,
-    subPath: isHomePage ? SOULBOARD_SUB_PATH : subPathSegments.join("/"),
+    soulId,
+    subPath: subPathSegments.join("/"),
     sessionKey: params.get("session-key"),
   };
 }
