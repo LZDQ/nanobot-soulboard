@@ -38,11 +38,11 @@ class SoulAgentLoop(AgentLoop):
         *args,
         soul_id: str,
         disabled_skills: list[str] | None = None,
-        tool_overrides: dict[str, bool] | None = None,
+        disabled_tools: list[str] | None = None,
         **kwargs,
     ):
         self.soul_id = soul_id
-        self.tool_overrides = dict(tool_overrides or {})
+        self.disabled_tools = set(disabled_tools or [])
         self._mcp_lifecycle_owned_by_soulboard = False
         self._mcp_connect_requested: asyncio.Event | None = None
         self._mcp_reconnect_requests: asyncio.Queue[SoulMcpReconnectRequest] | None = None
@@ -70,7 +70,6 @@ class SoulAgentLoop(AgentLoop):
                     deny_patterns=self.exec_config.deny_patterns,
                 )
             )
-        self.tools.unregister("spawn")
         if self.cron_service:
             self.tools.unregister("cron")
             self.tools.register(
@@ -79,12 +78,11 @@ class SoulAgentLoop(AgentLoop):
                     default_timezone=self.context.timezone or "UTC",
                 )
             )
-        self._apply_tool_overrides()
+        self._apply_disabled_tools()
 
-    def _apply_tool_overrides(self) -> None:
-        for name, enabled in self.tool_overrides.items():
-            if not enabled:
-                self.tools.unregister(name)
+    def _apply_disabled_tools(self) -> None:
+        for name in self.disabled_tools:
+            self.tools.unregister(name)
 
     def use_soulboard_mcp_lifecycle(
         self,
@@ -374,7 +372,7 @@ class SoulAgentLoop(AgentLoop):
                 logger.warning("No MCP servers connected successfully (will retry next message)")
         finally:
             self._mcp_connecting = False
-        self._apply_tool_overrides()
+        self._apply_disabled_tools()
         self._attach_soulboard_mcp_reconnect_handlers()
 
     async def reconnect_mcp_server_from_owner(
@@ -394,7 +392,7 @@ class SoulAgentLoop(AgentLoop):
         self._mcp_connected = bool(self._mcp_stacks)
         if server_name not in connected:
             return None
-        self._apply_tool_overrides()
+        self._apply_disabled_tools()
         self._attach_soulboard_mcp_reconnect_handlers()
         return self.tools.get(tool_name)
 

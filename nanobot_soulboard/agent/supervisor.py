@@ -35,6 +35,7 @@ from nanobot_soulboard.config import (
     get_soulboard_config_path,
     get_souls_root,
     load_soulboard_config,
+    normalize_tool_names,
     save_soulboard_config,
     validate_soul_id,
 )
@@ -55,7 +56,7 @@ class SoulSpec:
 
 @dataclass(frozen=True)
 class ToolCatalogItem:
-    """One nanobot tool available for enabled/disabled overrides."""
+    """One nanobot tool available for soulboard policy configuration."""
 
     name: str
     description: str
@@ -76,6 +77,16 @@ def discover_soul_specs(nano_root: Path, config: SoulboardConfig | None = None) 
 def _copy_config(config: Config) -> Config:
     """Clone a nanobot config for per-soul in-memory overrides."""
     return Config.model_validate(deepcopy(config.model_dump(by_alias=True)))
+
+
+def _effective_disabled_tools(
+    global_disabled_tools: list[str],
+    overrides: SoulOverrides,
+) -> list[str]:
+    """Resolve the removal-only tool policy for one soul."""
+    disabled = set(global_disabled_tools) - set(overrides.enabled_tools)
+    disabled.update(overrides.disabled_tools)
+    return sorted(disabled)
 
 
 def _apply_channel_selection(config: Config, enabled_channels: list[str]) -> None:
@@ -724,7 +735,6 @@ class SoulSupervisor:
                     deny_patterns=tools_config.exec.deny_patterns,
                 )
             )
-        registry.unregister("spawn")
         if registry.has("cron"):
             registry.unregister("cron")
             registry.register(
@@ -746,22 +756,18 @@ class SoulSupervisor:
             items.append(ToolCatalogItem(name=name, description=description))
         return sorted(items, key=lambda item: item.name)
 
-    def get_tool_overrides(self) -> dict[str, bool]:
-        """Return the global sparse nanobot tool override map."""
-        return dict(sorted(self.soulboard_config.tool_overrides.items()))
+    def get_disabled_tools(self) -> list[str]:
+        """Return the global list of tools disabled for souls by default."""
+        return list(self.soulboard_config.disabled_tools)
 
-    def update_tool_overrides(self, overrides: dict[str, bool]) -> dict[str, bool]:
-        """Replace the global sparse nanobot tool override map and persist."""
-        normalized = {
-            name.strip(): bool(enabled)
-            for name, enabled in overrides.items()
-            if name.strip()
-        }
+    def update_disabled_tools(self, disabled_tools: list[str]) -> list[str]:
+        """Replace the global disabled tool list and persist it."""
+        normalized = normalize_tool_names(disabled_tools)
         self.soulboard_config = self.soulboard_config.model_copy(
-            update={"tool_overrides": normalized}
+            update={"disabled_tools": normalized}
         )
         save_soulboard_config(self.soulboard_config, self.config_path)
-        return self.get_tool_overrides()
+        return self.get_disabled_tools()
 
     def create_mcp_server(self, name: str, definition: MCPServerConfig) -> MCPServerConfig:
         """Create one MCP server definition in the base nanobot config."""
@@ -897,10 +903,10 @@ class SoulSupervisor:
             consolidation_ratio=config.agents.defaults.consolidation_ratio,
             unified_session=config.agents.defaults.unified_session,
             disabled_skills=config.agents.defaults.disabled_skills,
-            tool_overrides={
-                **self.soulboard_config.tool_overrides,
-                **spec.overrides.tool_overrides,
-            },
+            disabled_tools=_effective_disabled_tools(
+                self.soulboard_config.disabled_tools,
+                spec.overrides,
+            ),
             tools_config=config.tools,
             image_generation_provider_configs=image_gen_provider_configs(config),
         )

@@ -10,6 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _SOUL_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 RESERVED_SOUL_IDS = frozenset({"api", "soulboard"})
+DEFAULT_DISABLED_TOOLS = ("spawn", "long_task", "complete_goal")
 
 
 def _default_nano_root() -> Path:
@@ -123,12 +124,16 @@ class SoulOverrides(BaseModel):
             "Headers are merged on top of the shared base MCP server definition."
         ),
     )
-    tool_overrides: dict[str, bool] = Field(
-        default_factory=dict,
+    enabled_tools: list[str] = Field(
+        default_factory=list,
         description=(
-            "Sparse per-soul tool enabled/disabled overrides. Missing tool names inherit the global "
-            "soulboard tool_overrides setting, and missing global names leave nanobot defaults unchanged."
+            "Tools re-enabled for this soul when they are present in the global disabled_tools list. "
+            "This does not enable tools that the base nanobot config did not register."
         ),
+    )
+    disabled_tools: list[str] = Field(
+        default_factory=list,
+        description="Additional tools disabled for this soul.",
     )
     autostart: bool = Field(
         default=False,
@@ -155,16 +160,10 @@ class SoulOverrides(BaseModel):
             seen.add(item)
         return normalized
 
-    @field_validator("tool_overrides")
+    @field_validator("enabled_tools", "disabled_tools")
     @classmethod
-    def _validate_tool_overrides(cls, value: dict[str, bool]) -> dict[str, bool]:
-        normalized: dict[str, bool] = {}
-        for raw, enabled in value.items():
-            name = raw.strip()
-            if not name:
-                continue
-            normalized[name] = bool(enabled)
-        return normalized
+    def _validate_tool_names(cls, value: list[str]) -> list[str]:
+        return normalize_tool_names(value)
 
 
 class CronJobRegistryEntry(BaseModel):
@@ -219,11 +218,11 @@ class SoulboardConfig(BaseModel):
             "recurring tasks, including those with dynamic session keys via recurring_session_key_format."
         ),
     )
-    tool_overrides: dict[str, bool] = Field(
-        default_factory=dict,
+    disabled_tools: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_DISABLED_TOOLS),
         description=(
-            "Sparse global nanobot tool enabled/disabled map. Missing tool names leave nanobot defaults "
-            "unchanged. Per-soul tool_overrides can override these values for one soul."
+            "Nanobot tools disabled for all souls by default. A soul can restore a registered tool by "
+            "listing it in its enabled_tools setting."
         ),
     )
     souls: dict[str, SoulOverrides] = Field(default_factory=dict)
@@ -238,10 +237,10 @@ class SoulboardConfig(BaseModel):
     def validate_cron_job_registry(cls, value: list[CronJobRegistryEntry]) -> list[CronJobRegistryEntry]:
         return _normalize_cron_job_registry(value)
 
-    @field_validator("tool_overrides")
+    @field_validator("disabled_tools")
     @classmethod
-    def validate_tool_overrides(cls, value: dict[str, bool]) -> dict[str, bool]:
-        return _normalize_tool_overrides(value)
+    def validate_disabled_tools(cls, value: list[str]) -> list[str]:
+        return normalize_tool_names(value)
 
 
 def _normalize_skill_registry(items: list[str]) -> list[str]:
@@ -272,40 +271,17 @@ def _normalize_cron_job_registry(entries: list[CronJobRegistryEntry]) -> list[Cr
     return normalized
 
 
-def _normalize_tool_overrides(items: dict[str, bool]) -> dict[str, bool]:
-    """Normalize sparse tool override maps."""
-    normalized: dict[str, bool] = {}
-    for raw, enabled in items.items():
+def normalize_tool_names(items: list[str]) -> list[str]:
+    """Normalize and deduplicate tool name lists while preserving order."""
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in items:
         name = raw.strip()
-        if not name:
+        if not name or name in seen:
             continue
-        normalized[name] = bool(enabled)
+        normalized.append(name)
+        seen.add(name)
     return normalized
-
-
-def _migrate_legacy_disabled_tools(data: dict) -> dict:
-    """Convert old per-soul disabled_tools arrays into sparse false overrides."""
-    souls = data.get("souls")
-    if not isinstance(souls, dict):
-        return data
-    for soul_data in souls.values():
-        if not isinstance(soul_data, dict):
-            continue
-        disabled_tools = soul_data.pop("disabled_tools", None)
-        if not isinstance(disabled_tools, list):
-            continue
-        overrides = soul_data.setdefault("tool_overrides", {})
-        if not isinstance(overrides, dict):
-            overrides = {}
-            soul_data["tool_overrides"] = overrides
-        for raw_name in disabled_tools:
-            if not isinstance(raw_name, str):
-                continue
-            name = raw_name.strip()
-            if not name or name in overrides:
-                continue
-            overrides[name] = False
-    return data
 
 
 def validate_soul_id(soul_id: str) -> str:
@@ -347,7 +323,6 @@ def load_soulboard_config(path: Path) -> SoulboardConfig:
     data.pop("app_links", None)
     # Dropped feature: tolerate configs written with the legacy prompt_link_dirs key.
     data.pop("prompt_link_dirs", None)
-    data = _migrate_legacy_disabled_tools(data)
     config = SoulboardConfig.model_validate(data)
     for soul_id in config.souls:
         validate_soul_id(soul_id)
@@ -359,7 +334,7 @@ def save_soulboard_config(config: SoulboardConfig, path: Path) -> None:
     for soul_id in config.souls:
         validate_soul_id(soul_id)
     config.skill_registry = _normalize_skill_registry(config.skill_registry)
-    config.tool_overrides = _normalize_tool_overrides(config.tool_overrides)
+    config.disabled_tools = normalize_tool_names(config.disabled_tools)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = config.model_dump(mode="json", exclude_none=True, by_alias=True)
     with open(path, "w", encoding="utf-8") as f:

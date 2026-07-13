@@ -33,6 +33,7 @@ from nanobot_soulboard.schemas import (
     CronJobResponse,
     CronJobScheduleResponse,
     CronJobStateResponse,
+    DisabledToolsResponse,
     ErrorResponse,
     MCPServerResponse,
     PathsResponse,
@@ -48,11 +49,10 @@ from nanobot_soulboard.schemas import (
     SoulSkillResponse,
     StreamInputMessage,
     ToolCatalogItemResponse,
-    ToolOverridesResponse,
     UpdateCronJobRegistryRequest,
+    UpdateDisabledToolsRequest,
     UpdateMCPServerRequest,
     UpdateSkillRegistryRequest,
-    UpdateToolOverridesRequest,
     UpdateSoulCronJobRequest,
     UpdateSoulPromptFilesRequest,
     UpdateSoulRequest,
@@ -355,8 +355,8 @@ def create_app() -> FastAPI:
         response_model=list[ToolCatalogItemResponse],
         summary="List Nanobot Tools",
         description=(
-            "Return the dynamically registered nanobot tool names that can be enabled or disabled. "
-            "The list is derived from the current base nanobot tool loader and soulboard tool overrides."
+            "Return the dynamically registered nanobot tool names that can be controlled by soulboard. "
+            "The list is derived from the current base nanobot tool loader before soulboard policy is applied."
         ),
     )
     def list_nanobot_tools(request: Request) -> list[ToolCatalogItemResponse]:
@@ -367,34 +367,36 @@ def create_app() -> FastAPI:
         ]
 
     @api.get(
-        "/nanobot-tool-overrides",
-        response_model=ToolOverridesResponse,
-        summary="Get Global Nanobot Tool Overrides",
+        "/nanobot-disabled-tools",
+        response_model=DisabledToolsResponse,
+        summary="Get Globally Disabled Nanobot Tools",
         description=(
-            "Return the sparse global nanobot tool enabled/disabled map. Missing tool names leave "
-            "nanobot defaults unchanged; per-soul maps can override these values."
+            "Return the tools disabled for every soul by default. A soul can restore a registered "
+            "tool through its enabled_tools list."
         ),
     )
-    def get_nanobot_tool_overrides(request: Request) -> ToolOverridesResponse:
+    def get_nanobot_disabled_tools(request: Request) -> DisabledToolsResponse:
         supervisor = _get_supervisor(request)
-        return ToolOverridesResponse(overrides=supervisor.get_tool_overrides())
+        return DisabledToolsResponse(disabled_tools=supervisor.get_disabled_tools())
 
     @api.patch(
-        "/nanobot-tool-overrides",
-        response_model=ToolOverridesResponse,
+        "/nanobot-disabled-tools",
+        response_model=DisabledToolsResponse,
         responses={400: {"model": ErrorResponse}},
-        summary="Update Global Nanobot Tool Overrides",
+        summary="Update Globally Disabled Nanobot Tools",
         description=(
-            "Replace the sparse global nanobot tool enabled/disabled map. Missing tool names leave "
-            "nanobot defaults unchanged."
+            "Replace the global disabled tool list. Running souls must be restarted before the new "
+            "policy takes effect."
         ),
     )
-    def update_nanobot_tool_overrides(
+    def update_nanobot_disabled_tools(
         request: Request,
-        body: UpdateToolOverridesRequest,
-    ) -> ToolOverridesResponse:
+        body: UpdateDisabledToolsRequest,
+    ) -> DisabledToolsResponse:
         supervisor = _get_supervisor(request)
-        return ToolOverridesResponse(overrides=supervisor.update_tool_overrides(body.overrides))
+        return DisabledToolsResponse(
+            disabled_tools=supervisor.update_disabled_tools(body.disabled_tools)
+        )
 
     @api.get(
         "/skill-registry",

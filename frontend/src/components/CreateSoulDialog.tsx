@@ -2,8 +2,8 @@ import type { Dispatch, SetStateAction } from "react";
 
 import {
   getToolChoices,
-  getToolOverrideState,
-  updateDraftToolOverride,
+  getToolPolicyState,
+  updateDraftToolPolicy,
   updateSoulMcpSelection,
 } from "../lib/drafts";
 import type {
@@ -13,7 +13,7 @@ import type {
   MCPServer,
   NanobotTool,
   SkillPool,
-  ToolOverrideState,
+  ToolPolicyState,
 } from "../types";
 import { GroupListEditor } from "./GroupListEditor";
 
@@ -25,7 +25,7 @@ type CreateSoulDialogProps = {
   allSoulGroups: string[];
   mcpServers: MCPServer[];
   nanobotTools: NanobotTool[];
-  globalToolOverrides: Record<string, boolean>;
+  globalDisabledTools: string[];
   cronJobRegistry: CronJobRegistryEntry[];
   cronJobNames: string[];
   skillPools: SkillPool[];
@@ -48,7 +48,7 @@ export function CreateSoulDialog({
   allSoulGroups,
   mcpServers,
   nanobotTools,
-  globalToolOverrides,
+  globalDisabledTools,
   cronJobRegistry,
   cronJobNames,
   skillPools,
@@ -67,7 +67,12 @@ export function CreateSoulDialog({
     .split(",")
     .map((channel) => channel.trim())
     .filter(Boolean);
-  const toolChoices = getToolChoices(nanobotTools, globalToolOverrides, draft.tool_overrides);
+  const toolChoices = getToolChoices(
+    nanobotTools,
+    globalDisabledTools,
+    draft.enabled_tools,
+    draft.disabled_tools,
+  );
 
   return (
     <div className="modal-backdrop">
@@ -199,7 +204,7 @@ export function CreateSoulDialog({
                 </div>
               ) : null}
               <label className="create-soul-wide-field">
-                <span>Nanobot tool overrides</span>
+                <span>Nanobot tool policy</span>
                 <div className="selection-grid tool-selection-grid">
                   {toolChoices.map((tool) => (
                     <label key={tool.name} className="check-tile tool-check-tile">
@@ -208,14 +213,14 @@ export function CreateSoulDialog({
                         {tool.description ? <small title={tool.description}>{tool.description}</small> : null}
                       </span>
                       <select
-                        value={getToolOverrideState(draft.tool_overrides, tool.name)}
+                        value={getToolPolicyState(draft.enabled_tools, draft.disabled_tools, tool.name)}
                         onChange={(event) => {
-                          setDraft((current) => updateDraftToolOverride(current, tool.name, event.target.value as ToolOverrideState));
+                          setDraft((current) => updateDraftToolPolicy(current, tool.name, event.target.value as ToolPolicyState));
                         }}
                       >
-                        <option value="inherit">Inherit{tool.name in globalToolOverrides ? ` (${globalToolOverrides[tool.name] ? "enabled" : "disabled"})` : ""}</option>
-                        <option value="enabled">Enable</option>
-                        <option value="disabled">Disable</option>
+                        <option value="inherit">Inherit ({globalDisabledTools.includes(tool.name) ? "globally disabled" : "available"})</option>
+                        <option value="enabled">Enable for this soul</option>
+                        <option value="disabled">Disable for this soul</option>
                       </select>
                     </label>
                   ))}

@@ -43,15 +43,11 @@ export function renderEnabledList(values: string[]): string {
   return values.length ? values.join(", ") : "none enabled";
 }
 
-export function renderToolOverrides(values: Record<string, boolean>, emptyLabel: string): string {
-  const entries = Object.entries(values);
-  if (!entries.length) {
+export function renderToolList(values: string[], emptyLabel: string): string {
+  if (!values.length) {
     return emptyLabel;
   }
-  return entries
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, enabled]) => `${name}: ${enabled ? "enabled" : "disabled"}`)
-    .join(", ");
+  return [...values].sort((left, right) => left.localeCompare(right)).join(", ");
 }
 
 type SkillTextStats = {

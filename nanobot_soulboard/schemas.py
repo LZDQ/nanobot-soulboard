@@ -375,22 +375,22 @@ class PathsResponse(BaseModel):
 
 
 class ToolCatalogItemResponse(BaseModel):
-    """One nanobot tool available for enabled/disabled overrides."""
+    """One nanobot tool available for soulboard policy configuration."""
 
     name: str
     description: str
 
 
-class ToolOverridesResponse(BaseModel):
-    """Sparse nanobot tool enabled/disabled overrides."""
+class DisabledToolsResponse(BaseModel):
+    """Nanobot tools disabled for souls by default."""
 
-    overrides: dict[str, bool]
+    disabled_tools: list[str]
 
 
-class UpdateToolOverridesRequest(BaseModel):
-    """Replace sparse global nanobot tool enabled/disabled overrides."""
+class UpdateDisabledToolsRequest(BaseModel):
+    """Replace the global disabled tool list."""
 
-    overrides: dict[str, bool]
+    disabled_tools: list[str]
 
 
 class MCPServerResponse(BaseModel):

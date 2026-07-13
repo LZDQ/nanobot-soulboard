@@ -18,14 +18,14 @@ import {
   getEmptyPromptDraft,
   getEmptyPromptSelection,
   getToolChoices,
-  getToolOverrideState,
+  getToolPolicyState,
   mcpConfigToDraft,
   overridesToDraft,
   promptFilesToDraft,
   promptFilesToSelection,
-  updateDraftToolOverride,
+  updateDraftToolPolicy,
   updateSoulMcpSelection,
-  updateToolOverrideMap,
+  updateToolNameList,
 } from "./lib/drafts";
 import { getErrorMessage, notifyError } from "./lib/errors";
 import {
@@ -38,7 +38,7 @@ import {
   renderEnabledList,
   renderHeaderOverrideSummary,
   renderOverrideValue,
-  renderToolOverrides,
+  renderToolList,
   summarizeToolResult,
 } from "./lib/format";
 import { appendMessages, prependSessionWindow } from "./lib/sessionWindows";
@@ -55,6 +55,7 @@ import {
   type CronJobRegistryEntry,
   type CronJobRegistryEntryDraft,
   type CronJobRegistryResponse,
+  type DisabledToolsResponse,
   type DraftOverrides,
   type MCPServer,
   type MCPServerDraft,
@@ -72,8 +73,7 @@ import {
   type SoulSkill,
   type StreamFinalizedMessage,
   type StreamMessage,
-  type ToolOverrideState,
-  type ToolOverridesResponse,
+  type ToolPolicyState,
 } from "./types";
 
 export default function App() {
@@ -84,8 +84,8 @@ export default function App() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [mcpServers, setMcpServers] = useState<MCPServer[]>([]);
   const [nanobotTools, setNanobotTools] = useState<NanobotTool[]>([]);
-  const [globalToolOverrides, setGlobalToolOverrides] = useState<Record<string, boolean>>({});
-  const [globalToolDraft, setGlobalToolDraft] = useState<Record<string, boolean>>({});
+  const [globalDisabledTools, setGlobalDisabledTools] = useState<string[]>([]);
+  const [globalDisabledToolsDraft, setGlobalDisabledToolsDraft] = useState<string[]>([]);
   const [enabledChannels, setEnabledChannels] = useState<string[]>([]);
   const [skillPools, setSkillPools] = useState<SkillPool[]>([]);
   const [cronJobRegistry, setCronJobRegistry] = useState<CronJobRegistryEntry[]>([]);
@@ -137,7 +137,7 @@ export default function App() {
   const [cronJobCreateDraft, setCronJobCreateDraft] = useState<CronJobCreateDraft>(EMPTY_CRON_CREATE_DRAFT);
   const [mcpMode, setMcpMode] = useState<"view" | "edit" | "create">("view");
   const [activeRegistryDialog, setActiveRegistryDialog] = useState<"skills" | "cron" | "mcp" | "tools" | null>(null);
-  const [isEditingToolOverrides, setIsEditingToolOverrides] = useState(false);
+  const [isEditingDisabledTools, setIsEditingDisabledTools] = useState(false);
   const [activeSoulDialog, setActiveSoulDialog] = useState<"configs" | "skills" | "cron" | "prompts" | null>(null);
   const [socketState, setSocketState] = useState<"closed" | "connecting" | "open">("closed");
   const [soulGroupFilter, setSoulGroupFilter] = useState<string>("");
@@ -177,12 +177,17 @@ export default function App() {
     return cronJobs.filter((job) => job.session_key === sessionKey);
   }, [cronJobs, sessionKey, showOnlySelectedSessionCronJobs]);
   const draftToolChoices = useMemo(
-    () => getToolChoices(nanobotTools, globalToolOverrides, draft.tool_overrides),
-    [nanobotTools, globalToolOverrides, draft.tool_overrides],
+    () => getToolChoices(
+      nanobotTools,
+      globalDisabledTools,
+      draft.enabled_tools,
+      draft.disabled_tools,
+    ),
+    [nanobotTools, globalDisabledTools, draft.enabled_tools, draft.disabled_tools],
   );
   const globalToolChoices = useMemo(
-    () => getToolChoices(nanobotTools, globalToolDraft),
-    [nanobotTools, globalToolDraft],
+    () => getToolChoices(nanobotTools, globalDisabledToolsDraft),
+    [nanobotTools, globalDisabledToolsDraft],
   );
 
   async function refreshSouls(preferredSoulId?: string, reloadConfig = false): Promise<void> {
@@ -277,22 +282,22 @@ export default function App() {
     setNanobotTools(response);
   }
 
-  async function refreshToolOverrides(): Promise<void> {
-    const response = await api<ToolOverridesResponse>("/api/nanobot-tool-overrides");
-    setGlobalToolOverrides(response.overrides);
-    setGlobalToolDraft(response.overrides);
+  async function refreshDisabledTools(): Promise<void> {
+    const response = await api<DisabledToolsResponse>("/api/nanobot-disabled-tools");
+    setGlobalDisabledTools(response.disabled_tools);
+    setGlobalDisabledToolsDraft(response.disabled_tools);
   }
 
-  async function saveToolOverrides(overrides: Record<string, boolean>): Promise<void> {
-    await runAction("tool-overrides", async () => {
-      const response = await api<ToolOverridesResponse>("/api/nanobot-tool-overrides", {
+  async function saveDisabledTools(disabledTools: string[]): Promise<void> {
+    await runAction("disabled-tools", async () => {
+      const response = await api<DisabledToolsResponse>("/api/nanobot-disabled-tools", {
         method: "PATCH",
-        body: JSON.stringify({ overrides }),
+        body: JSON.stringify({ disabled_tools: disabledTools }),
       });
-      setGlobalToolOverrides(response.overrides);
-      setGlobalToolDraft(response.overrides);
-      setIsEditingToolOverrides(false);
-      toast.success("Tool overrides saved");
+      setGlobalDisabledTools(response.disabled_tools);
+      setGlobalDisabledToolsDraft(response.disabled_tools);
+      setIsEditingDisabledTools(false);
+      toast.success("Disabled tools saved");
     }).catch((cause) => {
       notifyError(cause);
     });
@@ -558,7 +563,7 @@ export default function App() {
         await refreshSouls();
         await refreshChannels();
         await refreshNanobotTools();
-        await refreshToolOverrides();
+        await refreshDisabledTools();
         await refreshSkillRegistry();
         await refreshCronJobRegistry();
         await refreshMcpServers();
@@ -1266,7 +1271,7 @@ export default function App() {
   const skillPoolCount = skillPools.length;
   const cronRegistryCount = cronJobRegistry.length;
   const mcpServerCount = mcpServers.length;
-  const globalToolOverrideCount = Object.keys(globalToolOverrides).length;
+  const globalDisabledToolCount = globalDisabledTools.length;
   const selectedSoulSkillCount = selectedSoul?.skills.length ?? 0;
   const selectedSoulCronJobCount = cronJobs?.length ?? 0;
   const selectedSoulPromptFileCount = promptFiles.filter((file) => file.exists).length;
@@ -1338,7 +1343,7 @@ export default function App() {
                     await refreshSouls(selectedSoulId, true);
                     await refreshChannels();
                     await refreshNanobotTools();
-                    await refreshToolOverrides();
+                    await refreshDisabledTools();
                     await refreshSkillRegistry();
                     toast.success("Souls refreshed");
                   } catch (cause) {
@@ -1530,12 +1535,12 @@ export default function App() {
               type="button"
               className="registry-launch-card"
               onClick={() => {
-                setGlobalToolDraft(globalToolOverrides);
+                setGlobalDisabledToolsDraft(globalDisabledTools);
                 setActiveRegistryDialog("tools");
               }}
             >
               <span>Nanobot tools</span>
-              <strong>{globalToolOverrideCount}</strong>
+              <strong>{globalDisabledToolCount}</strong>
             </button>
           </div>
         </section>
@@ -1618,15 +1623,15 @@ export default function App() {
               className="registry-modal registry-modal-wide"
               role="dialog"
               aria-modal="true"
-              aria-labelledby="tool-overrides-title"
+              aria-labelledby="disabled-tools-title"
             >
               <div className="registry-modal-head">
                 <button type="button" className="ghost" onClick={() => setActiveRegistryDialog(null)} disabled={!!pending}>
                   Close
                 </button>
                 <div>
-                  <h2 id="tool-overrides-title">Nanobot tools</h2>
-                  <p className="muted">{globalToolOverrideCount} global overrides</p>
+                  <h2 id="disabled-tools-title">Nanobot tools</h2>
+                  <p className="muted">{globalDisabledToolCount} globally disabled</p>
                 </div>
                 <div className="registry-modal-actions">
                   <button
@@ -1636,7 +1641,7 @@ export default function App() {
                       void (async () => {
                         try {
                           await refreshNanobotTools();
-                          await refreshToolOverrides();
+                          await refreshDisabledTools();
                           toast.success("Tool settings refreshed");
                         } catch (cause) {
                           notifyError(cause);
@@ -1647,20 +1652,20 @@ export default function App() {
                   >
                     Refresh
                   </button>
-                  {isEditingToolOverrides ? (
+                  {isEditingDisabledTools ? (
                     <div className="action-row">
                       <button
                         type="button"
                         className="ghost"
                         onClick={() => {
-                          setGlobalToolDraft(globalToolOverrides);
-                          setIsEditingToolOverrides(false);
+                          setGlobalDisabledToolsDraft(globalDisabledTools);
+                          setIsEditingDisabledTools(false);
                         }}
                         disabled={!!pending}
                       >
                         Cancel
                       </button>
-                      <button type="button" onClick={() => void saveToolOverrides(globalToolDraft)} disabled={!!pending}>
+                      <button type="button" onClick={() => void saveDisabledTools(globalDisabledToolsDraft)} disabled={!!pending}>
                         Save
                       </button>
                     </div>
@@ -1669,8 +1674,8 @@ export default function App() {
                       type="button"
                       className="ghost"
                       onClick={() => {
-                        setGlobalToolDraft(globalToolOverrides);
-                        setIsEditingToolOverrides(true);
+                        setGlobalDisabledToolsDraft(globalDisabledTools);
+                        setIsEditingDisabledTools(true);
                       }}
                       disabled={!!pending}
                     >
@@ -1680,35 +1685,33 @@ export default function App() {
                 </div>
               </div>
               <div className="registry-modal-body">
-                {isEditingToolOverrides ? (
+                {isEditingDisabledTools ? (
                   <div className="selection-grid tool-selection-grid">
                     {globalToolChoices.map((tool) => (
                       <label key={tool.name} className="check-tile tool-check-tile">
+                        <input
+                          type="checkbox"
+                          checked={globalDisabledToolsDraft.includes(tool.name)}
+                          onChange={(event) => {
+                            setGlobalDisabledToolsDraft((current) => (
+                              updateToolNameList(current, tool.name, event.target.checked)
+                            ));
+                          }}
+                        />
                         <span className="tool-choice-body">
                           <strong>{tool.name}</strong>
                           {tool.description ? <small title={tool.description}>{tool.description}</small> : null}
                         </span>
-                        <select
-                          value={getToolOverrideState(globalToolDraft, tool.name)}
-                          onChange={(event) => {
-                            setGlobalToolDraft((current) => (
-                              updateToolOverrideMap(current, tool.name, event.target.value as ToolOverrideState)
-                            ));
-                          }}
-                        >
-                          <option value="inherit">Default</option>
-                          <option value="enabled">Enable</option>
-                          <option value="disabled">Disable</option>
-                        </select>
                       </label>
                     ))}
                     {!globalToolChoices.length ? <p className="muted">No nanobot tools reported by the backend.</p> : null}
+                    <p className="muted">Running souls must be restarted before this policy takes effect.</p>
                   </div>
                 ) : (
                   <div className="override-grid">
                     <article className="override-card">
-                      <span>Global tool overrides</span>
-                      <strong>{renderToolOverrides(globalToolOverrides, "nanobot defaults")}</strong>
+                      <span>Globally disabled tools</span>
+                      <strong>{renderToolList(globalDisabledTools, "none")}</strong>
                     </article>
                   </div>
                 )}
@@ -1909,7 +1912,7 @@ export default function App() {
                         </div>
                       ) : null}
                       <label className="tool-config-field">
-                        <span>Nanobot tool overrides</span>
+                        <span>Nanobot tool policy</span>
                         <div className="selection-grid tool-selection-grid">
                           {draftToolChoices.map((tool) => (
                             <label key={tool.name} className="check-tile tool-check-tile">
@@ -1918,14 +1921,14 @@ export default function App() {
                                 {tool.description ? <small title={tool.description}>{tool.description}</small> : null}
                               </span>
                               <select
-                                value={getToolOverrideState(draft.tool_overrides, tool.name)}
+                                value={getToolPolicyState(draft.enabled_tools, draft.disabled_tools, tool.name)}
                                 onChange={(event) => {
-                                  setDraft((current) => updateDraftToolOverride(current, tool.name, event.target.value as ToolOverrideState));
+                                  setDraft((current) => updateDraftToolPolicy(current, tool.name, event.target.value as ToolPolicyState));
                                 }}
                               >
-                                <option value="inherit">Inherit{tool.name in globalToolOverrides ? ` (${globalToolOverrides[tool.name] ? "enabled" : "disabled"})` : ""}</option>
-                                <option value="enabled">Enable</option>
-                                <option value="disabled">Disable</option>
+                                <option value="inherit">Inherit ({globalDisabledTools.includes(tool.name) ? "globally disabled" : "available"})</option>
+                                <option value="enabled">Enable for this soul</option>
+                                <option value="disabled">Disable for this soul</option>
                               </select>
                             </label>
                           ))}
@@ -1976,8 +1979,12 @@ export default function App() {
                         <strong>{renderHeaderOverrideSummary(selectedSoul.overrides.mcp_http_headers ?? {})}</strong>
                       </article>
                       <article className="override-card">
-                        <span>Nanobot tool overrides</span>
-                        <strong>{renderToolOverrides(selectedSoul.overrides.tool_overrides ?? {}, "inherits global settings")}</strong>
+                        <span>Tools enabled over global policy</span>
+                        <strong>{renderToolList(selectedSoul.overrides.enabled_tools ?? [], "none")}</strong>
+                      </article>
+                      <article className="override-card">
+                        <span>Additionally disabled tools</span>
+                        <strong>{renderToolList(selectedSoul.overrides.disabled_tools ?? [], "none")}</strong>
                       </article>
                       <article className="override-card">
                         <span>Autostart</span>
@@ -2885,7 +2892,7 @@ export default function App() {
           allSoulGroups={allSoulGroups}
           mcpServers={mcpServers}
           nanobotTools={nanobotTools}
-          globalToolOverrides={globalToolOverrides}
+          globalDisabledTools={globalDisabledTools}
           cronJobRegistry={cronJobRegistry}
           cronJobNames={createSoulCronJobNames}
           skillPools={skillPools}
