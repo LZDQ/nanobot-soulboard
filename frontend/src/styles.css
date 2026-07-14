@@ -1087,6 +1087,14 @@ label span {
   margin-left: auto;
 }
 
+.message-time {
+  color: var(--muted);
+  cursor: help;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .message-copy-button {
   padding: 0.38rem 0.8rem;
   border-radius: 999px;

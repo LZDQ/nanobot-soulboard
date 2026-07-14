@@ -7,6 +7,14 @@ export function formatDate(value: string | null): string {
   return new Date(value).toLocaleString();
 }
 
+export function formatMessageTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
 export function renderContent(value: unknown): string {
   if (value == null) {
     return "";

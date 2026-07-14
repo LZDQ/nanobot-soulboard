@@ -158,6 +158,7 @@ class ChatStreamManager:
                 StreamFinalizedMessageResponse(
                     role=message["role"],
                     content=message.get("content"),
+                    timestamp=message.get("timestamp"),
                     tool_calls=message.get("tool_calls"),
                     tool_call_id=message.get("tool_call_id"),
                 ).model_dump()

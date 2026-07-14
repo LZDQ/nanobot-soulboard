@@ -236,6 +236,7 @@ export type StreamFinalizedMessage = {
   type: "finalized";
   role: string;
   content: unknown;
+  timestamp: string | null;
   tool_calls: Array<Record<string, unknown>> | null;
   tool_call_id: string | null;
 };

@@ -31,6 +31,7 @@ import { getErrorMessage, notifyError } from "./lib/errors";
 import {
   formatCronSchedule,
   formatDate,
+  formatMessageTime,
   formatSkillTextStats,
   formatTimestampMs,
   getMessageReasoning,
@@ -2785,12 +2786,19 @@ export default function App() {
                 const content = "content" in message ? message.content : null;
                 const reasoning = getMessageReasoning(message);
                 const renderedContent = renderContent(content) || "(empty)";
+                const timestamp = typeof message.timestamp === "string" ? message.timestamp : null;
+                const messageTime = timestamp ? formatMessageTime(timestamp) : "";
                 return (
                 <div key={`${role}-${index}`} className="message-card">
                   <div className="message-head">
                     <strong>{role}</strong>
                     <div className="message-head-actions">
                       {toolCallId ? <code>{toolCallId}</code> : null}
+                      {timestamp && messageTime ? (
+                        <time className="message-time" dateTime={timestamp} title={formatDate(timestamp)}>
+                          {messageTime}
+                        </time>
+                      ) : null}
                       {role === "assistant" ? (
                         <button
                           type="button"
