@@ -2,6 +2,7 @@
 
 import asyncio
 import shutil
+import tempfile
 from contextlib import suppress
 from copy import deepcopy
 from dataclasses import dataclass
@@ -32,10 +33,14 @@ from nanobot_soulboard.config import (
     CronJobRegistryEntry,
     SoulOverrides,
     SoulboardConfig,
+    get_base_config_path,
+    get_soul_config_path,
     get_soulboard_config_path,
     get_souls_root,
+    load_soul_config,
     load_soulboard_config,
     normalize_tool_names,
+    save_soul_config,
     save_soulboard_config,
     validate_soul_id,
 )
@@ -62,14 +67,22 @@ class ToolCatalogItem:
     description: str
 
 
-def discover_soul_specs(nano_root: Path, config: SoulboardConfig | None = None) -> list[SoulSpec]:
-    """Resolve souls from config.json, using souls/{soul_id} as the default workspace."""
-    config = config or SoulboardConfig()
+def discover_soul_specs(nano_root: Path) -> list[SoulSpec]:
+    """Discover valid workspace-local soul configs under souls/."""
     souls_root = get_souls_root(nano_root)
     specs: list[SoulSpec] = []
-    for soul_id in sorted(validate_soul_id(soul_id) for soul_id in config.souls):
-        overrides = config.souls.get(soul_id, SoulOverrides())
-        workspace = Path(overrides.workspace).expanduser() if overrides.workspace else souls_root / soul_id
+    if not souls_root.is_dir():
+        return specs
+    for workspace in sorted(souls_root.iterdir(), key=lambda path: path.name):
+        if not workspace.is_dir():
+            continue
+        soul_id = workspace.name
+        try:
+            validate_soul_id(soul_id)
+            overrides = load_soul_config(workspace / "config.json")
+        except (OSError, ValueError) as exc:
+            logger.warning("Skipping invalid soul directory '{}': {}", workspace, exc)
+            continue
         specs.append(SoulSpec(soul_id=soul_id, workspace=workspace, overrides=overrides))
     return specs
 
@@ -340,26 +353,28 @@ class SoulSupervisor:
         base_config: Config,
         nano_root: Path,
         soulboard_config: SoulboardConfig | None = None,
-        config_path: Path | None = None,
-        base_config_path: Path | None = None,
         provider_factory: Callable[[Config], LLMProvider] | None = None,
     ):
         self.base_config = base_config
         self.soulboard_config = soulboard_config or SoulboardConfig()
         self.nano_root = nano_root
-        self.config_path = config_path or get_soulboard_config_path(nano_root)
-        self.base_config_path = base_config_path
+        self.config_path = get_soulboard_config_path(nano_root)
+        self.base_config_path = get_base_config_path(nano_root)
         self.provider_factory = provider_factory
         self._running_souls: dict[str, RunningSoul] = {}
+        self._soul_specs: dict[str, SoulSpec] = {}
         self._skill_pool_cache: dict[str, list[DiscoveredSkill]] = {}
         self._skill_pools_loaded: bool = False
+        self._reload_soul_specs()
+
+    def _reload_soul_specs(self) -> None:
+        self._soul_specs = {
+            spec.soul_id: spec for spec in discover_soul_specs(self.nano_root)
+        }
 
     def list_specs(self) -> list[SoulSpec]:
         """List all resolved soul specs."""
-        specs = {
-            spec.soul_id: spec
-            for spec in discover_soul_specs(nano_root=self.nano_root, config=self.soulboard_config)
-        }
+        specs = dict(self._soul_specs)
         for soul_id, running in self._running_souls.items():
             specs.setdefault(soul_id, running.spec)
         return sorted(specs.values(), key=lambda spec: spec.soul_id)
@@ -373,9 +388,10 @@ class SoulSupervisor:
 
     def _prune_missing_mcp_servers(self, soul_id: str) -> None:
         """Remove stale MCP server references from one soul override set."""
-        overrides = self.soulboard_config.souls.get(soul_id)
-        if overrides is None:
+        spec = self._soul_specs.get(soul_id)
+        if spec is None:
             raise KeyError(f"Unknown soul: {soul_id}")
+        overrides = spec.overrides
         if not overrides.mcp_servers and not overrides.mcp_http_headers:
             return
         known = set(self.base_config.tools.mcp_servers)
@@ -387,54 +403,34 @@ class SoulSupervisor:
         }
         if filtered == overrides.mcp_servers and filtered_headers == overrides.mcp_http_headers:
             return
-        self.soulboard_config.souls[soul_id] = overrides.model_copy(
+        updated = overrides.model_copy(
             update={
                 "mcp_servers": filtered,
                 "mcp_http_headers": filtered_headers,
             }
         )
-        save_soulboard_config(self.soulboard_config, self.config_path)
+        save_soul_config(updated, get_soul_config_path(self.nano_root, soul_id))
+        self._soul_specs[soul_id] = SoulSpec(
+            soul_id=soul_id,
+            workspace=spec.workspace,
+            overrides=updated,
+        )
 
     def reload_config(self) -> None:
         """Reload persisted configs without disturbing running souls."""
         self.soulboard_config = load_soulboard_config(self.config_path)
-        if self.base_config_path is not None:
-            try:
-                self.base_config = load_config(self.base_config_path)
-            except ValueError as exc:
-                # Upstream load_config now raises on a malformed config instead
-                # of warning and falling back to defaults. During a live reload,
-                # keep the last-known-good base_config rather than crashing the
-                # reload or clobbering running souls with default settings.
-                logger.warning(
-                    "Reload skipped base config {}: {}. Keeping previous config.",
-                    self.base_config_path,
-                    exc,
-                )
-        self.refresh_skill_pools()
-        dirty = False
-        for soul_id in list(self.soulboard_config.souls):
-            overrides = self.soulboard_config.souls[soul_id]
-            if not overrides.mcp_servers and not overrides.mcp_http_headers:
-                continue
-            known = set(self.base_config.tools.mcp_servers)
-            filtered = [name for name in overrides.mcp_servers if name in known]
-            filtered_headers = {
-                name: headers
-                for name, headers in overrides.mcp_http_headers.items()
-                if name in known and name in filtered
-            }
-            if filtered == overrides.mcp_servers and filtered_headers == overrides.mcp_http_headers:
-                continue
-            self.soulboard_config.souls[soul_id] = overrides.model_copy(
-                update={
-                    "mcp_servers": filtered,
-                    "mcp_http_headers": filtered_headers,
-                }
+        try:
+            self.base_config = load_config(self.base_config_path)
+        except ValueError as exc:
+            logger.warning(
+                "Reload skipped base config {}: {}. Keeping previous config.",
+                self.base_config_path,
+                exc,
             )
-            dirty = True
-        if dirty:
-            save_soulboard_config(self.soulboard_config, self.config_path)
+        self._reload_soul_specs()
+        self.refresh_skill_pools()
+        for soul_id in list(self._soul_specs):
+            self._prune_missing_mcp_servers(soul_id)
 
     def list_skill_pools(self) -> list[str]:
         """Return the configured global skill pool paths."""
@@ -615,11 +611,6 @@ class SoulSupervisor:
             delete_after_run=delete_after_run,
         )
 
-    def _resolve_soul_workspace(self, soul_id: str, overrides: SoulOverrides) -> Path:
-        if overrides.workspace:
-            return Path(overrides.workspace).expanduser()
-        return get_souls_root(self.nano_root) / soul_id
-
     def read_soul_prompt_files(self, soul_id: str) -> dict[str, str | None]:
         """Read the soul markdown prompt pack from its workspace."""
         spec = self.get_spec(soul_id)
@@ -649,8 +640,15 @@ class SoulSupervisor:
             raise RuntimeError(f"Cannot modify running soul: {soul_id}")
         validate_soul_id(soul_id)
         _validate_mcp_http_header_overrides(self.base_config.tools.mcp_servers, overrides)
-        self.soulboard_config.souls[soul_id] = overrides
-        save_soulboard_config(self.soulboard_config, self.config_path)
+        spec = self._soul_specs.get(soul_id)
+        if spec is None:
+            raise KeyError(f"Unknown soul: {soul_id}")
+        save_soul_config(overrides, get_soul_config_path(self.nano_root, soul_id))
+        self._soul_specs[soul_id] = SoulSpec(
+            soul_id=soul_id,
+            workspace=spec.workspace,
+            overrides=overrides,
+        )
 
     def create_soul(
         self,
@@ -659,30 +657,124 @@ class SoulSupervisor:
     ) -> SoulSpec:
         """Create and persist a new soul definition."""
         validate_soul_id(soul_id)
-        if soul_id in self.soulboard_config.souls:
+        workspace = get_souls_root(self.nano_root) / soul_id
+        if workspace.exists() or workspace.is_symlink():
             raise ValueError(f"Soul already exists: {soul_id}")
         resolved_overrides = overrides or SoulOverrides()
         _validate_mcp_http_header_overrides(self.base_config.tools.mcp_servers, resolved_overrides)
         spec = SoulSpec(
             soul_id=soul_id,
-            workspace=self._resolve_soul_workspace(soul_id, resolved_overrides),
+            workspace=workspace,
             overrides=resolved_overrides,
         )
-        self.soulboard_config.souls[soul_id] = resolved_overrides
-        save_soulboard_config(self.soulboard_config, self.config_path)
+        save_soul_config(resolved_overrides, workspace / "config.json")
+        self._soul_specs[soul_id] = spec
         return spec
+
+    def clone_soul(
+        self,
+        source_soul_id: str,
+        soul_id: str,
+        overrides: SoulOverrides,
+        *,
+        copy_prompt_files: bool,
+        copy_skills: bool,
+        materialize_skill_links: bool,
+        copy_cron_jobs: bool,
+        copy_other_files: bool,
+    ) -> SoulSpec:
+        """Clone selected workspace content while always clearing memory and sessions."""
+        source = self.get_spec(source_soul_id)
+        validate_soul_id(soul_id)
+        _validate_mcp_http_header_overrides(self.base_config.tools.mcp_servers, overrides)
+
+        souls_root = get_souls_root(self.nano_root)
+        target = souls_root / soul_id
+        if target.exists() or target.is_symlink():
+            raise ValueError(f"Soul already exists: {soul_id}")
+
+        souls_root.parent.mkdir(parents=True, exist_ok=True)
+        staging = Path(
+            tempfile.mkdtemp(
+                prefix=f".clone-{soul_id}-",
+                dir=souls_root.parent,
+            )
+        )
+        try:
+            save_soul_config(overrides, staging / "config.json")
+            excluded = {
+                "config.json",
+                "memory",
+                "sessions",
+                "skills",
+                "cron",
+                *SOUL_PROMPT_FILES,
+            }
+
+            if copy_prompt_files:
+                for filename in SOUL_PROMPT_FILES:
+                    source_path = source.workspace / filename
+                    if source_path.exists() or source_path.is_symlink():
+                        self._copy_workspace_entry(source_path, staging / filename)
+
+            if copy_skills:
+                source_path = source.workspace / "skills"
+                if source_path.exists() or source_path.is_symlink():
+                    self._copy_workspace_entry(
+                        source_path,
+                        staging / "skills",
+                        materialize_links=materialize_skill_links,
+                    )
+
+            if copy_cron_jobs:
+                source_path = source.workspace / "cron"
+                if source_path.exists() or source_path.is_symlink():
+                    self._copy_workspace_entry(source_path, staging / "cron")
+
+            if copy_other_files:
+                for source_path in source.workspace.iterdir():
+                    if source_path.name in excluded:
+                        continue
+                    self._copy_workspace_entry(source_path, staging / source_path.name)
+
+            souls_root.mkdir(parents=True, exist_ok=True)
+            if target.exists() or target.is_symlink():
+                raise ValueError(f"Soul already exists: {soul_id}")
+            staging.rename(target)
+        except BaseException:
+            if staging.exists():
+                shutil.rmtree(staging)
+            raise
+
+        spec = SoulSpec(soul_id=soul_id, workspace=target, overrides=overrides)
+        self._soul_specs[soul_id] = spec
+        return spec
+
+    @staticmethod
+    def _copy_workspace_entry(
+        source: Path,
+        target: Path,
+        *,
+        materialize_links: bool = False,
+    ) -> None:
+        """Copy one workspace entry, optionally materializing symbolic links."""
+        if source.is_symlink() and not materialize_links:
+            target.symlink_to(source.readlink(), target_is_directory=source.is_dir())
+        elif source.is_dir():
+            shutil.copytree(source, target, symlinks=not materialize_links)
+        else:
+            shutil.copy2(source, target, follow_symlinks=materialize_links)
 
     def delete_soul(self, soul_id: str) -> None:
         """Delete a soul definition unless it is currently running."""
         if soul_id in self._running_souls:
             raise RuntimeError(f"Cannot delete running soul: {soul_id}")
-        if soul_id not in self.soulboard_config.souls:
+        spec = self._soul_specs.get(soul_id)
+        if spec is None:
             raise KeyError(f"Unknown soul: {soul_id}")
-        workspace = self._resolve_soul_workspace(soul_id, self.soulboard_config.souls[soul_id])
-        del self.soulboard_config.souls[soul_id]
-        save_soulboard_config(self.soulboard_config, self.config_path)
-        if workspace.exists():
-            shutil.rmtree(workspace)
+        del self._soul_specs[soul_id]
+        if spec.workspace.exists():
+            shutil.rmtree(spec.workspace)
 
     def list_mcp_servers(self) -> dict[str, MCPServerConfig]:
         """Return MCP server definitions from the base nanobot config."""
@@ -774,8 +866,7 @@ class SoulSupervisor:
         if name in self.base_config.tools.mcp_servers:
             raise ValueError(f"MCP server already exists: {name}")
         self.base_config.tools.mcp_servers[name] = definition
-        if self.base_config_path is not None:
-            save_config(self.base_config, self.base_config_path)
+        save_config(self.base_config, self.base_config_path)
         return self.base_config.tools.mcp_servers[name]
 
     def update_mcp_server(self, name: str, definition: MCPServerConfig) -> MCPServerConfig:
@@ -783,8 +874,7 @@ class SoulSupervisor:
         if name not in self.base_config.tools.mcp_servers:
             raise KeyError(f"Unknown MCP server: {name}")
         self.base_config.tools.mcp_servers[name] = definition
-        if self.base_config_path is not None:
-            save_config(self.base_config, self.base_config_path)
+        save_config(self.base_config, self.base_config_path)
         return self.base_config.tools.mcp_servers[name]
 
     def delete_mcp_server(self, name: str) -> None:
@@ -792,8 +882,7 @@ class SoulSupervisor:
         if name not in self.base_config.tools.mcp_servers:
             raise KeyError(f"Unknown MCP server: {name}")
         del self.base_config.tools.mcp_servers[name]
-        if self.base_config_path is not None:
-            save_config(self.base_config, self.base_config_path)
+        save_config(self.base_config, self.base_config_path)
 
     def list_running_souls(self) -> list[str]:
         """Return IDs of currently running souls."""

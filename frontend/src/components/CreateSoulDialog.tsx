@@ -114,14 +114,6 @@ export function CreateSoulDialog({
                 />
               </label>
               <label>
-                <span>Workspace override</span>
-                <input
-                  value={draft.workspace}
-                  onChange={(event) => setDraft((current) => ({ ...current, workspace: event.target.value }))}
-                  placeholder="inherits soulboard default workspace"
-                />
-              </label>
-              <label>
                 <span>Model</span>
                 <input
                   value={draft.model}

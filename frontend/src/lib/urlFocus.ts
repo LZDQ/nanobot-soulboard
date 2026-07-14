@@ -20,12 +20,12 @@ function getRelativePathSegments(): string[] {
     .map((segment) => decodeURIComponent(segment));
 }
 
-function buildFocusUrl(soulId: string, sessionKey: string | null): URL {
+function buildFocusUrl(soulId: string, subPath: string, sessionKey: string | null): URL {
   const url = new URL(window.location.href);
   const baseUrl = new URL(document.baseURI);
   const basePath = baseUrl.pathname.endsWith("/") ? baseUrl.pathname : `${baseUrl.pathname}/`;
   url.pathname = soulId
-    ? `${basePath}${encodeURIComponent(soulId)}/${SOULBOARD_SUB_PATH}`
+    ? `${basePath}${encodeURIComponent(soulId)}/${subPath || SOULBOARD_SUB_PATH}`
     : basePath;
   if (soulId && sessionKey) {
     url.searchParams.set("session-key", sessionKey);
@@ -45,10 +45,18 @@ export function getFocusFromUrl(): UrlFocus {
   };
 }
 
-export function syncFocusToUrl(soulId: string, sessionKey: string | null): void {
-  window.history.replaceState({}, "", buildFocusUrl(soulId, sessionKey));
+export function syncFocusToUrl(
+  soulId: string,
+  sessionKey: string | null,
+  subPath: string = SOULBOARD_SUB_PATH,
+): void {
+  window.history.replaceState({}, "", buildFocusUrl(soulId, subPath, sessionKey));
 }
 
-export function navigateToFocus(soulId: string, sessionKey: string | null = null): void {
-  window.history.pushState({}, "", buildFocusUrl(soulId, sessionKey));
+export function navigateToFocus(
+  soulId: string,
+  sessionKey: string | null = null,
+  subPath: string = SOULBOARD_SUB_PATH,
+): void {
+  window.history.pushState({}, "", buildFocusUrl(soulId, subPath, sessionKey));
 }

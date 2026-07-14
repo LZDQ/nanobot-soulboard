@@ -24,9 +24,20 @@ Server deployment is configured through environment variables:
 
 - CLI args and `UVICORN_*` variables configure the uvicorn process.
 - `SOULBOARD_NANO_ROOT` defaults to `~/.nanobot`.
-- `SOULBOARD_BASE_CONFIG_PATH` defaults to `$SOULBOARD_NANO_ROOT/config.json`.
-- `SOULBOARD_CONFIG_PATH` defaults to `$SOULBOARD_NANO_ROOT/soulboard/config.json`.
 - `SOULBOARD_URL_PREFIX` defaults to empty and can be set to a path prefix such as `/soulboard`.
+
+Configuration paths are fixed beneath `SOULBOARD_NANO_ROOT`:
+
+```text
+config.json                              # upstream nanobot config
+soulboard/config.json                    # global Soulboard registries and policies
+soulboard/souls/<soul-id>/               # portable soul workspace
+soulboard/souls/<soul-id>/config.json    # per-soul runtime overrides
+```
+
+Soulboard discovers direct child directories under `soulboard/souls/`. A directory is loaded only when
+its name is a valid soul ID and its local `config.json` validates; invalid directories are skipped with a
+server warning.
 
 Example (with default host and port and custom url prefix):
 
@@ -75,4 +86,4 @@ Production builds need no frontend environment variables. The backend injects `<
 
 The included `.env.example` points Vite at the default local development backend on `http://127.0.0.1:18792`. Change that one value when developing the frontend against a different backend origin or mount prefix.
 
-The UI home page is the injected mount root. Soul-specific configuration, sessions, and chat live at `/<soul-id>/soulboard` beneath that root, with the selected session kept in the `session-key` query parameter. For example, `SOULBOARD_URL_PREFIX=/soulboard` serves the home page at `/soulboard/` and soul pages at `/soulboard/<soul-id>/soulboard`.
+The UI home page is the injected mount root. Soul-specific configuration, sessions, and chat live at `/<soul-id>/soulboard` beneath that root, with the selected session kept in the `session-key` query parameter. Cloning uses the dedicated `/<soul-id>/clone` path and always clears memory and sessions for the new soul. For example, `SOULBOARD_URL_PREFIX=/soulboard` serves the home page at `/soulboard/`, soul pages at `/soulboard/<soul-id>/soulboard`, and clone pages at `/soulboard/<soul-id>/clone`.

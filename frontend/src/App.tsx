@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Toaster, toast } from "sonner";
 
 import { CreateSoulDialog } from "./components/CreateSoulDialog";
+import { CloneSoulPage } from "./components/CloneSoulPage";
 import { GroupListEditor } from "./components/GroupListEditor";
 import { MarkdownMessage } from "./components/MarkdownMessage";
 import { CronJobRegistryDialog } from "./components/registries/CronJobRegistryDialog";
@@ -82,6 +83,7 @@ export default function App() {
 
   const [souls, setSouls] = useState<Soul[]>([]);
   const [selectedSoulId, setSelectedSoulId] = useState<string>(initialFocusRef.current.soulId);
+  const [activeSubPath, setActiveSubPath] = useState<string>(initialFocusRef.current.subPath || "soulboard");
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [mcpServers, setMcpServers] = useState<MCPServer[]>([]);
   const [nanobotTools, setNanobotTools] = useState<NanobotTool[]>([]);
@@ -579,6 +581,7 @@ export default function App() {
       const focus = getFocusFromUrl();
       initialFocusRef.current = focus;
       setSelectedSoulId(focus.soulId);
+      setActiveSubPath(focus.subPath || "soulboard");
       setSessionKey(focus.sessionKey);
     }
     window.addEventListener("popstate", handlePopState);
@@ -670,8 +673,8 @@ export default function App() {
   }, [selectedSoulId, sessionsPage, sessionsPerPage, sessionSortOrder]);
 
   useEffect(() => {
-    syncFocusToUrl(selectedSoulId, sessionKey);
-  }, [selectedSoulId, sessionKey]);
+    syncFocusToUrl(selectedSoulId, sessionKey, activeSubPath);
+  }, [selectedSoulId, sessionKey, activeSubPath]);
 
   useEffect(() => {
     setSessionsPage(0);
@@ -860,6 +863,7 @@ export default function App() {
         resetCreateSoulForm();
         setIsCreatingSoul(false);
         navigateToFocus(created.soul_id);
+        setActiveSubPath("soulboard");
         await refreshSouls(created.soul_id);
         await refreshSessions(created.soul_id);
       });
@@ -991,6 +995,7 @@ export default function App() {
       await runAction("delete", async () => {
         await api<void>(`/api/souls/${encodeURIComponent(soulId)}`, { method: "DELETE" });
         navigateToFocus("");
+        setActiveSubPath("soulboard");
         await refreshSouls();
       });
     } catch (cause) {
@@ -1277,6 +1282,7 @@ export default function App() {
   const selectedSoulCronJobCount = cronJobs?.length ?? 0;
   const selectedSoulPromptFileCount = promptFiles.filter((file) => file.exists).length;
   const isSoulPage = Boolean(selectedSoulId);
+  const isClonePage = isSoulPage && activeSubPath === "clone";
 
   return (
     <div className="app-shell">
@@ -1285,9 +1291,11 @@ export default function App() {
         <div>
           <p className="eyebrow">nanobot soulboard</p>
           <h1>
-            {isSoulPage
-              ? `${selectedSoulId} soul console.`
-              : "Operator console for soul switching and global configuration."}
+            {isClonePage
+              ? `Clone ${selectedSoulId}.`
+              : isSoulPage
+                ? `${selectedSoulId} soul console.`
+                : "Operator console for soul switching and global configuration."}
           </h1>
         </div>
         <div className="hero-side">
@@ -1298,6 +1306,7 @@ export default function App() {
               onClick={() => {
                 navigateToFocus("");
                 setSelectedSoulId("");
+                setActiveSubPath("soulboard");
                 setSessionKey(null);
               }}
             >
@@ -1317,7 +1326,30 @@ export default function App() {
         </div>
       </header>
 
-      <main className={`grid ${isSoulPage ? "soul-page" : "home-page"}`}>
+      <main className={`grid ${isClonePage ? "clone-page" : isSoulPage ? "soul-page" : "home-page"}`}>
+        {isClonePage && selectedSoul ? (
+          <CloneSoulPage
+            key={selectedSoul.soul_id}
+            source={selectedSoul}
+            enabledChannels={enabledChannels}
+            allSoulGroups={allSoulGroups}
+            mcpServers={mcpServers}
+            nanobotTools={nanobotTools}
+            globalDisabledTools={globalDisabledTools}
+            onCancel={() => {
+              navigateToFocus(selectedSoul.soul_id);
+              setActiveSubPath("soulboard");
+              setSessionKey(null);
+            }}
+            onCloned={async (created) => {
+              navigateToFocus(created.soul_id);
+              setActiveSubPath("soulboard");
+              setSelectedSoulId(created.soul_id);
+              setSessionKey(null);
+              await refreshSouls(created.soul_id);
+            }}
+          />
+        ) : null}
         <section className="panel souls-panel home-only">
           <div className="panel-head">
             <h2>Souls</h2>
@@ -1365,6 +1397,7 @@ export default function App() {
                 onClick={() => {
                   navigateToFocus(soul.soul_id);
                   setSelectedSoulId(soul.soul_id);
+                  setActiveSubPath("soulboard");
                   setSessionKey(null);
                 }}
               >
@@ -1738,6 +1771,17 @@ export default function App() {
                     Restart
                   </button>
                 ) : null}
+                <button
+                  className="ghost"
+                  onClick={() => {
+                    navigateToFocus(selectedSoul.soul_id, null, "clone");
+                    setActiveSubPath("clone");
+                    setSessionKey(null);
+                  }}
+                  disabled={!!pending}
+                >
+                  Clone
+                </button>
                 <button className="danger" onClick={() => void deleteSoul()} disabled={!!pending}>
                   Delete
                 </button>
@@ -1829,14 +1873,6 @@ export default function App() {
                     <div className="registry-modal-body">
                   {isEditingSoul ? (
                     <div className="field-grid">
-                      <label>
-                        <span>Workspace</span>
-                        <input
-                          value={draft.workspace}
-                          onChange={(event) => setDraft((current) => ({ ...current, workspace: event.target.value }))}
-                          placeholder={selectedSoul.workspace}
-                        />
-                      </label>
                       <label>
                         <span>Model</span>
                         <input
@@ -1949,10 +1985,6 @@ export default function App() {
                     <div className="override-grid">
                       <article className="override-card">
                         <span>Workspace</span>
-                        <strong>{renderOverrideValue(selectedSoul.overrides.workspace)}</strong>
-                      </article>
-                      <article className="override-card">
-                        <span>Resolved workspace</span>
                         <strong>{selectedSoul.workspace}</strong>
                       </article>
                       <article className="override-card">

@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _SOUL_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
@@ -41,15 +41,6 @@ class SoulboardSettings(BaseSettings):
         default_factory=_default_nano_root,
         description="Nanobot data root. Defaults to ~/.nanobot.",
     )
-    base_config_path: Path | None = Field(
-        default=None,
-        description="Base nanobot config path. Defaults to {nano_root}/config.json.",
-    )
-    soulboard_config_path: Path | None = Field(
-        default=None,
-        validation_alias=AliasChoices("SOULBOARD_CONFIG_PATH", "SOULBOARD_SOULBOARD_CONFIG_PATH"),
-        description="Soulboard config path. Defaults to {nano_root}/soulboard/config.json.",
-    )
     url_prefix: str = Field(
         default="",
         description="Public URL path prefix for the UI, API, and WebSocket routes.",
@@ -60,36 +51,10 @@ class SoulboardSettings(BaseSettings):
     def expand_nano_root(cls, value: Path) -> Path:
         return value.expanduser()
 
-    @field_validator("base_config_path", "soulboard_config_path", mode="before")
-    @classmethod
-    def empty_config_path_to_none(cls, value: object) -> object:
-        if isinstance(value, str) and value.strip() == "":
-            return None
-        return value
-
-    @field_validator("base_config_path", "soulboard_config_path")
-    @classmethod
-    def expand_config_path(cls, value: Path | None) -> Path | None:
-        if value is None:
-            return None
-        return value.expanduser()
-
     @field_validator("url_prefix")
     @classmethod
     def validate_url_prefix(cls, value: str) -> str:
         return normalize_url_prefix(value)
-
-    @property
-    def resolved_base_config_path(self) -> Path:
-        if self.base_config_path is not None:
-            return self.base_config_path
-        return self.nano_root / "config.json"
-
-    @property
-    def resolved_soulboard_config_path(self) -> Path:
-        if self.soulboard_config_path is not None:
-            return self.soulboard_config_path
-        return self.nano_root / "soulboard" / "config.json"
 
 
 class SoulOverrides(BaseModel):
@@ -97,10 +62,6 @@ class SoulOverrides(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    workspace: str | None = Field(
-        default=None,
-        description="Optional workspace override for this soul. Defaults to ~/.nanobot/soulboard/souls/{soul_id}.",
-    )
     model: str | None = Field(
         default=None,
         description="Optional model override layered on top of the base nanobot config.",
@@ -225,8 +186,6 @@ class SoulboardConfig(BaseModel):
             "listing it in its enabled_tools setting."
         ),
     )
-    souls: dict[str, SoulOverrides] = Field(default_factory=dict)
-
     @field_validator("skill_registry")
     @classmethod
     def validate_skill_registry(cls, value: list[str]) -> list[str]:
@@ -307,9 +266,20 @@ def get_soulboard_config_path(nano_root: Path) -> Path:
     return get_soulboard_root(nano_root) / "config.json"
 
 
+def get_base_config_path(nano_root: Path) -> Path:
+    """Return the fixed upstream nanobot config path."""
+    return nano_root / "config.json"
+
+
 def get_souls_root(nano_root: Path) -> Path:
     """Return the souls directory."""
     return get_soulboard_root(nano_root) / "souls"
+
+
+def get_soul_config_path(nano_root: Path, soul_id: str) -> Path:
+    """Return the config path stored inside one soul workspace."""
+    validate_soul_id(soul_id)
+    return get_souls_root(nano_root) / soul_id / "config.json"
 
 
 def load_soulboard_config(path: Path) -> SoulboardConfig:
@@ -323,18 +293,29 @@ def load_soulboard_config(path: Path) -> SoulboardConfig:
     data.pop("app_links", None)
     # Dropped feature: tolerate configs written with the legacy prompt_link_dirs key.
     data.pop("prompt_link_dirs", None)
-    config = SoulboardConfig.model_validate(data)
-    for soul_id in config.souls:
-        validate_soul_id(soul_id)
-    return config
+    return SoulboardConfig.model_validate(data)
 
 
 def save_soulboard_config(config: SoulboardConfig, path: Path) -> None:
     """Persist soulboard config as formatted JSON."""
-    for soul_id in config.souls:
-        validate_soul_id(soul_id)
     config.skill_registry = _normalize_skill_registry(config.skill_registry)
     config.disabled_tools = normalize_tool_names(config.disabled_tools)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = config.model_dump(mode="json", exclude_none=True, by_alias=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+
+def load_soul_config(path: Path) -> SoulOverrides:
+    """Load one required workspace-local soul config."""
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    return SoulOverrides.model_validate(data)
+
+
+def save_soul_config(config: SoulOverrides, path: Path) -> None:
+    """Persist one workspace-local soul config as formatted JSON."""
     path.parent.mkdir(parents=True, exist_ok=True)
     data = config.model_dump(mode="json", exclude_none=True, by_alias=True)
     with open(path, "w", encoding="utf-8") as f:

@@ -19,13 +19,19 @@ from nanobot.cron.types import CronJob, CronSchedule
 from nanobot_soulboard.cron import SoulCronPayload
 from nanobot.session.manager import SessionManager
 from nanobot_soulboard.chat_streams import ChatStreamManager
-from nanobot_soulboard.config import SoulboardSettings, load_soulboard_config
+from nanobot_soulboard.config import (
+    SoulboardSettings,
+    get_base_config_path,
+    get_soulboard_config_path,
+    load_soulboard_config,
+)
 from nanobot_soulboard.agent import SOUL_PROMPT_FILES, SoulAgentLoop, SoulSpec, SoulSupervisor
 from nanobot_soulboard.schemas import (
     AddSoulCronJobsFromRegistryRequest,
     CreateSoulCronJobRequest,
     AddSoulSkillRequest,
     ChatRequest,
+    CloneSoulRequest,
     CreateMCPServerRequest,
     CreateSessionRequest,
     CreateSoulRequest,
@@ -282,10 +288,9 @@ def create_app() -> FastAPI:
     settings = SoulboardSettings()
     normalized_url_prefix = settings.url_prefix
     resolved_nano_root = settings.nano_root
-    resolved_base_config_path = settings.resolved_base_config_path
-    resolved_soulboard_config_path = settings.resolved_soulboard_config_path
+    resolved_base_config_path = get_base_config_path(resolved_nano_root)
+    resolved_soulboard_config_path = get_soulboard_config_path(resolved_nano_root)
     _ensure_nano_root_exists(resolved_nano_root)
-    initial_soulboard_config = load_soulboard_config(resolved_soulboard_config_path)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -295,8 +300,6 @@ def create_app() -> FastAPI:
             base_config=base_config,
             nano_root=resolved_nano_root,
             soulboard_config=soulboard_config,
-            config_path=resolved_soulboard_config_path,
-            base_config_path=resolved_base_config_path,
             provider_factory=make_provider,
         )
         app.state.soulboard = AppState(
@@ -484,8 +487,8 @@ def create_app() -> FastAPI:
         response_model=list[SoulResponse],
         summary="List Souls",
         description=(
-            "List all souls declared in soulboard config.json, including their resolved workspace paths, "
-            "stored overrides, and whether each soul is currently running."
+            "List all valid souls discovered under soulboard/souls, including their fixed workspace paths, "
+            "workspace-local overrides, and whether each soul is currently running."
         ),
     )
     def list_souls(request: Request) -> list[SoulResponse]:
@@ -497,9 +500,8 @@ def create_app() -> FastAPI:
         response_model=list[SoulResponse],
         summary="Reload Souls Config",
         description=(
-            "Reload soulboard config.json and base nanobot config.json from disk into the in-memory "
-            "supervisor, then return the refreshed soul list. Running souls keep their current runtime "
-            "config until manually restarted."
+            "Reload the global soulboard config, base nanobot config, and workspace-local soul configs "
+            "from disk. Running souls keep their current runtime config until manually restarted."
         ),
     )
     def refresh_souls(request: Request) -> list[SoulResponse]:
@@ -595,8 +597,8 @@ def create_app() -> FastAPI:
         responses={400: {"model": ErrorResponse}},
         summary="Create Soul",
         description=(
-            "Create a new soul entry in soulboard config.json and return the resolved soul definition. "
-            "If the stored overrides set autostart=true, the new soul is started immediately."
+            "Create a new soul workspace with its own config.json and return the resolved definition. "
+            "If the local overrides set autostart=true, the new soul is started immediately."
         ),
     )
     async def create_soul(request: Request, body: CreateSoulRequest) -> SoulResponse:
@@ -620,14 +622,50 @@ def create_app() -> FastAPI:
             await supervisor.start_soul(spec.soul_id)
         return _to_soul_response(supervisor, spec)
 
+    @api.post(
+        "/souls/{source_soul_id}/clone",
+        response_model=SoulResponse,
+        responses={404: {"model": ErrorResponse}, 400: {"model": ErrorResponse}},
+        summary="Clone Soul",
+        description=(
+            "Clone selected configuration and workspace content into a new soul directory. Memory and "
+            "sessions are always reset. The source may be running or stopped."
+        ),
+    )
+    async def clone_soul(
+        request: Request,
+        source_soul_id: str,
+        body: CloneSoulRequest,
+    ) -> SoulResponse:
+        supervisor = _get_supervisor(request)
+        try:
+            spec = supervisor.clone_soul(
+                source_soul_id,
+                body.soul_id,
+                body.overrides,
+                copy_prompt_files=body.copy_prompt_files,
+                copy_skills=body.copy_skills,
+                materialize_skill_links=body.materialize_skill_links,
+                copy_cron_jobs=body.copy_cron_jobs,
+                copy_other_files=body.copy_other_files,
+            )
+        except KeyError as exc:
+            _raise_not_found(_error_detail(exc))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _sync_soul_workspace(spec)
+        if body.start:
+            await supervisor.start_soul(spec.soul_id)
+        return _to_soul_response(supervisor, spec)
+
     @api.get(
         "/souls/{soul_id}",
         response_model=SoulResponse,
         responses={404: {"model": ErrorResponse}},
         summary="Get Soul",
         description=(
-            "Return one soul from the persisted soulboard config, including its resolved workspace path, "
-            "effective overrides, and current running state."
+            "Return one discovered soul, including its fixed workspace path, workspace-local overrides, "
+            "and current running state."
         ),
     )
     def get_soul(request: Request, soul_id: str) -> SoulResponse:
@@ -907,16 +945,16 @@ def create_app() -> FastAPI:
         responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
         summary="Update Soul",
         description=(
-            "Replace the stored override block for a soul in soulboard config.json. This endpoint refuses "
-            "to modify a soul while it is running so runtime state and persisted config cannot diverge."
+            "Replace the workspace-local config.json for a soul. This endpoint refuses to modify a running "
+            "soul so runtime state and persisted config cannot diverge."
         ),
     )
     def update_soul(request: Request, soul_id: str, body: UpdateSoulRequest) -> SoulResponse:
         supervisor = _get_supervisor(request)
-        if soul_id not in supervisor.soulboard_config.souls:
-            _raise_not_found(f"Unknown soul: {soul_id}")
         try:
             supervisor.modify_soul(soul_id, body.overrides)
+        except KeyError as exc:
+            _raise_not_found(_error_detail(exc))
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         spec = supervisor.get_spec(soul_id)
@@ -929,7 +967,7 @@ def create_app() -> FastAPI:
         responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
         summary="Delete Soul",
         description=(
-            "Remove a soul definition from soulboard config.json. The soul must not be running when this "
+            "Remove a soul and its complete workspace directory. The soul must not be running when this "
             "endpoint is called."
         ),
     )
@@ -1088,7 +1126,9 @@ def create_app() -> FastAPI:
         try:
             agent_loop = supervisor.get_agent_loop(soul_id)
         except KeyError as exc:
-            if soul_id not in supervisor.soulboard_config.souls:
+            try:
+                supervisor.get_spec(soul_id)
+            except KeyError:
                 _raise_not_found(f"Unknown soul: {soul_id}")
             raise HTTPException(status_code=409, detail=_error_detail(exc)) from exc
         response = await agent_loop.process_direct(

@@ -1,5 +1,4 @@
 export type SoulOverrides = {
-  workspace?: string | null;
   model?: string | null;
   provider?: string | null;
   channels: string[];
@@ -244,7 +243,6 @@ export type StreamFinalizedMessage = {
 export type StreamMessage = StreamResetMessage | StreamChunkMessage | StreamFinalizedMessage;
 
 export type DraftOverrides = {
-  workspace: string;
   model: string;
   provider: string;
   channels: string;

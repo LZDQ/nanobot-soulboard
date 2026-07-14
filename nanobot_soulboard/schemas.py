@@ -13,8 +13,7 @@ class CreateSoulRequest(BaseModel):
 
     soul_id: str = Field(
         description=(
-            "Stable soul identifier. This becomes the key in soulboard config and, when no workspace "
-            "override is provided, the default workspace directory name under ~/.nanobot/soulboard/souls/."
+            "Stable soul identifier and workspace directory name under ~/.nanobot/soulboard/souls/."
         )
     )
     overrides: SoulOverrides = Field(
@@ -41,6 +40,24 @@ class UpdateSoulRequest(BaseModel):
             "Full replacement soul override object. This endpoint currently replaces the stored override set "
             "for the soul instead of applying a partial merge."
         )
+    )
+
+
+class CloneSoulRequest(BaseModel):
+    """Request body for cloning a soul into a new portable workspace."""
+
+    soul_id: str = Field(description="ID and directory name for the cloned soul.")
+    overrides: SoulOverrides = Field(
+        description="Complete per-soul config to persist for the clone.",
+    )
+    copy_prompt_files: bool = True
+    copy_skills: bool = True
+    materialize_skill_links: bool = True
+    copy_cron_jobs: bool = False
+    copy_other_files: bool = True
+    start: bool = Field(
+        default=False,
+        description="Start the cloned soul immediately, independently of its autostart setting.",
     )
 
 
