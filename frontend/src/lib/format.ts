@@ -12,7 +12,21 @@ export function formatMessageTime(value: string): string {
   if (Number.isNaN(date.getTime())) {
     return "";
   }
-  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  const now = new Date();
+  const year = String(date.getFullYear());
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const time = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  const isToday = date.getFullYear() === now.getFullYear()
+    && date.getMonth() === now.getMonth()
+    && date.getDate() === now.getDate();
+  if (isToday) {
+    return time;
+  }
+  if (date.getFullYear() === now.getFullYear()) {
+    return `${month}/${day} ${time}`;
+  }
+  return `${year}/${month}/${day} ${time}`;
 }
 
 export function renderContent(value: unknown): string {
