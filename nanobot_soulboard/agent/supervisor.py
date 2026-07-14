@@ -67,6 +67,22 @@ class ToolCatalogItem:
     description: str
 
 
+@dataclass(frozen=True)
+class SoulCloneCronJob:
+    """One edited cron job to materialize in a cloned soul."""
+
+    name: str
+    enabled: bool
+    schedule: CronSchedule
+    message: str
+    deliver: bool
+    channel: str | None
+    chat_id: str | None
+    session_key: str | None
+    recurring_session_key_format: str | None
+    delete_after_run: bool
+
+
 def discover_soul_specs(nano_root: Path) -> list[SoulSpec]:
     """Discover valid workspace-local soul configs under souls/."""
     souls_root = get_souls_root(nano_root)
@@ -679,7 +695,7 @@ class SoulSupervisor:
         *,
         prompt_files: dict[str, str],
         skill_names: list[str],
-        copy_cron_jobs: bool,
+        cron_jobs: list[SoulCloneCronJob],
     ) -> SoulSpec:
         """Clone selected workspace content while always clearing memory and sessions."""
         source = self.get_spec(source_soul_id)
@@ -725,10 +741,25 @@ class SoulSupervisor:
                         raise ValueError(f"Skill not found in source soul: {name}")
                     self._copy_workspace_entry(source_path, target_skills_root / name)
 
-            if copy_cron_jobs:
-                source_path = source.workspace / "cron"
-                if source_path.exists() or source_path.is_symlink():
-                    self._copy_workspace_entry(source_path, staging / "cron")
+            if cron_jobs:
+                cron_service = SoulCronService(
+                    staging / "cron" / "jobs.json",
+                    soul_id=soul_id,
+                )
+                for cron_job in cron_jobs:
+                    created = cron_service.add_job(
+                        name=cron_job.name,
+                        schedule=cron_job.schedule,
+                        message=cron_job.message,
+                        deliver=cron_job.deliver,
+                        channel=cron_job.channel,
+                        to=cron_job.chat_id,
+                        session_key=cron_job.session_key,
+                        recurring_session_key_format=cron_job.recurring_session_key_format,
+                        delete_after_run=cron_job.delete_after_run,
+                    )
+                    if not cron_job.enabled:
+                        cron_service.enable_job(created.id, False)
 
             souls_root.mkdir(parents=True, exist_ok=True)
             if target.exists() or target.is_symlink():

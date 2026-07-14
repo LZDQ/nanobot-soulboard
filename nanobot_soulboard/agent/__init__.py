@@ -3,6 +3,7 @@
 from nanobot_soulboard.agent.loop import SoulAgentLoop
 from nanobot_soulboard.agent.supervisor import (
     SOUL_PROMPT_FILES,
+    SoulCloneCronJob,
     SoulSpec,
     SoulSupervisor,
     build_runtime_config,
@@ -12,6 +13,7 @@ from nanobot_soulboard.agent.supervisor import (
 __all__ = [
     "SOUL_PROMPT_FILES",
     "SoulAgentLoop",
+    "SoulCloneCronJob",
     "SoulSpec",
     "SoulSupervisor",
     "build_runtime_config",

@@ -25,7 +25,13 @@ from nanobot_soulboard.config import (
     get_soulboard_config_path,
     load_soulboard_config,
 )
-from nanobot_soulboard.agent import SOUL_PROMPT_FILES, SoulAgentLoop, SoulSpec, SoulSupervisor
+from nanobot_soulboard.agent import (
+    SOUL_PROMPT_FILES,
+    SoulAgentLoop,
+    SoulCloneCronJob,
+    SoulSpec,
+    SoulSupervisor,
+)
 from nanobot_soulboard.schemas import (
     AddSoulCronJobsFromRegistryRequest,
     CreateSoulCronJobRequest,
@@ -639,13 +645,39 @@ def create_app() -> FastAPI:
     ) -> SoulResponse:
         supervisor = _get_supervisor(request)
         try:
+            cron_jobs: list[SoulCloneCronJob] = []
+            for item in body.cron_jobs:
+                if item.schedule.kind == "cron":
+                    if not item.schedule.expr:
+                        raise ValueError(f"Cron job {item.name!r} requires a cron expression")
+                    schedule = CronSchedule(
+                        kind="cron",
+                        expr=item.schedule.expr,
+                        tz=item.schedule.tz,
+                    )
+                else:
+                    if item.schedule.every_ms is None or item.schedule.every_ms <= 0:
+                        raise ValueError(f"Cron job {item.name!r} requires a positive interval")
+                    schedule = CronSchedule(kind="every", every_ms=item.schedule.every_ms)
+                cron_jobs.append(SoulCloneCronJob(
+                    name=item.name,
+                    enabled=item.enabled,
+                    schedule=schedule,
+                    message=item.message,
+                    deliver=item.deliver,
+                    channel=item.channel,
+                    chat_id=item.chat_id,
+                    session_key=item.session_key,
+                    recurring_session_key_format=item.recurring_session_key_format,
+                    delete_after_run=item.delete_after_run,
+                ))
             spec = supervisor.clone_soul(
                 source_soul_id,
                 body.soul_id,
                 body.overrides,
                 prompt_files={item.name: item.content for item in body.prompt_files},
                 skill_names=body.skill_names,
-                copy_cron_jobs=body.copy_cron_jobs,
+                cron_jobs=cron_jobs,
             )
         except KeyError as exc:
             _raise_not_found(_error_detail(exc))

@@ -16,6 +16,7 @@ import {
 import { notifyError } from "../lib/errors";
 import { SOUL_PROMPT_FILE_NAMES } from "../types";
 import type {
+  CronJob,
   DraftOverrides,
   MCPServer,
   NanobotTool,
@@ -39,6 +40,42 @@ type CloneSoulPageProps = {
   onCloned: (soul: Soul) => Promise<void>;
 };
 
+type CloneCronJobDraft = {
+  selected: boolean;
+  name: string;
+  enabled: boolean;
+  message: string;
+  deliver: boolean;
+  channel: string;
+  chat_id: string;
+  session_key: string;
+  recurring_session_key_format: string;
+  delete_after_run: boolean;
+  schedule_kind: "every" | "cron";
+  every_seconds: string;
+  cron_expr: string;
+  tz: string;
+};
+
+function cronJobToDraft(job: CronJob): CloneCronJobDraft {
+  return {
+    selected: true,
+    name: job.name,
+    enabled: job.enabled,
+    message: job.message,
+    deliver: job.deliver,
+    channel: job.channel ?? "",
+    chat_id: job.chat_id ?? "",
+    session_key: job.session_key ?? "",
+    recurring_session_key_format: job.recurring_session_key_format ?? "",
+    delete_after_run: job.delete_after_run,
+    schedule_kind: job.schedule.kind === "every" ? "every" : "cron",
+    every_seconds: job.schedule.every_ms ? String(job.schedule.every_ms / 1000) : "",
+    cron_expr: job.schedule.expr ?? "",
+    tz: job.schedule.tz ?? "",
+  };
+}
+
 export function CloneSoulPage({
   source,
   enabledChannels,
@@ -57,7 +94,10 @@ export function CloneSoulPage({
   const [promptPending, setPromptPending] = useState(true);
   const [promptError, setPromptError] = useState("");
   const [selectedSkillNames, setSelectedSkillNames] = useState<string[]>(() => source.skills.map((skill) => skill.name));
-  const [copyCronJobs, setCopyCronJobs] = useState(true);
+  const [cronJobs, setCronJobs] = useState<CronJob[]>([]);
+  const [cronDrafts, setCronDrafts] = useState<Record<string, CloneCronJobDraft>>({});
+  const [cronPending, setCronPending] = useState(true);
+  const [cronError, setCronError] = useState("");
   const [startNow, setStartNow] = useState(false);
   const [pending, setPending] = useState(false);
 
@@ -99,8 +139,28 @@ export function CloneSoulPage({
     }
   }
 
+  async function loadCronJobs(): Promise<void> {
+    setCronPending(true);
+    setCronError("");
+    try {
+      const response = await api<CronJob[]>(
+        `/api/souls/${encodeURIComponent(source.soul_id)}/cron-jobs`,
+      );
+      setCronJobs(response);
+      setCronDrafts(Object.fromEntries(
+        response.map((job) => [job.id, cronJobToDraft(job)]),
+      ));
+    } catch (cause) {
+      setCronError("Could not load cron jobs from the source soul.");
+      notifyError(cause);
+    } finally {
+      setCronPending(false);
+    }
+  }
+
   useEffect(() => {
     void loadPromptFiles();
+    void loadCronJobs();
   }, [source.soul_id]);
 
   function togglePromptFile(name: SoulPromptFileName): void {
@@ -113,6 +173,52 @@ export function CloneSoulPage({
         ? current.filter((item) => item !== name)
         : [...current, name]
     ));
+  }
+
+  function updateCronDraft(jobId: string, update: Partial<CloneCronJobDraft>): void {
+    setCronDrafts((current) => ({
+      ...current,
+      [jobId]: { ...current[jobId], ...update },
+    }));
+  }
+
+  function buildCronPayload(): Array<Record<string, unknown>> {
+    return cronJobs.flatMap((job) => {
+      const cronDraft = cronDrafts[job.id];
+      if (!cronDraft?.selected) {
+        return [];
+      }
+      const name = cronDraft.name.trim();
+      if (!name) {
+        throw new Error("Every preserved cron job requires a name");
+      }
+      let schedule: Record<string, unknown>;
+      if (cronDraft.schedule_kind === "every") {
+        const everySeconds = Number(cronDraft.every_seconds);
+        if (!Number.isFinite(everySeconds) || everySeconds <= 0) {
+          throw new Error(`Cron job ${name} requires a positive interval`);
+        }
+        schedule = { kind: "every", every_ms: everySeconds * 1000 };
+      } else {
+        const expr = cronDraft.cron_expr.trim();
+        if (!expr) {
+          throw new Error(`Cron job ${name} requires a cron expression`);
+        }
+        schedule = { kind: "cron", expr, tz: cronDraft.tz.trim() || null };
+      }
+      return [{
+        name,
+        enabled: cronDraft.enabled,
+        message: cronDraft.message,
+        deliver: cronDraft.deliver,
+        channel: cronDraft.channel.trim() || null,
+        chat_id: cronDraft.chat_id.trim() || null,
+        session_key: cronDraft.session_key.trim() || null,
+        recurring_session_key_format: cronDraft.recurring_session_key_format.trim() || null,
+        delete_after_run: cronDraft.delete_after_run,
+        schedule,
+      }];
+    });
   }
 
   async function cloneSoul(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -133,7 +239,7 @@ export function CloneSoulPage({
             .filter((name) => promptSelection[name])
             .map((name) => ({ name, content: promptDraft[name] })),
           skill_names: selectedSkillNames,
-          copy_cron_jobs: copyCronJobs,
+          cron_jobs: buildCronPayload(),
           start: startNow,
         }),
       });
@@ -371,14 +477,186 @@ export function CloneSoulPage({
         </section>
 
         <section className="clone-section">
-          <label className="checkbox">
-            <input
-              type="checkbox"
-              checked={copyCronJobs}
-              onChange={(event) => setCopyCronJobs(event.target.checked)}
-            />
-            <span>Preserve cron jobs and their current state</span>
-          </label>
+          <div className="create-soul-block-head">
+            <div>
+              <h3>Cron jobs</h3>
+              <span className="muted">
+                Select and edit the jobs to recreate with fresh runtime state.
+              </span>
+            </div>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => void loadCronJobs()}
+              disabled={cronPending || pending}
+            >
+              {cronPending ? "Loading…" : "Refresh"}
+            </button>
+          </div>
+          {cronError ? <div className="banner error">{cronError}</div> : null}
+          <div className="md-file-list">
+            {cronJobs.map((job) => {
+              const cronDraft = cronDrafts[job.id];
+              if (!cronDraft) {
+                return null;
+              }
+              const disabled = pending || !cronDraft.selected;
+              return (
+                <details key={job.id} className="md-file clone-cron-job">
+                  <summary>
+                    <span className="md-file-title editable">
+                      <input
+                        type="checkbox"
+                        checked={cronDraft.selected}
+                        onChange={(event) => updateCronDraft(job.id, { selected: event.target.checked })}
+                        onClick={(event) => event.stopPropagation()}
+                      />
+                      <span>{cronDraft.name || job.name}</span>
+                    </span>
+                    <span className={`pill ${cronDraft.selected ? "live" : "idle"}`}>
+                      {cronDraft.schedule_kind}
+                    </span>
+                  </summary>
+                  <div className="field-grid clone-cron-grid">
+                    <label>
+                      <span>Name</span>
+                      <input
+                        value={cronDraft.name}
+                        onChange={(event) => updateCronDraft(job.id, { name: event.target.value })}
+                        disabled={disabled}
+                      />
+                    </label>
+                    <label>
+                      <span>Schedule type</span>
+                      <select
+                        value={cronDraft.schedule_kind}
+                        onChange={(event) => updateCronDraft(job.id, {
+                          schedule_kind: event.target.value as "every" | "cron",
+                        })}
+                        disabled={disabled}
+                      >
+                        <option value="cron">cron expression</option>
+                        <option value="every">every N seconds</option>
+                      </select>
+                    </label>
+                    {cronDraft.schedule_kind === "cron" ? (
+                      <>
+                        <label>
+                          <span>Cron expression</span>
+                          <input
+                            value={cronDraft.cron_expr}
+                            onChange={(event) => updateCronDraft(job.id, { cron_expr: event.target.value })}
+                            placeholder="0 9 * * *"
+                            disabled={disabled}
+                          />
+                        </label>
+                        <label>
+                          <span>Timezone</span>
+                          <input
+                            value={cronDraft.tz}
+                            onChange={(event) => updateCronDraft(job.id, { tz: event.target.value })}
+                            placeholder="UTC"
+                            disabled={disabled}
+                          />
+                        </label>
+                      </>
+                    ) : (
+                      <label>
+                        <span>Every (seconds)</span>
+                        <input
+                          type="number"
+                          value={cronDraft.every_seconds}
+                          onChange={(event) => updateCronDraft(job.id, { every_seconds: event.target.value })}
+                          placeholder="3600"
+                          disabled={disabled}
+                        />
+                      </label>
+                    )}
+                    <label className="clone-wide-field">
+                      <span>Message</span>
+                      <textarea
+                        value={cronDraft.message}
+                        onChange={(event) => updateCronDraft(job.id, { message: event.target.value })}
+                        disabled={disabled}
+                      />
+                    </label>
+                    <label>
+                      <span>Channel</span>
+                      <input
+                        value={cronDraft.channel}
+                        onChange={(event) => updateCronDraft(job.id, { channel: event.target.value })}
+                        placeholder="optional"
+                        disabled={disabled}
+                      />
+                    </label>
+                    <label>
+                      <span>Chat ID</span>
+                      <input
+                        value={cronDraft.chat_id}
+                        onChange={(event) => updateCronDraft(job.id, { chat_id: event.target.value })}
+                        placeholder="optional"
+                        disabled={disabled}
+                      />
+                    </label>
+                    <label>
+                      <span>Session key</span>
+                      <input
+                        value={cronDraft.session_key}
+                        onChange={(event) => updateCronDraft(job.id, { session_key: event.target.value })}
+                        placeholder="optional, e.g. cli:direct"
+                        disabled={disabled}
+                      />
+                    </label>
+                    <label>
+                      <span>Recurring session key format</span>
+                      <input
+                        value={cronDraft.recurring_session_key_format}
+                        onChange={(event) => updateCronDraft(job.id, {
+                          recurring_session_key_format: event.target.value,
+                        })}
+                        placeholder="%Y-%m-%d"
+                        disabled={disabled}
+                      />
+                    </label>
+                    <div className="clone-cron-flags clone-wide-field">
+                      <label className="checkbox">
+                        <input
+                          type="checkbox"
+                          checked={cronDraft.enabled}
+                          onChange={(event) => updateCronDraft(job.id, { enabled: event.target.checked })}
+                          disabled={disabled}
+                        />
+                        <span>Enabled</span>
+                      </label>
+                      <label className="checkbox">
+                        <input
+                          type="checkbox"
+                          checked={cronDraft.deliver}
+                          onChange={(event) => updateCronDraft(job.id, { deliver: event.target.checked })}
+                          disabled={disabled}
+                        />
+                        <span>Deliver</span>
+                      </label>
+                      <label className="checkbox">
+                        <input
+                          type="checkbox"
+                          checked={cronDraft.delete_after_run}
+                          onChange={(event) => updateCronDraft(job.id, {
+                            delete_after_run: event.target.checked,
+                          })}
+                          disabled={disabled}
+                        />
+                        <span>Delete after run</span>
+                      </label>
+                    </div>
+                  </div>
+                </details>
+              );
+            })}
+            {!cronJobs.length ? (
+              <p className="muted">{cronPending ? "Loading cron jobs…" : "This soul has no cron jobs."}</p>
+            ) : null}
+          </div>
         </section>
 
         <section className="clone-section clone-start-section">
@@ -398,7 +676,10 @@ export function CloneSoulPage({
 
         <div className="clone-submit-row">
           <button type="button" className="ghost" onClick={onCancel} disabled={pending}>Cancel</button>
-          <button type="submit" disabled={pending || promptPending || !!promptError || !soulId.trim()}>
+          <button
+            type="submit"
+            disabled={pending || promptPending || cronPending || !!promptError || !!cronError || !soulId.trim()}
+          >
             {pending ? "Cloning…" : "Clone soul"}
           </button>
         </div>

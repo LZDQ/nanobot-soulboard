@@ -50,6 +50,30 @@ class CloneSoulPromptFileRequest(BaseModel):
     content: str
 
 
+class CloneSoulCronJobScheduleRequest(BaseModel):
+    """Schedule for a cron job preserved into a cloned soul."""
+
+    kind: Literal["cron", "every"]
+    every_ms: int | None = None
+    expr: str | None = None
+    tz: str | None = None
+
+
+class CloneSoulCronJobRequest(BaseModel):
+    """Editable cron job preserved into a cloned soul."""
+
+    name: str = Field(min_length=1)
+    enabled: bool = True
+    message: str = ""
+    deliver: bool = False
+    channel: str | None = None
+    chat_id: str | None = None
+    session_key: str | None = None
+    recurring_session_key_format: str | None = None
+    delete_after_run: bool = False
+    schedule: CloneSoulCronJobScheduleRequest
+
+
 class CloneSoulRequest(BaseModel):
     """Request body for cloning a soul into a new portable workspace."""
 
@@ -59,7 +83,7 @@ class CloneSoulRequest(BaseModel):
     )
     prompt_files: list[CloneSoulPromptFileRequest] = Field(default_factory=list)
     skill_names: list[str] = Field(default_factory=list)
-    copy_cron_jobs: bool = True
+    cron_jobs: list[CloneSoulCronJobRequest] = Field(default_factory=list)
     start: bool = Field(
         default=False,
         description="Start the cloned soul immediately, independently of its autostart setting.",

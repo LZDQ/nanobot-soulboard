@@ -1634,6 +1634,20 @@ label span {
   line-height: 1.35;
 }
 
+.clone-cron-grid {
+  margin-top: 1rem;
+}
+
+.clone-cron-grid textarea {
+  min-height: 7rem;
+}
+
+.clone-cron-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
 .clone-start-section {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
