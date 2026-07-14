@@ -1,21 +1,29 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 
 import { api } from "../lib/api";
 import {
   draftToOverrides,
+  getEmptyPromptDraft,
+  getEmptyPromptSelection,
   getToolChoices,
   getToolPolicyState,
   overridesToDraft,
+  promptFilesToDraft,
   updateDraftToolPolicy,
   updateSoulMcpSelection,
 } from "../lib/drafts";
 import { notifyError } from "../lib/errors";
+import { SOUL_PROMPT_FILE_NAMES } from "../types";
 import type {
   DraftOverrides,
   MCPServer,
   NanobotTool,
   Soul,
+  SoulPromptDraft,
+  SoulPromptFile,
+  SoulPromptFileName,
+  SoulPromptFilesResponse,
   ToolPolicyState,
 } from "../types";
 import { GroupListEditor } from "./GroupListEditor";
@@ -43,11 +51,13 @@ export function CloneSoulPage({
 }: CloneSoulPageProps) {
   const [soulId, setSoulId] = useState(`${source.soul_id}-copy`);
   const [draft, setDraft] = useState<DraftOverrides>(() => overridesToDraft(source.overrides));
-  const [copyPromptFiles, setCopyPromptFiles] = useState(true);
-  const [copySkills, setCopySkills] = useState(true);
-  const [materializeSkillLinks, setMaterializeSkillLinks] = useState(true);
-  const [copyCronJobs, setCopyCronJobs] = useState(false);
-  const [copyOtherFiles, setCopyOtherFiles] = useState(true);
+  const [promptFiles, setPromptFiles] = useState<SoulPromptFile[]>([]);
+  const [promptDraft, setPromptDraft] = useState<SoulPromptDraft>(getEmptyPromptDraft());
+  const [promptSelection, setPromptSelection] = useState<Record<SoulPromptFileName, boolean>>(getEmptyPromptSelection());
+  const [promptPending, setPromptPending] = useState(true);
+  const [promptError, setPromptError] = useState("");
+  const [selectedSkillNames, setSelectedSkillNames] = useState<string[]>(() => source.skills.map((skill) => skill.name));
+  const [copyCronJobs, setCopyCronJobs] = useState(true);
   const [startNow, setStartNow] = useState(false);
   const [pending, setPending] = useState(false);
 
@@ -65,6 +75,46 @@ export function CloneSoulPage({
     [nanobotTools, globalDisabledTools, draft.enabled_tools, draft.disabled_tools],
   );
 
+  async function loadPromptFiles(): Promise<void> {
+    setPromptPending(true);
+    setPromptError("");
+    try {
+      const response = await api<SoulPromptFilesResponse>(
+        `/api/souls/${encodeURIComponent(source.soul_id)}/prompt-files`,
+      );
+      const selection = getEmptyPromptSelection();
+      for (const file of response.files) {
+        if (file.exists && SOUL_PROMPT_FILE_NAMES.some((name) => name === file.name)) {
+          selection[file.name as SoulPromptFileName] = true;
+        }
+      }
+      setPromptFiles(response.files);
+      setPromptDraft(promptFilesToDraft(response.files));
+      setPromptSelection(selection);
+    } catch (cause) {
+      setPromptError("Could not load prompt files from the source soul.");
+      notifyError(cause);
+    } finally {
+      setPromptPending(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadPromptFiles();
+  }, [source.soul_id]);
+
+  function togglePromptFile(name: SoulPromptFileName): void {
+    setPromptSelection((current) => ({ ...current, [name]: !current[name] }));
+  }
+
+  function toggleSkill(name: string): void {
+    setSelectedSkillNames((current) => (
+      current.includes(name)
+        ? current.filter((item) => item !== name)
+        : [...current, name]
+    ));
+  }
+
   async function cloneSoul(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     const nextSoulId = soulId.trim();
@@ -79,11 +129,11 @@ export function CloneSoulPage({
         body: JSON.stringify({
           soul_id: nextSoulId,
           overrides: draftToOverrides(draft),
-          copy_prompt_files: copyPromptFiles,
-          copy_skills: copySkills,
-          materialize_skill_links: materializeSkillLinks,
+          prompt_files: SOUL_PROMPT_FILE_NAMES
+            .filter((name) => promptSelection[name])
+            .map((name) => ({ name, content: promptDraft[name] })),
+          skill_names: selectedSkillNames,
           copy_cron_jobs: copyCronJobs,
-          copy_other_files: copyOtherFiles,
           start: startNow,
         }),
       });
@@ -103,7 +153,7 @@ export function CloneSoulPage({
           <p className="eyebrow">Clone {source.soul_id}</p>
           <h2>Create an independent soul</h2>
           <p className="muted">
-            Configure the clone before it is written. Memory and sessions always start empty.
+            Configure the clone before it is written.
           </p>
         </div>
         <button type="button" className="ghost" onClick={onCancel} disabled={pending}>
@@ -237,52 +287,98 @@ export function CloneSoulPage({
 
         <section className="clone-section">
           <div className="create-soul-block-head">
-            <h3>Workspace content</h3>
-            <span className="muted">Choose what follows the source into the new directory.</span>
+            <h3>Prompt files</h3>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => void loadPromptFiles()}
+              disabled={promptPending || pending}
+            >
+              {promptPending ? "Loading…" : "Refresh"}
+            </button>
           </div>
-          <div className="clone-copy-grid">
-            <label className="check-tile clone-copy-tile">
-              <input type="checkbox" checked={copyPromptFiles} onChange={(event) => setCopyPromptFiles(event.target.checked)} />
-              <span><strong>Prompt files</strong><small>AGENTS, SOUL, USER, TOOLS, and SYSTEM markdown.</small></span>
-            </label>
-            <div className="check-tile clone-copy-tile">
-              <input
-                type="checkbox"
-                checked={copySkills}
-                onChange={(event) => setCopySkills(event.target.checked)}
-                aria-label="Copy skills"
-              />
-              <span>
-                <strong>Skills</strong>
-                <small>Copy installed skills and choose how links are handled.</small>
-                <select
-                  value={materializeSkillLinks ? "materialize" : "preserve"}
-                  onChange={(event) => setMaterializeSkillLinks(event.target.value === "materialize")}
-                  disabled={!copySkills}
-                  aria-label="Cloned skill link handling"
-                >
-                  <option value="materialize">Materialize links</option>
-                  <option value="preserve">Preserve links</option>
-                </select>
-              </span>
-            </div>
-            <label className="check-tile clone-copy-tile">
-              <input type="checkbox" checked={copyCronJobs} onChange={(event) => setCopyCronJobs(event.target.checked)} />
-              <span><strong>Cron jobs</strong><small>May duplicate schedules and external deliveries.</small></span>
-            </label>
-            <label className="check-tile clone-copy-tile">
-              <input type="checkbox" checked={copyOtherFiles} onChange={(event) => setCopyOtherFiles(event.target.checked)} />
-              <span><strong>Other workspace files</strong><small>Copies files not managed by the categories above.</small></span>
-            </label>
-            <div className="check-tile clone-copy-tile clone-reset-tile" aria-disabled="true">
-              <input type="checkbox" checked={false} disabled readOnly />
-              <span><strong>Memory</strong><small>Always initialized empty for the cloned soul.</small></span>
-            </div>
-            <div className="check-tile clone-copy-tile clone-reset-tile" aria-disabled="true">
-              <input type="checkbox" checked={false} disabled readOnly />
-              <span><strong>Sessions</strong><small>Always cleared; conversations never cross identities.</small></span>
-            </div>
+          {promptError ? <div className="banner error">{promptError}</div> : null}
+          <div className="md-file-list">
+            {promptFiles.length ? SOUL_PROMPT_FILE_NAMES.map((name) => {
+              const file = promptFiles.find((item) => item.name === name);
+              const exists = file?.exists ?? false;
+              const selected = promptSelection[name];
+              return (
+                <details key={name} className="md-file" open={selected}>
+                  <summary
+                    onClick={(event) => {
+                      event.preventDefault();
+                      togglePromptFile(name);
+                    }}
+                  >
+                    <span className="md-file-title editable">
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        onChange={() => togglePromptFile(name)}
+                        onClick={(event) => event.stopPropagation()}
+                      />
+                      <span>{name}</span>
+                    </span>
+                    <span className={`pill ${exists ? "live" : "idle"}`}>
+                      {exists ? "present" : "missing"}
+                    </span>
+                  </summary>
+                  {selected ? (
+                    <label>
+                      <span>{name}</span>
+                      <textarea
+                        value={promptDraft[name]}
+                        onChange={(event) => setPromptDraft((current) => ({
+                          ...current,
+                          [name]: event.target.value,
+                        }))}
+                        placeholder={`Enter ${name} content`}
+                      />
+                    </label>
+                  ) : (
+                    <p className="muted">Enable this file to preserve or edit it in the cloned soul.</p>
+                  )}
+                </details>
+              );
+            }) : (
+              <p className="muted">{promptPending ? "Loading prompt files…" : "No prompt files available."}</p>
+            )}
           </div>
+        </section>
+
+        <section className="clone-section">
+          <div className="create-soul-block-head">
+            <h3>Skills</h3>
+            <span className="muted">Select each skill to preserve its current link or directory form.</span>
+          </div>
+          <div className="selection-grid">
+            {source.skills.map((skill) => (
+              <label key={skill.name} className="check-tile clone-skill-tile">
+                <input
+                  type="checkbox"
+                  checked={selectedSkillNames.includes(skill.name)}
+                  onChange={() => toggleSkill(skill.name)}
+                />
+                <span>
+                  <strong>{skill.name}</strong>
+                  <small>{skill.link_target ? "symbolic link" : "directory copy"}</small>
+                </span>
+              </label>
+            ))}
+            {!source.skills.length ? <p className="muted">This soul has no installed skills.</p> : null}
+          </div>
+        </section>
+
+        <section className="clone-section">
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              checked={copyCronJobs}
+              onChange={(event) => setCopyCronJobs(event.target.checked)}
+            />
+            <span>Preserve cron jobs and their current state</span>
+          </label>
         </section>
 
         <section className="clone-section clone-start-section">
@@ -302,7 +398,7 @@ export function CloneSoulPage({
 
         <div className="clone-submit-row">
           <button type="button" className="ghost" onClick={onCancel} disabled={pending}>Cancel</button>
-          <button type="submit" disabled={pending || !soulId.trim()}>
+          <button type="submit" disabled={pending || promptPending || !!promptError || !soulId.trim()}>
             {pending ? "Cloning…" : "Clone soul"}
           </button>
         </div>

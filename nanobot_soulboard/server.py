@@ -643,11 +643,9 @@ def create_app() -> FastAPI:
                 source_soul_id,
                 body.soul_id,
                 body.overrides,
-                copy_prompt_files=body.copy_prompt_files,
-                copy_skills=body.copy_skills,
-                materialize_skill_links=body.materialize_skill_links,
+                prompt_files={item.name: item.content for item in body.prompt_files},
+                skill_names=body.skill_names,
                 copy_cron_jobs=body.copy_cron_jobs,
-                copy_other_files=body.copy_other_files,
             )
         except KeyError as exc:
             _raise_not_found(_error_detail(exc))

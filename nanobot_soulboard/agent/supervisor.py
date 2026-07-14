@@ -677,16 +677,27 @@ class SoulSupervisor:
         soul_id: str,
         overrides: SoulOverrides,
         *,
-        copy_prompt_files: bool,
-        copy_skills: bool,
-        materialize_skill_links: bool,
+        prompt_files: dict[str, str],
+        skill_names: list[str],
         copy_cron_jobs: bool,
-        copy_other_files: bool,
     ) -> SoulSpec:
         """Clone selected workspace content while always clearing memory and sessions."""
         source = self.get_spec(source_soul_id)
         validate_soul_id(soul_id)
         _validate_mcp_http_header_overrides(self.base_config.tools.mcp_servers, overrides)
+        unknown_prompt_files = sorted(set(prompt_files) - set(SOUL_PROMPT_FILES))
+        if unknown_prompt_files:
+            unknown_str = ", ".join(unknown_prompt_files)
+            raise ValueError(f"Unknown prompt file(s): {unknown_str}")
+
+        normalized_skill_names: list[str] = []
+        seen_skill_names: set[str] = set()
+        for name in skill_names:
+            if not name or "/" in name or name in (".", ".."):
+                raise ValueError(f"Invalid skill name: {name!r}")
+            if name not in seen_skill_names:
+                normalized_skill_names.append(name)
+                seen_skill_names.add(name)
 
         souls_root = get_souls_root(self.nano_root)
         target = souls_root / soul_id
@@ -702,40 +713,22 @@ class SoulSupervisor:
         )
         try:
             save_soul_config(overrides, staging / "config.json")
-            excluded = {
-                "config.json",
-                "memory",
-                "sessions",
-                "skills",
-                "cron",
-                *SOUL_PROMPT_FILES,
-            }
+            for filename, content in prompt_files.items():
+                (staging / filename).write_text(content, encoding="utf-8")
 
-            if copy_prompt_files:
-                for filename in SOUL_PROMPT_FILES:
-                    source_path = source.workspace / filename
-                    if source_path.exists() or source_path.is_symlink():
-                        self._copy_workspace_entry(source_path, staging / filename)
-
-            if copy_skills:
-                source_path = source.workspace / "skills"
-                if source_path.exists() or source_path.is_symlink():
-                    self._copy_workspace_entry(
-                        source_path,
-                        staging / "skills",
-                        materialize_links=materialize_skill_links,
-                    )
+            if normalized_skill_names:
+                target_skills_root = staging / "skills"
+                target_skills_root.mkdir(parents=True, exist_ok=True)
+                for name in normalized_skill_names:
+                    source_path = source.workspace / "skills" / name
+                    if not (source_path.exists() or source_path.is_symlink()):
+                        raise ValueError(f"Skill not found in source soul: {name}")
+                    self._copy_workspace_entry(source_path, target_skills_root / name)
 
             if copy_cron_jobs:
                 source_path = source.workspace / "cron"
                 if source_path.exists() or source_path.is_symlink():
                     self._copy_workspace_entry(source_path, staging / "cron")
-
-            if copy_other_files:
-                for source_path in source.workspace.iterdir():
-                    if source_path.name in excluded:
-                        continue
-                    self._copy_workspace_entry(source_path, staging / source_path.name)
 
             souls_root.mkdir(parents=True, exist_ok=True)
             if target.exists() or target.is_symlink():
@@ -754,16 +747,14 @@ class SoulSupervisor:
     def _copy_workspace_entry(
         source: Path,
         target: Path,
-        *,
-        materialize_links: bool = False,
     ) -> None:
-        """Copy one workspace entry, optionally materializing symbolic links."""
-        if source.is_symlink() and not materialize_links:
+        """Copy one workspace entry while preserving its storage form."""
+        if source.is_symlink():
             target.symlink_to(source.readlink(), target_is_directory=source.is_dir())
         elif source.is_dir():
-            shutil.copytree(source, target, symlinks=not materialize_links)
+            shutil.copytree(source, target, symlinks=True)
         else:
-            shutil.copy2(source, target, follow_symlinks=materialize_links)
+            shutil.copy2(source, target, follow_symlinks=False)
 
     def delete_soul(self, soul_id: str) -> None:
         """Delete a soul definition unless it is currently running."""

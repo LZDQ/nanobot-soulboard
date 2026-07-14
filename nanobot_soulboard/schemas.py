@@ -43,6 +43,13 @@ class UpdateSoulRequest(BaseModel):
     )
 
 
+class CloneSoulPromptFileRequest(BaseModel):
+    """One prompt file to write into a cloned soul."""
+
+    name: str
+    content: str
+
+
 class CloneSoulRequest(BaseModel):
     """Request body for cloning a soul into a new portable workspace."""
 
@@ -50,11 +57,9 @@ class CloneSoulRequest(BaseModel):
     overrides: SoulOverrides = Field(
         description="Complete per-soul config to persist for the clone.",
     )
-    copy_prompt_files: bool = True
-    copy_skills: bool = True
-    materialize_skill_links: bool = True
-    copy_cron_jobs: bool = False
-    copy_other_files: bool = True
+    prompt_files: list[CloneSoulPromptFileRequest] = Field(default_factory=list)
+    skill_names: list[str] = Field(default_factory=list)
+    copy_cron_jobs: bool = True
     start: bool = Field(
         default=False,
         description="Start the cloned soul immediately, independently of its autostart setting.",
