@@ -4,8 +4,6 @@ export type UrlFocus = {
   sessionKey: string | null;
 };
 
-const SOULBOARD_SUB_PATH = "soulboard";
-
 function getRelativePathSegments(): string[] {
   const basePath = new URL(document.baseURI).pathname;
   const normalizedBasePath = basePath.endsWith("/") ? basePath : `${basePath}/`;
@@ -24,8 +22,13 @@ function buildFocusUrl(soulId: string, subPath: string, sessionKey: string | nul
   const url = new URL(window.location.href);
   const baseUrl = new URL(document.baseURI);
   const basePath = baseUrl.pathname.endsWith("/") ? baseUrl.pathname : `${baseUrl.pathname}/`;
+  const encodedSubPath = subPath
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
   url.pathname = soulId
-    ? `${basePath}${encodeURIComponent(soulId)}/${subPath || SOULBOARD_SUB_PATH}`
+    ? `${basePath}${encodeURIComponent(soulId)}${encodedSubPath ? `/${encodedSubPath}` : ""}`
     : basePath;
   if (soulId && sessionKey) {
     url.searchParams.set("session-key", sessionKey);
@@ -48,7 +51,7 @@ export function getFocusFromUrl(): UrlFocus {
 export function syncFocusToUrl(
   soulId: string,
   sessionKey: string | null,
-  subPath: string = SOULBOARD_SUB_PATH,
+  subPath: string = "",
 ): void {
   window.history.replaceState({}, "", buildFocusUrl(soulId, subPath, sessionKey));
 }
@@ -56,7 +59,7 @@ export function syncFocusToUrl(
 export function navigateToFocus(
   soulId: string,
   sessionKey: string | null = null,
-  subPath: string = SOULBOARD_SUB_PATH,
+  subPath: string = "",
 ): void {
   window.history.pushState({}, "", buildFocusUrl(soulId, subPath, sessionKey));
 }

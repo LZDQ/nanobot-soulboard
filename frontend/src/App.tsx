@@ -83,7 +83,7 @@ export default function App() {
 
   const [souls, setSouls] = useState<Soul[]>([]);
   const [selectedSoulId, setSelectedSoulId] = useState<string>(initialFocusRef.current.soulId);
-  const [activeSubPath, setActiveSubPath] = useState<string>(initialFocusRef.current.subPath || "soulboard");
+  const [activeSubPath, setActiveSubPath] = useState<string>(initialFocusRef.current.subPath);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [mcpServers, setMcpServers] = useState<MCPServer[]>([]);
   const [nanobotTools, setNanobotTools] = useState<NanobotTool[]>([]);
@@ -581,7 +581,7 @@ export default function App() {
       const focus = getFocusFromUrl();
       initialFocusRef.current = focus;
       setSelectedSoulId(focus.soulId);
-      setActiveSubPath(focus.subPath || "soulboard");
+      setActiveSubPath(focus.subPath);
       setSessionKey(focus.sessionKey);
     }
     window.addEventListener("popstate", handlePopState);
@@ -863,7 +863,7 @@ export default function App() {
         resetCreateSoulForm();
         setIsCreatingSoul(false);
         navigateToFocus(created.soul_id);
-        setActiveSubPath("soulboard");
+        setActiveSubPath("");
         await refreshSouls(created.soul_id);
         await refreshSessions(created.soul_id);
       });
@@ -995,7 +995,7 @@ export default function App() {
       await runAction("delete", async () => {
         await api<void>(`/api/souls/${encodeURIComponent(soulId)}`, { method: "DELETE" });
         navigateToFocus("");
-        setActiveSubPath("soulboard");
+        setActiveSubPath("");
         await refreshSouls();
       });
     } catch (cause) {
@@ -1306,7 +1306,7 @@ export default function App() {
               onClick={() => {
                 navigateToFocus("");
                 setSelectedSoulId("");
-                setActiveSubPath("soulboard");
+                setActiveSubPath("");
                 setSessionKey(null);
               }}
             >
@@ -1338,12 +1338,12 @@ export default function App() {
             globalDisabledTools={globalDisabledTools}
             onCancel={() => {
               navigateToFocus(selectedSoul.soul_id);
-              setActiveSubPath("soulboard");
+              setActiveSubPath("");
               setSessionKey(null);
             }}
             onCloned={async (created) => {
               navigateToFocus(created.soul_id);
-              setActiveSubPath("soulboard");
+              setActiveSubPath("");
               setSelectedSoulId(created.soul_id);
               setSessionKey(null);
               await refreshSouls(created.soul_id);
@@ -1397,7 +1397,7 @@ export default function App() {
                 onClick={() => {
                   navigateToFocus(soul.soul_id);
                   setSelectedSoulId(soul.soul_id);
-                  setActiveSubPath("soulboard");
+                  setActiveSubPath("");
                   setSessionKey(null);
                 }}
               >
