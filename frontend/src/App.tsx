@@ -1393,7 +1393,9 @@ export default function App() {
             {visibleSouls.map((soul) => (
               <button
                 key={soul.soul_id}
-                className={`soul-card ${selectedSoulId === soul.soul_id ? "active" : ""}`}
+                className={`soul-card ${soul.running ? "running" : "stopped"} ${selectedSoulId === soul.soul_id ? "active" : ""}`}
+                aria-label={`${soul.soul_id}, ${soul.running ? "running" : "stopped"}`}
+                title={`${soul.soul_id} · ${soul.running ? "Running" : "Stopped"}`}
                 onClick={() => {
                   navigateToFocus(soul.soul_id);
                   setSelectedSoulId(soul.soul_id);
@@ -1401,20 +1403,8 @@ export default function App() {
                   setSessionKey(null);
                 }}
               >
-                <div className="soul-card-head">
-                  <strong>{soul.soul_id}</strong>
-                  <div className="soul-card-head-right">
-                    {soul.overrides.groups && soul.overrides.groups.length ? (
-                      <div className="soul-card-groups">
-                        {soul.overrides.groups.map((group) => (
-                          <span key={group} className="group-chip">{group}</span>
-                        ))}
-                      </div>
-                    ) : null}
-                    <span className={`pill ${soul.running ? "live" : "idle"}`}>{soul.running ? "running" : "stopped"}</span>
-                  </div>
-                </div>
-                <code>{soul.workspace}</code>
+                <span className="soul-status-dot" aria-hidden="true" />
+                <strong>{soul.soul_id}</strong>
               </button>
             ))}
             {!souls.length ? (

@@ -288,6 +288,30 @@ pre {
   min-height: 18rem;
 }
 
+.chat-panel {
+  height: calc(100vh - 3rem);
+  height: calc(100dvh - 3rem);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+
+.chat-panel .finalized-box {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.chat-panel .message-list {
+  min-height: 0;
+  margin-top: 0.75rem;
+  padding-right: 0.35rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
 .details-panel,
 .chat-panel,
 .mcp-panel,
@@ -302,7 +326,6 @@ pre {
 .panel-head,
 .action-row,
 .chat-meta,
-.soul-card-head,
 .message-head {
   display: flex;
   gap: 0.75rem;
@@ -325,6 +348,15 @@ pre {
   gap: 0.75rem;
 }
 
+.soul-list {
+  grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+  gap: 0.6rem;
+}
+
+.soul-list > .muted {
+  grid-column: 1 / -1;
+}
+
 .message-history-actions {
   display: flex;
   justify-content: center;
@@ -341,8 +373,41 @@ pre {
 }
 
 .soul-card {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  min-height: 2.75rem;
+  padding: 0.65rem 0.8rem;
+  border-radius: 14px;
   background: rgba(255, 255, 255, 0.75);
   color: var(--text);
+}
+
+.soul-card strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--idle);
+}
+
+.soul-card.running strong {
+  color: var(--live);
+}
+
+.soul-status-dot {
+  width: 0.48rem;
+  height: 0.48rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--idle);
+  box-shadow: 0 0 0 3px var(--idle-soft);
+}
+
+.soul-card.running .soul-status-dot {
+  background: var(--live);
+  box-shadow: 0 0 0 3px var(--live-soft);
 }
 
 .soul-card.active {
@@ -355,28 +420,11 @@ pre {
   background: linear-gradient(135deg, rgba(255, 216, 188, 0.9), rgba(255, 255, 255, 0.82));
 }
 
-.soul-card code,
 .session-card code {
   display: block;
   margin-top: 0.55rem;
   font-size: 0.78rem;
   color: var(--muted);
-}
-
-.soul-card-head-right {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  flex-shrink: 0;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
-.soul-card-groups {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-  justify-content: flex-end;
 }
 
 .soul-group-filter {
@@ -1034,8 +1082,20 @@ label span {
 
 .chat-form {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
   gap: 0.8rem;
   margin-top: 1rem;
+}
+
+.chat-panel .chat-form textarea {
+  height: 3.5rem;
+  min-height: 3.5rem;
+  resize: none;
+}
+
+.chat-panel .chat-form button {
+  min-width: 5.5rem;
 }
 
 .mcp-layout {
