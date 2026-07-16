@@ -215,8 +215,6 @@ class RunningSoul:
     channels_task: asyncio.Task | None = None
     mcp_owner_task: asyncio.Task | None = None
     mcp_shutdown: asyncio.Event | None = None
-    mcp_connect_requested: asyncio.Event | None = None
-    mcp_reconnect_requests: asyncio.Queue[SoulMcpReconnectRequest] | None = None
     cron_started: bool = False
 
 
@@ -1106,20 +1104,15 @@ class SoulSupervisor:
             not running.mcp_owner_task or running.mcp_owner_task.done()
         ):
             running.mcp_shutdown = asyncio.Event()
-            running.mcp_connect_requested = asyncio.Event()
-            running.mcp_reconnect_requests = asyncio.Queue()
-            running.agent_loop.use_soulboard_mcp_lifecycle(
-                running.mcp_connect_requested,
-                running.mcp_reconnect_requests,
-            )
+            running.agent_loop._mcp_connect_requested.clear()
             ready = asyncio.get_running_loop().create_future()
             running.mcp_owner_task = asyncio.create_task(
                 _own_mcp_lifecycle(
                     running.agent_loop,
                     ready,
                     running.mcp_shutdown,
-                    running.mcp_connect_requested,
-                    running.mcp_reconnect_requests,
+                    running.agent_loop._mcp_connect_requested,
+                    running.agent_loop._mcp_reconnect_requests,
                 ),
                 name=f"mcp-owner:{soul_id}",
             )

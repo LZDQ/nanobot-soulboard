@@ -43,9 +43,10 @@ class SoulAgentLoop(AgentLoop):
     ):
         self.soul_id = soul_id
         self.disabled_tools = set(disabled_tools or [])
-        self._mcp_lifecycle_owned_by_soulboard = False
-        self._mcp_connect_requested: asyncio.Event | None = None
-        self._mcp_reconnect_requests: asyncio.Queue[SoulMcpReconnectRequest] | None = None
+        self._mcp_connect_requested = asyncio.Event()
+        self._mcp_reconnect_requests: asyncio.Queue[SoulMcpReconnectRequest] = (
+            asyncio.Queue()
+        )
         super().__init__(*args, disabled_skills=disabled_skills, **kwargs)
         self.context = SoulboardContextBuilder(
             self.workspace,
@@ -84,20 +85,11 @@ class SoulAgentLoop(AgentLoop):
         for name in self.disabled_tools:
             self.tools.unregister(name)
 
-    def use_soulboard_mcp_lifecycle(
-        self,
-        connect_requested: asyncio.Event,
-        reconnect_requests: asyncio.Queue[SoulMcpReconnectRequest],
-    ) -> None:
-        self._mcp_lifecycle_owned_by_soulboard = True
-        self._mcp_connect_requested = connect_requested
-        self._mcp_reconnect_requests = reconnect_requests
-
     def _has_missing_mcp_servers(self) -> bool:
         return any(name not in self._mcp_stacks for name in self._mcp_servers)
 
     def _request_mcp_owner_connect(self) -> None:
-        if self._mcp_connect_requested is not None and self._has_missing_mcp_servers():
+        if self._has_missing_mcp_servers():
             self._mcp_connect_requested.set()
 
     async def _reconnect_mcp_from_owner(
@@ -107,9 +99,6 @@ class SoulAgentLoop(AgentLoop):
         stale_tool: Tool,
     ) -> Tool | None:
         del stale_tool
-        if self._mcp_reconnect_requests is None:
-            self._request_mcp_owner_connect()
-            return None
         future: asyncio.Future[Tool | None] = asyncio.get_running_loop().create_future()
         await self._mcp_reconnect_requests.put(
             SoulMcpReconnectRequest(
@@ -397,7 +386,4 @@ class SoulAgentLoop(AgentLoop):
         return self.tools.get(tool_name)
 
     async def _connect_mcp(self) -> None:
-        if self._mcp_lifecycle_owned_by_soulboard:
-            self._request_mcp_owner_connect()
-            return
-        await self.connect_mcp_from_owner()
+        self._request_mcp_owner_connect()
