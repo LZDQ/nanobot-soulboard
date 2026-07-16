@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { createPortal } from "react-dom";
 import { Toaster, toast } from "sonner";
 
@@ -78,6 +86,22 @@ import {
   type ToolPolicyState,
 } from "./types";
 
+type FloatingButtonPosition = {
+  x: number;
+  y: number;
+};
+
+type FloatingButtonDrag = {
+  pointerId: number;
+  startClientX: number;
+  startClientY: number;
+  startPosition: FloatingButtonPosition;
+  position: FloatingButtonPosition;
+  moved: boolean;
+};
+
+const CONVERSATION_TOP_BUTTON_POSITION_KEY = "nanobot-soulboard:conversation-top-button-position";
+
 export default function App() {
   const initialFocusRef = useRef(getFocusFromUrl());
 
@@ -149,7 +173,15 @@ export default function App() {
   const [sessionSortOrder, setSessionSortOrder] = useState<"desc" | "asc">("desc");
   const [sessionsTotal, setSessionsTotal] = useState<number>(0);
   const socketRef = useRef<WebSocket | null>(null);
+  const conversationBoxRef = useRef<HTMLElement | null>(null);
+  const conversationTopButtonRef = useRef<HTMLButtonElement | null>(null);
+  const conversationTopButtonDragRef = useRef<FloatingButtonDrag | null>(null);
+  const suppressConversationTopButtonClickRef = useRef(false);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
   const initializedRef = useRef(false);
+  const [showConversationTopButton, setShowConversationTopButton] = useState(false);
+  const [conversationTopButtonPosition, setConversationTopButtonPosition] = useState<FloatingButtonPosition | null>(null);
+  const [isDraggingConversationTopButton, setIsDraggingConversationTopButton] = useState(false);
 
   const selectedSoul = useMemo(
     () => souls.find((soul) => soul.soul_id === selectedSoulId) ?? null,
@@ -682,6 +714,65 @@ export default function App() {
   }, [selectedSoulId, sessionsPerPage, sessionSortOrder]);
 
   useEffect(() => {
+    if (!sessionKey) {
+      setShowConversationTopButton(false);
+      return;
+    }
+
+    let animationFrame = 0;
+    const updateConversationTopButton = () => {
+      window.cancelAnimationFrame(animationFrame);
+      animationFrame = window.requestAnimationFrame(() => {
+        const conversationBox = conversationBoxRef.current;
+        setShowConversationTopButton(
+          conversationBox !== null && conversationBox.getBoundingClientRect().top < 0,
+        );
+      });
+    };
+
+    updateConversationTopButton();
+    window.addEventListener("scroll", updateConversationTopButton, { passive: true });
+    window.addEventListener("resize", updateConversationTopButton);
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+      window.removeEventListener("scroll", updateConversationTopButton);
+      window.removeEventListener("resize", updateConversationTopButton);
+    };
+  }, [sessionKey, sessions.length, sessionsTotal]);
+
+  useEffect(() => {
+    let savedPosition: FloatingButtonPosition | null = null;
+    try {
+      const rawPosition = window.localStorage.getItem(CONVERSATION_TOP_BUTTON_POSITION_KEY);
+      if (rawPosition) {
+        const parsedPosition = JSON.parse(rawPosition) as Partial<FloatingButtonPosition>;
+        if (Number.isFinite(parsedPosition.x) && Number.isFinite(parsedPosition.y)) {
+          savedPosition = {
+            x: parsedPosition.x as number,
+            y: parsedPosition.y as number,
+          };
+        }
+      }
+    } catch {
+      savedPosition = null;
+    }
+
+    setConversationTopButtonPosition(clampConversationTopButtonPosition(
+      savedPosition ?? getDefaultConversationTopButtonPosition(),
+    ));
+
+    const keepConversationTopButtonInViewport = () => {
+      setConversationTopButtonPosition((current) => (
+        current ? clampConversationTopButtonPosition(current) : current
+      ));
+    };
+    window.addEventListener("resize", keepConversationTopButtonInViewport);
+    return () => {
+      window.removeEventListener("resize", keepConversationTopButtonInViewport);
+    };
+  }, []);
+
+  useEffect(() => {
     if (soulGroupFilter && !allSoulGroups.includes(soulGroupFilter)) {
       setSoulGroupFilter("");
     }
@@ -1176,6 +1267,137 @@ export default function App() {
     }
     socket.send(JSON.stringify({ content: chatInput.trim() }));
     setChatInput("");
+  }
+
+  function getChatScrollBehavior(): ScrollBehavior {
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+  }
+
+  function jumpToChatEnd(): void {
+    chatEndRef.current?.scrollIntoView({
+      behavior: getChatScrollBehavior(),
+      block: "end",
+    });
+  }
+
+  function jumpToConversationTop(): void {
+    const conversationBox = conversationBoxRef.current;
+    if (!conversationBox) {
+      return;
+    }
+    const top = window.scrollY + conversationBox.getBoundingClientRect().top - window.innerHeight / 2;
+    window.scrollTo({
+      top: Math.max(0, top),
+      behavior: getChatScrollBehavior(),
+    });
+  }
+
+  function getDefaultConversationTopButtonPosition(): FloatingButtonPosition {
+    const buttonSize = 44;
+    const edgeOffset = 20;
+    return {
+      x: window.innerWidth - buttonSize - edgeOffset,
+      y: window.innerHeight - buttonSize - edgeOffset,
+    };
+  }
+
+  function clampConversationTopButtonPosition(position: FloatingButtonPosition): FloatingButtonPosition {
+    const edgeOffset = 8;
+    const buttonBounds = conversationTopButtonRef.current?.getBoundingClientRect();
+    const buttonWidth = buttonBounds?.width ?? 44;
+    const buttonHeight = buttonBounds?.height ?? 44;
+    return {
+      x: Math.min(Math.max(position.x, edgeOffset), Math.max(edgeOffset, window.innerWidth - buttonWidth - edgeOffset)),
+      y: Math.min(Math.max(position.y, edgeOffset), Math.max(edgeOffset, window.innerHeight - buttonHeight - edgeOffset)),
+    };
+  }
+
+  function persistConversationTopButtonPosition(position: FloatingButtonPosition): void {
+    try {
+      window.localStorage.setItem(
+        CONVERSATION_TOP_BUTTON_POSITION_KEY,
+        JSON.stringify(position),
+      );
+    } catch {
+      // Keep dragging functional when browser storage is unavailable.
+    }
+  }
+
+  function startDraggingConversationTopButton(event: ReactPointerEvent<HTMLButtonElement>): void {
+    if (event.button !== 0) {
+      return;
+    }
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const startPosition = conversationTopButtonPosition ?? { x: bounds.left, y: bounds.top };
+    conversationTopButtonDragRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startPosition,
+      position: startPosition,
+      moved: false,
+    };
+    suppressConversationTopButtonClickRef.current = false;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setIsDraggingConversationTopButton(true);
+  }
+
+  function dragConversationTopButton(event: ReactPointerEvent<HTMLButtonElement>): void {
+    const drag = conversationTopButtonDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    const deltaX = event.clientX - drag.startClientX;
+    const deltaY = event.clientY - drag.startClientY;
+    if (!drag.moved && Math.hypot(deltaX, deltaY) < 4) {
+      return;
+    }
+    drag.moved = true;
+    drag.position = clampConversationTopButtonPosition({
+      x: drag.startPosition.x + deltaX,
+      y: drag.startPosition.y + deltaY,
+    });
+    setConversationTopButtonPosition(drag.position);
+  }
+
+  function stopDraggingConversationTopButton(event: ReactPointerEvent<HTMLButtonElement>): void {
+    const drag = conversationTopButtonDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    conversationTopButtonDragRef.current = null;
+    setIsDraggingConversationTopButton(false);
+    if (drag.moved) {
+      suppressConversationTopButtonClickRef.current = true;
+      persistConversationTopButtonPosition(drag.position);
+      window.setTimeout(() => {
+        suppressConversationTopButtonClickRef.current = false;
+      }, 0);
+    }
+  }
+
+  function cancelDraggingConversationTopButton(event: ReactPointerEvent<HTMLButtonElement>): void {
+    const drag = conversationTopButtonDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    conversationTopButtonDragRef.current = null;
+    setIsDraggingConversationTopButton(false);
+    if (drag.moved) {
+      persistConversationTopButtonPosition(drag.position);
+    }
+  }
+
+  function activateConversationTopButton(event: ReactMouseEvent<HTMLButtonElement>): void {
+    if (suppressConversationTopButtonClickRef.current) {
+      event.preventDefault();
+      suppressConversationTopButtonClickRef.current = false;
+      return;
+    }
+    jumpToConversationTop();
   }
 
   async function saveSkillRegistry(items: string[]) {
@@ -2783,14 +3005,18 @@ export default function App() {
           <div className="panel-head">
             <h2>Live chat</h2>
             <div className="chat-meta">
-              <span className={`pill ${socketState === "open" ? "live" : "idle"}`}>
+              <button type="button" className="ghost chat-jump-button" onClick={jumpToChatEnd}>
+                <span className="chat-jump-icon" aria-hidden="true">↓</span>
+                Jump to end
+              </button>
+              <span className={`pill chat-status-pill ${socketState === "open" ? "live" : "idle"}`}>
                 {socketState === "open" ? "open" : socketState}
               </span>
               <code>{sessionKey}</code>
             </div>
           </div>
 
-          <article className="finalized-box">
+          <article className="finalized-box" ref={conversationBoxRef}>
             <div className="panel-head">
               <h3>Message history</h3>
               {sessionDetail ? (
@@ -2923,10 +3149,33 @@ export default function App() {
               Send
             </button>
           </form>
+          <div ref={chatEndRef} className="chat-end-anchor" aria-hidden="true" />
         </section>
         ) : null}
 
       </main>
+      {sessionKey && showConversationTopButton ? (
+        <button
+          ref={conversationTopButtonRef}
+          type="button"
+          className={`floating-conversation-top ${isDraggingConversationTopButton ? "dragging" : ""}`}
+          style={conversationTopButtonPosition ? {
+            left: conversationTopButtonPosition.x,
+            top: conversationTopButtonPosition.y,
+            right: "auto",
+            bottom: "auto",
+          } : undefined}
+          onClick={activateConversationTopButton}
+          onPointerDown={startDraggingConversationTopButton}
+          onPointerMove={dragConversationTopButton}
+          onPointerUp={stopDraggingConversationTopButton}
+          onPointerCancel={cancelDraggingConversationTopButton}
+          aria-label="Jump to the start of the conversation; drag to reposition"
+          title="Drag to reposition; click to jump to the conversation start"
+        >
+          <span aria-hidden="true">↑</span>
+        </button>
+      ) : null}
       {!isSoulPage && isCreatingSoul ? (
         <CreateSoulDialog
           pending={pending}
