@@ -104,6 +104,15 @@ export function CreateSoulDialog({
               <span className="muted">Identity, runtime overrides, groups, and MCP access.</span>
             </div>
             <div className="field-grid create-soul-options-grid">
+              <label className="create-soul-wide-field">
+                <span>Description</span>
+                <textarea
+                  value={draft.description}
+                  onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))}
+                  placeholder="What this soul is for"
+                  rows={3}
+                />
+              </label>
               <label>
                 <span>Soul ID</span>
                 <input

@@ -274,6 +274,15 @@ export function CloneSoulPage({
             <span className="muted">The directory name becomes the new soul ID.</span>
           </div>
           <div className="field-grid clone-config-grid">
+            <label className="clone-wide-field">
+              <span>Description</span>
+              <textarea
+                value={draft.description}
+                onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))}
+                placeholder="What this soul is for"
+                rows={3}
+              />
+            </label>
             <label>
               <span>New soul ID</span>
               <input

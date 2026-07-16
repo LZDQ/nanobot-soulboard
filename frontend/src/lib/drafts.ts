@@ -51,6 +51,7 @@ export function getEmptyPromptSelection(): Record<SoulPromptFileName, boolean> {
 
 export function getEmptyDraftOverrides(): DraftOverrides {
   return {
+    description: "",
     model: "",
     provider: "",
     channels: "",
@@ -79,6 +80,7 @@ export function getEmptyMcpDraft(): MCPServerDraft {
 
 export function overridesToDraft(overrides: SoulOverrides): DraftOverrides {
   return {
+    description: overrides.description ?? "",
     model: overrides.model ?? "",
     provider: overrides.provider ?? "",
     channels: overrides.channels.join(", "),
@@ -184,6 +186,7 @@ export function draftToOverrides(draft: DraftOverrides): SoulOverrides {
     ),
   );
   return {
+    description: draft.description,
     model: draft.model || null,
     provider: draft.provider || null,
     channels: splitCsv(draft.channels),

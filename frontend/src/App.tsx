@@ -1315,6 +1315,12 @@ export default function App() {
             </button>
           ) : null}
           <div className="hero-stats">
+            {selectedSoul ? (
+              <div className="stat-card soul-description-card">
+                <span>description</span>
+                <p>{selectedSoul.overrides.description || "No description"}</p>
+              </div>
+            ) : null}
             <div className="stat-card">
               <span>souls</span>
               <strong>{souls.length}</strong>
@@ -1864,6 +1870,15 @@ export default function App() {
                     <div className="registry-modal-body">
                   {isEditingSoul ? (
                     <div className="field-grid">
+                      <label className="soul-description-field">
+                        <span>Description</span>
+                        <textarea
+                          value={draft.description}
+                          onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))}
+                          placeholder="What this soul is for"
+                          rows={4}
+                        />
+                      </label>
                       <label>
                         <span>Model</span>
                         <input
@@ -1974,6 +1989,10 @@ export default function App() {
                     </div>
                   ) : (
                     <div className="override-grid">
+                      <article className="override-card soul-description-override">
+                        <span>Description</span>
+                        <strong>{selectedSoul.overrides.description || "No description"}</strong>
+                      </article>
                       <article className="override-card">
                         <span>Workspace</span>
                         <strong>{selectedSoul.workspace}</strong>

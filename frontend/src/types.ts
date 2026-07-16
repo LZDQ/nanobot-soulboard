@@ -1,4 +1,5 @@
 export type SoulOverrides = {
+  description: string;
   model?: string | null;
   provider?: string | null;
   channels: string[];
@@ -240,6 +241,7 @@ export type StreamFinalizedMessage = {
 export type StreamMessage = StreamResetMessage | StreamChunkMessage | StreamFinalizedMessage;
 
 export type DraftOverrides = {
+  description: string;
   model: string;
   provider: string;
   channels: string;

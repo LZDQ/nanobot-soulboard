@@ -151,6 +151,7 @@ pre {
   display: flex;
   gap: 0.9rem;
   flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .hero-side {
@@ -240,6 +241,16 @@ pre {
   display: block;
   margin-top: 0.3rem;
   font-size: 2rem;
+}
+
+.soul-description-card {
+  width: min(28rem, 45vw);
+}
+
+.soul-description-card p {
+  margin: 0.45rem 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .banner {
@@ -911,6 +922,15 @@ pre {
   grid-column: 1 / -1;
 }
 
+.soul-description-field,
+.soul-description-override {
+  grid-column: 1 / -1;
+}
+
+.soul-description-override strong {
+  white-space: pre-wrap;
+}
+
 .tool-selection-grid {
   align-items: stretch;
 }
@@ -1405,6 +1425,14 @@ label span {
 
   .hero-side {
     justify-items: stretch;
+  }
+
+  .hero-stats {
+    justify-content: flex-start;
+  }
+
+  .soul-description-card {
+    width: 100%;
   }
 
   .app-shell {

@@ -63,6 +63,10 @@ class SoulOverrides(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    description: str = Field(
+        default="",
+        description="Human-readable description displayed for this soul in the frontend.",
+    )
     model: str | None = Field(
         default=None,
         description="Optional model override layered on top of the base nanobot config.",
