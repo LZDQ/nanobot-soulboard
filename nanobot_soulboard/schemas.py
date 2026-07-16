@@ -65,9 +65,9 @@ class CloneSoulCronJobRequest(BaseModel):
     name: str = Field(min_length=1)
     enabled: bool = True
     message: str = ""
-    deliver: bool = False
-    channel: str | None = None
-    chat_id: str | None = None
+    origin_channel: str | None = None
+    origin_chat_id: str | None = None
+    origin_metadata: dict[str, Any] = Field(default_factory=dict)
     session_key: str | None = None
     recurring_session_key_format: str | None = None
     delete_after_run: bool = False
@@ -333,9 +333,9 @@ class CronJobResponse(BaseModel):
     enabled: bool
     delete_after_run: bool
     message: str
-    deliver: bool
-    channel: str | None = None
-    chat_id: str | None = None
+    origin_channel: str | None = None
+    origin_chat_id: str | None = None
+    origin_metadata: dict[str, Any] = Field(default_factory=dict)
     session_key: str | None = None
     recurring_session_key_format: str | None = None
     schedule: CronJobScheduleResponse
@@ -375,9 +375,9 @@ class UpdateSoulCronJobRequest(BaseModel):
     name: str | None = None
     enabled: bool | None = None
     message: str | None = None
-    deliver: bool | None = None
-    channel: str | None = None
-    chat_id: str | None = None
+    origin_channel: str | None = None
+    origin_chat_id: str | None = None
+    origin_metadata: dict[str, Any] | None = None
     session_key: str | None = None
     recurring_session_key_format: str | None = None
     delete_after_run: bool | None = None
@@ -389,9 +389,9 @@ class CreateSoulCronJobRequest(BaseModel):
 
     name: str = Field(min_length=1, description="Display name for the new job.")
     message: str = Field(default="", description="Message the job will inject when it fires.")
-    deliver: bool = Field(default=False)
-    channel: str | None = None
-    chat_id: str | None = None
+    origin_channel: str | None = None
+    origin_chat_id: str | None = None
+    origin_metadata: dict[str, Any] = Field(default_factory=dict)
     session_key: str | None = None
     recurring_session_key_format: str | None = None
     delete_after_run: bool = False

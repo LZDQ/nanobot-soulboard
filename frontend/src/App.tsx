@@ -120,7 +120,7 @@ export default function App() {
   const [isEditingCronJobRegistry, setIsEditingCronJobRegistry] = useState(false);
   const [cronJobRegistryDraft, setCronJobRegistryDraft] = useState<CronJobRegistryEntryDraft>({
     name: "", label: "", cron_expr: "", every_seconds: "", tz: Intl.DateTimeFormat().resolvedOptions().timeZone, message: "",
-    deliver: false, channel: "", chat_id: "", session_key: "", recurring_session_key_format: "",
+    origin_channel: "", origin_chat_id: "", session_key: "", recurring_session_key_format: "",
   });
   const [addCronJobRegistrySelection, setAddCronJobRegistrySelection] = useState("");
   const [createSoulCronJobNames, setCreateSoulCronJobNames] = useState<string[]>([]);
@@ -133,8 +133,8 @@ export default function App() {
   const [showOnlySelectedSessionCronJobs, setShowOnlySelectedSessionCronJobs] = useState(true);
   const [editingCronJobId, setEditingCronJobId] = useState<string | null>(null);
   const [cronJobEditDraft, setCronJobEditDraft] = useState<CronJobEditDraft>({
-    name: "", enabled: true, message: "", deliver: false, channel: "", chat_id: "", session_key: "",
-    delete_after_run: false, schedule_kind: "cron", every_seconds: "", cron_expr: "", tz: "",
+    name: "", enabled: true, message: "", origin_channel: "", origin_chat_id: "", session_key: "",
+    recurring_session_key_format: "", delete_after_run: false, schedule_kind: "cron", every_seconds: "", cron_expr: "", tz: "",
   });
   const [isCreatingCronJob, setIsCreatingCronJob] = useState(false);
   const [cronJobCreateDraft, setCronJobCreateDraft] = useState<CronJobCreateDraft>(EMPTY_CRON_CREATE_DRAFT);
@@ -316,7 +316,7 @@ export default function App() {
       setIsEditingCronJobRegistry(false);
       setCronJobRegistryDraft({
         name: "", label: "", cron_expr: "", every_seconds: "", tz: Intl.DateTimeFormat().resolvedOptions().timeZone, message: "",
-        deliver: false, channel: "", chat_id: "", session_key: "", recurring_session_key_format: "",
+        origin_channel: "", origin_chat_id: "", session_key: "", recurring_session_key_format: "",
       });
       if (addCronJobRegistrySelection && !response.items.some((e) => e.name === addCronJobRegistrySelection)) {
         setAddCronJobRegistrySelection("");
@@ -347,9 +347,9 @@ export default function App() {
       every_seconds: everySeconds,
       tz: cronJobRegistryDraft.tz.trim() || null,
       message: cronJobRegistryDraft.message,
-      deliver: cronJobRegistryDraft.deliver,
-      channel: cronJobRegistryDraft.channel.trim() || null,
-      chat_id: cronJobRegistryDraft.chat_id.trim() || null,
+      origin_channel: cronJobRegistryDraft.origin_channel.trim() || null,
+      origin_chat_id: cronJobRegistryDraft.origin_chat_id.trim() || null,
+      origin_metadata: {},
       session_key: cronJobRegistryDraft.session_key.trim() || null,
       recurring_session_key_format: cronJobRegistryDraft.recurring_session_key_format.trim() || null,
     };
@@ -401,10 +401,10 @@ export default function App() {
       name: job.name,
       enabled: job.enabled,
       message: job.message,
-      deliver: job.deliver,
-      channel: job.channel ?? "",
-      chat_id: job.chat_id ?? "",
+      origin_channel: job.origin_channel ?? "",
+      origin_chat_id: job.origin_chat_id ?? "",
       session_key: job.session_key ?? "",
+      recurring_session_key_format: job.recurring_session_key_format ?? "",
       delete_after_run: job.delete_after_run,
       schedule_kind: job.schedule.kind === "every" ? "every" : "cron",
       every_seconds: job.schedule.every_ms ? String(job.schedule.every_ms / 1000) : "",
@@ -431,10 +431,11 @@ export default function App() {
         name: cronJobEditDraft.name.trim() || null,
         enabled: cronJobEditDraft.enabled,
         message: cronJobEditDraft.message,
-        deliver: cronJobEditDraft.deliver,
-        channel: cronJobEditDraft.channel.trim() || null,
-        chat_id: cronJobEditDraft.chat_id.trim() || null,
+        origin_channel: cronJobEditDraft.origin_channel.trim() || null,
+        origin_chat_id: cronJobEditDraft.origin_chat_id.trim() || null,
         session_key: cronJobEditDraft.session_key.trim() || null,
+        recurring_session_key_format:
+          cronJobEditDraft.recurring_session_key_format.trim() || null,
         delete_after_run: cronJobEditDraft.delete_after_run,
         schedule,
       };
@@ -476,9 +477,9 @@ export default function App() {
       const body = {
         name,
         message: cronJobCreateDraft.message,
-        deliver: cronJobCreateDraft.deliver,
-        channel: cronJobCreateDraft.channel.trim() || null,
-        chat_id: cronJobCreateDraft.chat_id.trim() || null,
+        origin_channel: cronJobCreateDraft.origin_channel.trim() || null,
+        origin_chat_id: cronJobCreateDraft.origin_chat_id.trim() || null,
+        origin_metadata: {},
         session_key: cronJobCreateDraft.session_key.trim() || null,
         recurring_session_key_format:
           cronJobCreateDraft.recurring_session_key_format.trim() || null,
@@ -2299,19 +2300,19 @@ export default function App() {
                                 />
                               </label>
                               <label>
-                                <span>Channel</span>
+                                <span>Origin channel</span>
                                 <input
-                                  value={cronJobEditDraft.channel}
-                                  onChange={(e) => setCronJobEditDraft((d) => ({ ...d, channel: e.target.value }))}
+                                  value={cronJobEditDraft.origin_channel}
+                                  onChange={(e) => setCronJobEditDraft((d) => ({ ...d, origin_channel: e.target.value }))}
                                   placeholder="(optional)"
                                   disabled={!!pending}
                                 />
                               </label>
                               <label>
-                                <span>Chat ID</span>
+                                <span>Origin chat ID</span>
                                 <input
-                                  value={cronJobEditDraft.chat_id}
-                                  onChange={(e) => setCronJobEditDraft((d) => ({ ...d, chat_id: e.target.value }))}
+                                  value={cronJobEditDraft.origin_chat_id}
+                                  onChange={(e) => setCronJobEditDraft((d) => ({ ...d, origin_chat_id: e.target.value }))}
                                   placeholder="(optional, channel-local id)"
                                   disabled={!!pending}
                                 />
@@ -2325,6 +2326,18 @@ export default function App() {
                                   disabled={!!pending}
                                 />
                               </label>
+                              <label>
+                                <span>Recurring session key format</span>
+                                <input
+                                  value={cronJobEditDraft.recurring_session_key_format}
+                                  onChange={(e) => setCronJobEditDraft((d) => ({
+                                    ...d,
+                                    recurring_session_key_format: e.target.value,
+                                  }))}
+                                  placeholder="%Y-%m-%d"
+                                  disabled={!!pending}
+                                />
+                              </label>
                               <div style={{ display: "flex", gap: "1.2rem", flexWrap: "wrap" }}>
                                 <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
                                   <input
@@ -2334,15 +2347,6 @@ export default function App() {
                                     disabled={!!pending}
                                   />
                                   Enabled
-                                </label>
-                                <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                                  <input
-                                    type="checkbox"
-                                    checked={cronJobEditDraft.deliver}
-                                    onChange={(e) => setCronJobEditDraft((d) => ({ ...d, deliver: e.target.checked }))}
-                                    disabled={!!pending}
-                                  />
-                                  Deliver
                                 </label>
                                 <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
                                   <input
@@ -2533,19 +2537,19 @@ export default function App() {
                           />
                         </label>
                         <label>
-                          <span>Channel</span>
+                          <span>Origin channel</span>
                           <input
-                            value={cronJobCreateDraft.channel}
-                            onChange={(e) => setCronJobCreateDraft((d) => ({ ...d, channel: e.target.value }))}
+                            value={cronJobCreateDraft.origin_channel}
+                            onChange={(e) => setCronJobCreateDraft((d) => ({ ...d, origin_channel: e.target.value }))}
                             placeholder="(optional)"
                             disabled={!!pending}
                           />
                         </label>
                         <label>
-                          <span>Chat ID</span>
+                          <span>Origin chat ID</span>
                           <input
-                            value={cronJobCreateDraft.chat_id}
-                            onChange={(e) => setCronJobCreateDraft((d) => ({ ...d, chat_id: e.target.value }))}
+                            value={cronJobCreateDraft.origin_chat_id}
+                            onChange={(e) => setCronJobCreateDraft((d) => ({ ...d, origin_chat_id: e.target.value }))}
                             placeholder="(optional, channel-local id)"
                             disabled={!!pending}
                           />
@@ -2574,15 +2578,6 @@ export default function App() {
                           />
                         </label>
                         <div style={{ display: "flex", gap: "1.2rem", flexWrap: "wrap" }}>
-                          <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                            <input
-                              type="checkbox"
-                              checked={cronJobCreateDraft.deliver}
-                              onChange={(e) => setCronJobCreateDraft((d) => ({ ...d, deliver: e.target.checked }))}
-                              disabled={!!pending}
-                            />
-                            Deliver
-                          </label>
                           <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
                             <input
                               type="checkbox"

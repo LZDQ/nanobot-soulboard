@@ -4,13 +4,11 @@ import json
 import time
 import uuid
 from contextlib import suppress
-from dataclasses import asdict, dataclass, replace
-from datetime import datetime
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Coroutine
 
 from loguru import logger
-from nanobot.agent.tools.context import RequestContext
 from nanobot.agent.tools.cron import CronTool
 from nanobot.cron.service import CronService, _compute_next_run, _validate_schedule_for_add
 from nanobot.cron.types import (
@@ -44,13 +42,16 @@ def _payload_from_persisted(payload: dict) -> SoulCronPayload:
     return SoulCronPayload(
         kind=payload.get("kind", "agent_turn"),
         message=payload.get("message", ""),
-        deliver=payload.get("deliver", False),
-        channel=payload.get("channel"),
-        to=payload.get("to"),
-        channel_meta=(
-            payload.get("channelMeta") or payload.get("channel_meta") or {}
-        ),
         session_key=payload.get("sessionKey") or payload.get("session_key"),
+        origin_channel=(
+            payload.get("originChannel") or payload.get("origin_channel")
+        ),
+        origin_chat_id=(
+            payload.get("originChatId") or payload.get("origin_chat_id")
+        ),
+        origin_metadata=(
+            payload.get("originMetadata") or payload.get("origin_metadata") or {}
+        ),
         recurring_session_key_format=(
             payload.get("recurringSessionKeyFormat")
             or payload.get("recurring_session_key_format")
@@ -63,11 +64,10 @@ def _payload_to_persisted(payload: SoulCronPayload) -> dict:
     return {
         "kind": payload.kind,
         "message": payload.message,
-        "deliver": payload.deliver,
-        "channel": payload.channel,
-        "to": payload.to,
-        "channelMeta": payload.channel_meta,
         "sessionKey": payload.session_key,
+        "originChannel": payload.origin_channel,
+        "originChatId": payload.origin_chat_id,
+        "originMetadata": payload.origin_metadata,
         "recurringSessionKeyFormat": payload.recurring_session_key_format,
     }
 
@@ -77,13 +77,16 @@ def _payload_from_action_params(payload: dict) -> SoulCronPayload:
     return SoulCronPayload(
         kind=payload.get("kind", "agent_turn"),
         message=payload.get("message", ""),
-        deliver=payload.get("deliver", False),
-        channel=payload.get("channel"),
-        to=payload.get("to"),
-        channel_meta=(
-            payload.get("channel_meta") or payload.get("channelMeta") or {}
-        ),
         session_key=payload.get("session_key") or payload.get("sessionKey"),
+        origin_channel=(
+            payload.get("origin_channel") or payload.get("originChannel")
+        ),
+        origin_chat_id=(
+            payload.get("origin_chat_id") or payload.get("originChatId")
+        ),
+        origin_metadata=(
+            payload.get("origin_metadata") or payload.get("originMetadata") or {}
+        ),
         recurring_session_key_format=(
             payload.get("recurring_session_key_format")
             or payload.get("recurringSessionKeyFormat")
@@ -92,10 +95,20 @@ def _payload_from_action_params(payload: dict) -> SoulCronPayload:
 
 
 class SoulCronService(CronService):
-    """Per-soul cron service with soulboard-specific helper accessors."""
+    """Per-soul cron service that persists SoulCronPayload fields."""
 
-    def __init__(self, store_path: Path, soul_id: str):
-        super().__init__(store_path)
+    def __init__(
+        self,
+        store_path: Path,
+        soul_id: str,
+        on_job: Callable[[CronJob], Coroutine[Any, Any, str | None]] | None = None,
+        max_sleep_ms: int = 300_000,
+    ):
+        super().__init__(
+            store_path,
+            on_job=on_job,
+            max_sleep_ms=max_sleep_ms,
+        )
         self._soul_id = soul_id
 
     async def start(self) -> None:
@@ -105,15 +118,6 @@ class SoulCronService(CronService):
             self._soul_id,
             len(self._store.jobs if self._store else []),
         )
-
-    @staticmethod
-    def _normalize_delivery_metadata(raw: Any) -> dict[str, Any]:
-        metadata: dict[str, Any] = {}
-        if not isinstance(raw, dict):
-            return metadata
-        if "is_group" in raw:
-            metadata["is_group"] = bool(raw["is_group"])
-        return metadata
 
     def _load_jobs(self) -> tuple[list[CronJob], int] | None:
         """Override parent loader so SoulCronPayload fields survive a round-trip.
@@ -284,12 +288,11 @@ class SoulCronService(CronService):
         name: str,
         schedule: CronSchedule,
         message: str,
-        deliver: bool = False,
-        channel: str | None = None,
-        to: str | None = None,
         delete_after_run: bool = False,
-        channel_meta: dict | None = None,
         session_key: str | None = None,
+        origin_channel: str | None = None,
+        origin_chat_id: str | None = None,
+        origin_metadata: dict | None = None,
         recurring_session_key_format: str | None = None,
     ) -> CronJob:
         """Add a new job whose payload is always a SoulCronPayload."""
@@ -303,11 +306,10 @@ class SoulCronService(CronService):
             payload=SoulCronPayload(
                 kind="agent_turn",
                 message=message,
-                deliver=deliver,
-                channel=channel,
-                to=to,
-                channel_meta=channel_meta or {},
                 session_key=session_key,
+                origin_channel=origin_channel,
+                origin_chat_id=origin_chat_id,
+                origin_metadata=origin_metadata or {},
                 recurring_session_key_format=recurring_session_key_format,
             ),
             state=CronJobState(next_run_at_ms=_compute_next_run(schedule, now)),
@@ -332,18 +334,18 @@ class SoulCronService(CronService):
         name: str | None = None,
         schedule: CronSchedule | None = None,
         message: str | None = None,
-        deliver: bool | None = None,
-        channel: str | None = ...,
-        to: str | None = ...,
         delete_after_run: bool | None = None,
         session_key: str | None = ...,
+        origin_channel: str | None = ...,
+        origin_chat_id: str | None = ...,
+        origin_metadata: dict | None = ...,
         recurring_session_key_format: str | None = ...,
     ) -> CronJob | Any:
         """Update mutable fields of a soul cron job.
 
-        Extends upstream CronService.update_job with soul-only payload fields
-        (session_key, recurring_session_key_format). Sentinel ``...`` means
-        ``leave unchanged``; an explicit ``None`` clears the field.
+        Extends upstream CronService.update_job with session routing and the
+        soul-only recurring key format. Sentinel ``...`` means leave unchanged;
+        an explicit ``None`` clears the field.
         """
         store = self._load_store()
         job = next((j for j in store.jobs if j.id == job_id), None)
@@ -359,14 +361,14 @@ class SoulCronService(CronService):
             job.name = name
         if message is not None:
             job.payload.message = message
-        if deliver is not None:
-            job.payload.deliver = deliver
-        if channel is not ...:
-            job.payload.channel = channel
-        if to is not ...:
-            job.payload.to = to
         if session_key is not ...:
             job.payload.session_key = session_key
+        if origin_channel is not ...:
+            job.payload.origin_channel = origin_channel
+        if origin_chat_id is not ...:
+            job.payload.origin_chat_id = origin_chat_id
+        if origin_metadata is not ...:
+            job.payload.origin_metadata = origin_metadata or {}
         if recurring_session_key_format is not ...:
             assert isinstance(job.payload, SoulCronPayload), (
                 "Soul cron job payload must be SoulCronPayload"
@@ -396,37 +398,12 @@ class SoulCronService(CronService):
             job.payload = SoulCronPayload(
                 kind=base.kind,
                 message=base.message,
-                deliver=base.deliver,
-                channel=base.channel,
-                to=base.to,
-                channel_meta=base.channel_meta,
                 session_key=base.session_key,
+                origin_channel=base.origin_channel,
+                origin_chat_id=base.origin_chat_id,
+                origin_metadata=base.origin_metadata,
             )
         return super().register_system_job(job)
-
-    def get_session_key(self, job_id: str) -> str | None:
-        store = self._load_store()
-        job = next((item for item in store.jobs if item.id == job_id), None)
-        if job is None:
-            return None
-        return job.payload.session_key
-
-    def get_delivery_metadata(self, job_id: str) -> dict[str, Any]:
-        store = self._load_store()
-        job = next((item for item in store.jobs if item.id == job_id), None)
-        if job is None:
-            return {}
-        return self._normalize_delivery_metadata(job.payload.channel_meta)
-
-    def list_jobs_with_session_keys(
-        self,
-        include_disabled: bool = False,
-    ) -> list[tuple[CronJob, str | None]]:
-        """List jobs paired with the session key that created them."""
-        return [
-            (job, job.payload.session_key)
-            for job in self.list_jobs(include_disabled=include_disabled)
-        ]
 
 
 class SoulCronTool(CronTool):
@@ -436,22 +413,10 @@ class SoulCronTool(CronTool):
         super().__init__(cron_service, default_timezone=default_timezone)
         self._cron: SoulCronService = cron_service
 
-    def set_context(self, ctx: RequestContext) -> None:
-        """Adapt the per-request context before handing it to upstream.
-
-        Upstream ``CronTool.set_context`` now takes a single ``RequestContext``
-        and stores ``ctx.metadata`` verbatim on the origin contextvar. We keep
-        soulboard's behaviour of carrying only normalized delivery metadata
-        (e.g. ``is_group``) by rewriting the metadata, then delegating so the
-        session-key and origin contextvars are populated by upstream.
-        """
-        normalized_metadata = self._cron._normalize_delivery_metadata(ctx.metadata)
-        super().set_context(replace(ctx, metadata=normalized_metadata))
-
     @property
     def description(self) -> str:
         return (
-            "Schedule reminders and recurring tasks. Actions: add, list, remove. "
+            f"{super().description} "
             "List defaults to only the current session's jobs unless you explicitly disable that filter. "
             "For add, 'message' is the content that the future cron job will inject back into the agent loop "
             "when it runs, not an immediate reply to the current user."
@@ -461,29 +426,11 @@ class SoulCronTool(CronTool):
     def parameters(self) -> dict[str, Any]:
         params = dict(super().parameters)
         properties = dict(params.get("properties", {}))
-        properties["message"] = {
-            "type": "string",
-            "description": (
-                "Content that the scheduled job will send back into the agent loop when it fires "
-                "(for add). This becomes the future cron-triggered input, not an immediate user reply."
-            ),
-        }
         properties["only_current_session"] = {
             "type": "boolean",
             "description": (
                 "For list only. Defaults to true and shows only cron jobs created by the current session. "
                 "Set false to list all cron jobs for this soul."
-            ),
-            "default": True,
-        }
-        # Upstream dropped `deliver` from the base cron schema; soulboard still
-        # exposes it so the agent can choose whether a fired job delivers back
-        # to the originating channel.
-        properties["deliver"] = {
-            "type": "boolean",
-            "description": (
-                "For add only. When true (default) the job's output is delivered back to the "
-                "originating channel when it fires; set false to run it silently."
             ),
             "default": True,
         }
@@ -500,115 +447,32 @@ class SoulCronTool(CronTool):
         tz: str | None = None,
         at: str | None = None,
         job_id: str | None = None,
-        deliver: bool = True,
         only_current_session: bool = True,
         **kwargs: Any,
     ) -> str:
-        if action == "add":
-            if self._in_cron_context.get():
-                return "Error: cannot schedule new jobs from within a cron job execution"
-            return self._add_job(
-                name or message[:10],
-                message,
-                every_seconds,
-                cron_expr,
-                tz,
-                at,
-                deliver,
-            )
         if action == "list":
             return self._list_jobs(only_current_session=only_current_session)
-        if action == "remove":
-            return self._remove_job(job_id)
-        return f"Unknown action: {action}"
-
-    def _add_job(
-        self,
-        name: str | None,
-        message: str,
-        every_seconds: int | None,
-        cron_expr: str | None,
-        tz: str | None,
-        at: str | None,
-        deliver: bool = True,
-    ) -> str:
-        """Schedule a job using soulboard's legacy delivery model.
-
-        Upstream's ``_add_job`` dropped the ``deliver`` flag and now passes
-        ``origin_*`` kwargs that ``SoulCronService.add_job`` does not accept, so
-        we override it. The originating session's channel / chat_id / metadata
-        are read from the contextvars upstream's ``set_context`` populates and
-        mapped onto the legacy ``channel`` / ``to`` / ``channel_meta`` payload
-        fields that ``_on_cron_job`` delivers on.
-        """
-        if not message:
-            return (
-                "Error: cron action='add' requires a non-empty 'message' parameter "
-                "describing what to do when the job triggers "
-                "(e.g. the reminder text). Retry including message=\"...\"."
-            )
-        channel = self._origin_channel.get()
-        chat_id = self._origin_chat_id.get()
-        if not channel or not chat_id:
-            return "Error: no session context (channel/chat_id)"
-        if tz and not cron_expr:
-            return "Error: tz can only be used with cron_expr"
-        if tz:
-            if err := self._validate_timezone(tz):
-                return err
-
-        delete_after = False
-        if every_seconds:
-            schedule = CronSchedule(kind="every", every_ms=every_seconds * 1000)
-        elif cron_expr:
-            effective_tz = tz or self._default_timezone
-            if err := self._validate_timezone(effective_tz):
-                return err
-            schedule = CronSchedule(kind="cron", expr=cron_expr, tz=effective_tz)
-        elif at:
-            from zoneinfo import ZoneInfo
-
-            try:
-                dt = datetime.fromisoformat(at)
-            except ValueError:
-                return (
-                    f"Error: invalid ISO datetime format '{at}'. "
-                    "Expected format: YYYY-MM-DDTHH:MM:SS"
-                )
-            if dt.tzinfo is None:
-                if err := self._validate_timezone(self._default_timezone):
-                    return err
-                dt = dt.replace(tzinfo=ZoneInfo(self._default_timezone))
-            at_ms = int(dt.timestamp() * 1000)
-            schedule = CronSchedule(kind="at", at_ms=at_ms)
-            delete_after = True
-        else:
-            return "Error: either every_seconds, cron_expr, or at is required"
-
-        job = self._cron.add_job(
-            name=name or message[:30],
-            schedule=schedule,
+        return await super().execute(
+            action=action,
+            name=name,
             message=message,
-            deliver=deliver,
-            channel=channel,
-            to=chat_id,
-            delete_after_run=delete_after,
-            channel_meta=dict(self._origin_metadata.get() or {}),
-            session_key=self._session_key.get() or None,
+            every_seconds=every_seconds,
+            cron_expr=cron_expr,
+            tz=tz,
+            at=at,
+            job_id=job_id,
+            **kwargs,
         )
-        return f"Created job '{job.name}' (id: {job.id})"
 
     def _list_jobs(self, *, only_current_session: bool = True) -> str:
-        jobs_with_sessions = self._cron.list_jobs_with_session_keys()
+        jobs = self._cron.list_jobs()
         current_session_key = self._session_key.get()
         if only_current_session:
             jobs = [
                 job
-                for job, session_key in jobs_with_sessions
-                if session_key == current_session_key
+                for job in jobs
+                if job.payload.session_key == current_session_key
             ]
-        else:
-            jobs = [job for job, _session_key in jobs_with_sessions]
         if not jobs:
             return "No scheduled jobs."
         lines = []

@@ -133,9 +133,9 @@ export type CronJob = {
   enabled: boolean;
   delete_after_run: boolean;
   message: string;
-  deliver: boolean;
-  channel: string | null;
-  chat_id: string | null;
+  origin_channel: string | null;
+  origin_chat_id: string | null;
+  origin_metadata: Record<string, unknown>;
   session_key: string | null;
   recurring_session_key_format: string | null;
   schedule: CronJobSchedule;
@@ -149,9 +149,9 @@ export type CronJobRegistryEntry = {
   every_seconds: number | null;
   tz: string | null;
   message: string;
-  deliver: boolean;
-  channel: string | null;
-  chat_id: string | null;
+  origin_channel: string | null;
+  origin_chat_id: string | null;
+  origin_metadata: Record<string, unknown>;
   session_key: string | null;
   recurring_session_key_format: string | null;
 };
@@ -167,9 +167,8 @@ export type CronJobRegistryEntryDraft = {
   every_seconds: string;
   tz: string;
   message: string;
-  deliver: boolean;
-  channel: string;
-  chat_id: string;
+  origin_channel: string;
+  origin_chat_id: string;
   session_key: string;
   recurring_session_key_format: string;
 };
@@ -178,10 +177,10 @@ export type CronJobEditDraft = {
   name: string;
   enabled: boolean;
   message: string;
-  deliver: boolean;
-  channel: string;
-  chat_id: string;
+  origin_channel: string;
+  origin_chat_id: string;
   session_key: string;
+  recurring_session_key_format: string;
   delete_after_run: boolean;
   schedule_kind: "every" | "cron";
   every_seconds: string;
@@ -192,9 +191,8 @@ export type CronJobEditDraft = {
 export type CronJobCreateDraft = {
   name: string;
   message: string;
-  deliver: boolean;
-  channel: string;
-  chat_id: string;
+  origin_channel: string;
+  origin_chat_id: string;
   session_key: string;
   recurring_session_key_format: string;
   delete_after_run: boolean;
@@ -207,9 +205,8 @@ export type CronJobCreateDraft = {
 export const EMPTY_CRON_CREATE_DRAFT: CronJobCreateDraft = {
   name: "",
   message: "",
-  deliver: false,
-  channel: "",
-  chat_id: "",
+  origin_channel: "",
+  origin_chat_id: "",
   session_key: "",
   recurring_session_key_format: "",
   delete_after_run: false,

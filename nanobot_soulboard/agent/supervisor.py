@@ -5,7 +5,7 @@ import shutil
 import tempfile
 from contextlib import suppress
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Literal
@@ -13,15 +13,14 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from loguru import logger
 from nanobot.agent.tools.context import ToolContext
-from nanobot.agent.tools.cron import CronTool
 from nanobot.agent.tools.loader import ToolLoader
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.self import MyTool
-from nanobot.bus.events import InboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.manager import ChannelManager
 from nanobot.config.loader import load_config, save_config
 from nanobot.config.schema import Config, MCPServerConfig
+from nanobot.cron.bound_runner import run_bound_cron_job
 from nanobot.cron.types import CronJob, CronSchedule
 from nanobot.providers.base import LLMProvider
 from nanobot.providers.image_generation import image_gen_provider_configs
@@ -75,9 +74,9 @@ class SoulCloneCronJob:
     enabled: bool
     schedule: CronSchedule
     message: str
-    deliver: bool
-    channel: str | None
-    chat_id: str | None
+    origin_channel: str | None
+    origin_chat_id: str | None
+    origin_metadata: dict
     session_key: str | None
     recurring_session_key_format: str | None
     delete_after_run: bool
@@ -586,10 +585,10 @@ class SoulSupervisor:
                 name=entry.label or entry.name,
                 schedule=schedule,
                 message=entry.message,
-                deliver=entry.deliver,
-                channel=entry.channel,
-                to=entry.chat_id,
                 session_key=entry.session_key,
+                origin_channel=entry.origin_channel,
+                origin_chat_id=entry.origin_chat_id,
+                origin_metadata=entry.origin_metadata,
                 recurring_session_key_format=entry.recurring_session_key_format,
             )
             added.append(job)
@@ -602,10 +601,10 @@ class SoulSupervisor:
         name: str,
         schedule: CronSchedule,
         message: str = "",
-        deliver: bool = False,
-        channel: str | None = None,
-        to: str | None = None,
         session_key: str | None = None,
+        origin_channel: str | None = None,
+        origin_chat_id: str | None = None,
+        origin_metadata: dict | None = None,
         recurring_session_key_format: str | None = None,
         delete_after_run: bool = False,
     ) -> CronJob:
@@ -619,10 +618,10 @@ class SoulSupervisor:
             name=name,
             schedule=schedule,
             message=message,
-            deliver=deliver,
-            channel=channel,
-            to=to,
             session_key=session_key,
+            origin_channel=origin_channel,
+            origin_chat_id=origin_chat_id,
+            origin_metadata=origin_metadata,
             recurring_session_key_format=recurring_session_key_format,
             delete_after_run=delete_after_run,
         )
@@ -751,10 +750,10 @@ class SoulSupervisor:
                         name=cron_job.name,
                         schedule=cron_job.schedule,
                         message=cron_job.message,
-                        deliver=cron_job.deliver,
-                        channel=cron_job.channel,
-                        to=cron_job.chat_id,
                         session_key=cron_job.session_key,
+                        origin_channel=cron_job.origin_channel,
+                        origin_chat_id=cron_job.origin_chat_id,
+                        origin_metadata=cron_job.origin_metadata,
                         recurring_session_key_format=cron_job.recurring_session_key_format,
                         delete_after_run=cron_job.delete_after_run,
                     )
@@ -925,12 +924,12 @@ class SoulSupervisor:
         """Create a per-soul cron service rooted under the soul workspace."""
         return SoulCronService(spec.workspace / "cron" / "jobs.json", soul_id=spec.soul_id)
 
-    def list_cron_jobs(self, soul_id: str) -> list[tuple[CronJob, str | None]]:
-        """List one soul's cron jobs and their originating session keys."""
+    def list_cron_jobs(self, soul_id: str) -> list[CronJob]:
+        """List one soul's cron jobs."""
         spec = self.get_spec(soul_id)
         running = self._running_souls.get(soul_id)
         service = running.cron_service if running is not None else self._build_cron_service(spec)
-        return service.list_jobs_with_session_keys(include_disabled=True)
+        return service.list_jobs(include_disabled=True)
 
     def remove_cron_job(self, soul_id: str, job_id: str) -> Literal["removed", "protected", "not_found"]:
         """Remove a soul cron job by ID. Works whether the soul is running or stopped."""
@@ -947,10 +946,10 @@ class SoulSupervisor:
         name: str | None = None,
         enabled: bool | None = None,
         message: str | None = None,
-        deliver: bool | None = None,
-        channel=...,
-        to=...,
         session_key=...,
+        origin_channel=...,
+        origin_chat_id=...,
+        origin_metadata=...,
         recurring_session_key_format=...,
         delete_after_run: bool | None = None,
         schedule: CronSchedule | None = None,
@@ -965,10 +964,10 @@ class SoulSupervisor:
             name=name,
             schedule=schedule,
             message=message,
-            deliver=deliver,
-            channel=channel,
-            to=to,
             session_key=session_key,
+            origin_channel=origin_channel,
+            origin_chat_id=origin_chat_id,
+            origin_metadata=origin_metadata,
             recurring_session_key_format=recurring_session_key_format,
             delete_after_run=delete_after_run,
         )
@@ -1039,10 +1038,8 @@ class SoulSupervisor:
                 f"SoulCronService payload must be SoulCronPayload, got {type(payload).__name__}"
             )
             # Resolve the firing-time datetime in the job's schedule timezone
-            # when set, so dynamic session keys rotate at that zone's midnight
-            # and the reported datetime matches it (e.g. a soul that runs on a
-            # different timezone than this process). Falls back to local time
-            # when schedule.tz is unset or unrecognized.
+            # so dynamic session keys rotate at that zone's midnight. Falls
+            # back to local time when schedule.tz is unset or unrecognized.
             schedule_tz = job.schedule.tz
             fire_dt = datetime.now().astimezone()
             if schedule_tz:
@@ -1051,7 +1048,7 @@ class SoulSupervisor:
                 except (ZoneInfoNotFoundError, ValueError, TypeError) as exc:
                     logger.warning(
                         "Cron job '{}' ({}) schedule.tz {!r} is unrecognized; "
-                        "using local time for session key and reported datetime: {}",
+                        "using local time for session key: {}",
                         job.name,
                         job.id,
                         schedule_tz,
@@ -1074,55 +1071,21 @@ class SoulSupervisor:
             session_key = (
                 rendered_session_key
                 or payload.session_key
-                or f"{payload.channel or 'cli'}:{payload.to or 'direct'}"
+                or f"{payload.origin_channel or 'cli'}:{payload.origin_chat_id or 'direct'}"
             )
-            session = session_manager.get_or_create(session_key)
-            if not session_manager._get_session_path(session_key).exists():
-                if not session.metadata:
-                    session.metadata = {"title": session_key}
-                    if ":" in session_key:
-                        ch_part, chat_part = session_key.split(":", 1)
-                        if ch_part:
-                            session.metadata["channel"] = ch_part
-                        if chat_part:
-                            session.metadata["chat_id"] = chat_part
-                session_manager.save(session)
-                logger.info(
-                    "Cron: created session {!r} for job '{}' ({})",
-                    session_key,
-                    job.name,
-                    job.id,
-                )
-            delivery_metadata = cron_service.get_delivery_metadata(job.id)
-            channel = payload.channel or "cli"
-            chat_id = payload.to or "direct"
-            fired_at = fire_dt.strftime("%Y-%m-%d %H:%M %Z")
-            cron_content = (
-                f"System: cron job {job.name!r} fired. "
-                f"Job message: {job.payload.message!r}. "
-                f"Datetime: {fired_at}"
+            runtime_payload = replace(
+                payload,
+                session_key=session_key,
+                origin_channel=payload.origin_channel or "cli",
+                origin_chat_id=payload.origin_chat_id or "direct",
+                origin_metadata=dict(payload.origin_metadata),
             )
-            cron_tool = running.agent_loop.tools.get("cron")
-            cron_token = None
-            if isinstance(cron_tool, CronTool):
-                cron_token = cron_tool.set_cron_context(True)
-            try:
-                await running.bus.publish_inbound(
-                    InboundMessage(
-                        channel="system",
-                        sender_id="cron",
-                        chat_id=f"{channel}:{chat_id}",
-                        content=cron_content,
-                        session_key_override=session_key,
-                        metadata={
-                            **delivery_metadata,
-                        },
-                    )
-                )
-            finally:
-                if isinstance(cron_tool, CronTool) and cron_token is not None:
-                    cron_tool.reset_cron_context(cron_token)
-            return None
+            runtime_job = replace(job, payload=runtime_payload)
+            return await run_bound_cron_job(
+                runtime_job,
+                agent=running.agent_loop,
+                cron=cron_service,
+            )
 
         cron_service.on_job = _on_cron_job
         return running

@@ -45,9 +45,9 @@ type CloneCronJobDraft = {
   name: string;
   enabled: boolean;
   message: string;
-  deliver: boolean;
-  channel: string;
-  chat_id: string;
+  origin_channel: string;
+  origin_chat_id: string;
+  origin_metadata: Record<string, unknown>;
   session_key: string;
   recurring_session_key_format: string;
   delete_after_run: boolean;
@@ -63,9 +63,9 @@ function cronJobToDraft(job: CronJob): CloneCronJobDraft {
     name: job.name,
     enabled: job.enabled,
     message: job.message,
-    deliver: job.deliver,
-    channel: job.channel ?? "",
-    chat_id: job.chat_id ?? "",
+    origin_channel: job.origin_channel ?? "",
+    origin_chat_id: job.origin_chat_id ?? "",
+    origin_metadata: job.origin_metadata,
     session_key: job.session_key ?? "",
     recurring_session_key_format: job.recurring_session_key_format ?? "",
     delete_after_run: job.delete_after_run,
@@ -210,9 +210,9 @@ export function CloneSoulPage({
         name,
         enabled: cronDraft.enabled,
         message: cronDraft.message,
-        deliver: cronDraft.deliver,
-        channel: cronDraft.channel.trim() || null,
-        chat_id: cronDraft.chat_id.trim() || null,
+        origin_channel: cronDraft.origin_channel.trim() || null,
+        origin_chat_id: cronDraft.origin_chat_id.trim() || null,
+        origin_metadata: cronDraft.origin_metadata,
         session_key: cronDraft.session_key.trim() || null,
         recurring_session_key_format: cronDraft.recurring_session_key_format.trim() || null,
         delete_after_run: cronDraft.delete_after_run,
@@ -581,19 +581,19 @@ export function CloneSoulPage({
                       />
                     </label>
                     <label>
-                      <span>Channel</span>
+                      <span>Origin channel</span>
                       <input
-                        value={cronDraft.channel}
-                        onChange={(event) => updateCronDraft(job.id, { channel: event.target.value })}
+                        value={cronDraft.origin_channel}
+                        onChange={(event) => updateCronDraft(job.id, { origin_channel: event.target.value })}
                         placeholder="optional"
                         disabled={disabled}
                       />
                     </label>
                     <label>
-                      <span>Chat ID</span>
+                      <span>Origin chat ID</span>
                       <input
-                        value={cronDraft.chat_id}
-                        onChange={(event) => updateCronDraft(job.id, { chat_id: event.target.value })}
+                        value={cronDraft.origin_chat_id}
+                        onChange={(event) => updateCronDraft(job.id, { origin_chat_id: event.target.value })}
                         placeholder="optional"
                         disabled={disabled}
                       />
@@ -627,15 +627,6 @@ export function CloneSoulPage({
                           disabled={disabled}
                         />
                         <span>Enabled</span>
-                      </label>
-                      <label className="checkbox">
-                        <input
-                          type="checkbox"
-                          checked={cronDraft.deliver}
-                          onChange={(event) => updateCronDraft(job.id, { deliver: event.target.checked })}
-                          disabled={disabled}
-                        />
-                        <span>Deliver</span>
                       </label>
                       <label className="checkbox">
                         <input

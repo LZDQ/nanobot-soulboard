@@ -116,19 +116,19 @@ export function CronJobRegistryDialog({
                   />
                 </label>
                 <label>
-                  <span>Channel</span>
+                  <span>Origin channel</span>
                   <input
-                    value={draft.channel}
-                    onChange={(event) => setDraft((current) => ({ ...current, channel: event.target.value }))}
+                    value={draft.origin_channel}
+                    onChange={(event) => setDraft((current) => ({ ...current, origin_channel: event.target.value }))}
                     placeholder="whatsapp"
                     disabled={!!pending}
                   />
                 </label>
                 <label>
-                  <span>Chat ID</span>
+                  <span>Origin chat ID</span>
                   <input
-                    value={draft.chat_id}
-                    onChange={(event) => setDraft((current) => ({ ...current, chat_id: event.target.value }))}
+                    value={draft.origin_chat_id}
+                    onChange={(event) => setDraft((current) => ({ ...current, origin_chat_id: event.target.value }))}
                     placeholder="(optional, channel-local id)"
                     disabled={!!pending}
                   />
@@ -155,15 +155,6 @@ export function CronJobRegistryDialog({
                     placeholder="%Y-%m-%d"
                     disabled={!!pending}
                   />
-                </label>
-                <label className="checkbox">
-                  <input
-                    type="checkbox"
-                    checked={draft.deliver}
-                    onChange={(event) => setDraft((current) => ({ ...current, deliver: event.target.checked }))}
-                    disabled={!!pending}
-                  />
-                  <span>Deliver response</span>
                 </label>
                 <button type="button" onClick={onAddEntry} disabled={!!pending}>
                   Add entry
@@ -212,7 +203,7 @@ export function CronJobRegistryDialog({
                   {entry.cron_expr ? <span className="pill idle">{entry.cron_expr}{entry.tz ? ` (${entry.tz})` : ""}</span> : null}
                   {entry.every_seconds ? <span className="pill idle">every {entry.every_seconds}s</span> : null}
                   {entry.recurring_session_key_format ? <span className="pill live">session: {entry.recurring_session_key_format}</span> : null}
-                  {entry.channel ? <span className="pill idle">{entry.channel}</span> : null}
+                  {entry.origin_channel ? <span className="pill idle">{entry.origin_channel}</span> : null}
                 </div>
                 {entry.message ? <p className="muted skill-registry-desc">{entry.message}</p> : null}
               </article>

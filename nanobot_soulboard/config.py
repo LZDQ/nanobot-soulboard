@@ -3,6 +3,7 @@
 import json
 import re
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -138,18 +139,15 @@ class CronJobRegistryEntry(BaseModel):
     every_seconds: int | None = Field(default=None, description="Fixed repeat interval in seconds.")
     tz: str | None = Field(default=None, description="Timezone for cron_expr schedules (e.g. 'America/New_York').")
     message: str = Field(default="", description="Message injected into the agent loop when this job fires.")
-    deliver: bool = Field(default=False)
-    channel: str | None = Field(default=None)
-    chat_id: str | None = Field(
+    origin_channel: str | None = Field(default=None)
+    origin_chat_id: str | None = Field(
         default=None,
-        description=(
-            "Optional channel-local chat identifier. Stored on the cron payload as 'to'; combined with "
-            "channel as the default session_key fallback when no explicit session_key is set."
-        ),
+        description="Optional channel-local destination where the cron response is delivered.",
     )
+    origin_metadata: dict[str, Any] = Field(default_factory=dict)
     session_key: str | None = Field(
         default=None,
-        description="Optional explicit session_key for the scheduled job (overrides the channel:chat fallback).",
+        description="Optional explicit session_key for the scheduled job.",
     )
     recurring_session_key_format: str | None = Field(
         default=None,

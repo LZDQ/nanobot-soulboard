@@ -260,7 +260,7 @@ def _build_prompt_files_response(files: dict[str, str | None]) -> SoulPromptFile
     )
 
 
-def _to_cron_job_response(job: CronJob, session_key: str | None) -> CronJobResponse:
+def _to_cron_job_response(job: CronJob) -> CronJobResponse:
     assert isinstance(job.payload, SoulCronPayload)
     return CronJobResponse(
         id=job.id,
@@ -268,10 +268,10 @@ def _to_cron_job_response(job: CronJob, session_key: str | None) -> CronJobRespo
         enabled=job.enabled,
         delete_after_run=job.delete_after_run,
         message=job.payload.message,
-        deliver=job.payload.deliver,
-        channel=job.payload.channel,
-        chat_id=job.payload.to,
-        session_key=session_key,
+        origin_channel=job.payload.origin_channel,
+        origin_chat_id=job.payload.origin_chat_id,
+        origin_metadata=job.payload.origin_metadata,
+        session_key=job.payload.session_key,
         recurring_session_key_format=job.payload.recurring_session_key_format,
         schedule=CronJobScheduleResponse(
             kind=job.schedule.kind,
@@ -664,9 +664,9 @@ def create_app() -> FastAPI:
                     enabled=item.enabled,
                     schedule=schedule,
                     message=item.message,
-                    deliver=item.deliver,
-                    channel=item.channel,
-                    chat_id=item.chat_id,
+                    origin_channel=item.origin_channel,
+                    origin_chat_id=item.origin_chat_id,
+                    origin_metadata=item.origin_metadata,
                     session_key=item.session_key,
                     recurring_session_key_format=item.recurring_session_key_format,
                     delete_after_run=item.delete_after_run,
@@ -740,7 +740,7 @@ def create_app() -> FastAPI:
             jobs = supervisor.list_cron_jobs(soul_id)
         except KeyError as exc:
             _raise_not_found(_error_detail(exc))
-        return [_to_cron_job_response(job, session_key) for job, session_key in jobs]
+        return [_to_cron_job_response(job) for job in jobs]
 
     @api.post(
         "/souls/{soul_id}/cron-jobs-from-registry",
@@ -762,7 +762,7 @@ def create_app() -> FastAPI:
             _raise_not_found(_error_detail(exc))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return [_to_cron_job_response(job, job.payload.session_key) for job in added]
+        return [_to_cron_job_response(job) for job in added]
 
     @api.post(
         "/souls/{soul_id}/cron-jobs",
@@ -802,10 +802,10 @@ def create_app() -> FastAPI:
                 name=body.name,
                 schedule=schedule,
                 message=body.message,
-                deliver=body.deliver,
-                channel=body.channel,
-                to=body.chat_id,
                 session_key=body.session_key,
+                origin_channel=body.origin_channel,
+                origin_chat_id=body.origin_chat_id,
+                origin_metadata=body.origin_metadata,
                 recurring_session_key_format=body.recurring_session_key_format,
                 delete_after_run=body.delete_after_run,
             )
@@ -813,7 +813,7 @@ def create_app() -> FastAPI:
             _raise_not_found(_error_detail(exc))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return _to_cron_job_response(job, job.payload.session_key)
+        return _to_cron_job_response(job)
 
     @api.delete(
         "/souls/{soul_id}/cron-jobs/{job_id}",
@@ -859,10 +859,16 @@ def create_app() -> FastAPI:
                 name=body.name,
                 enabled=body.enabled,
                 message=body.message,
-                deliver=body.deliver,
-                channel=body.channel if "channel" in body.model_fields_set else ...,
-                to=body.chat_id if "chat_id" in body.model_fields_set else ...,
                 session_key=body.session_key if "session_key" in body.model_fields_set else ...,
+                origin_channel=(
+                    body.origin_channel if "origin_channel" in body.model_fields_set else ...
+                ),
+                origin_chat_id=(
+                    body.origin_chat_id if "origin_chat_id" in body.model_fields_set else ...
+                ),
+                origin_metadata=(
+                    body.origin_metadata if "origin_metadata" in body.model_fields_set else ...
+                ),
                 recurring_session_key_format=(
                     body.recurring_session_key_format
                     if "recurring_session_key_format" in body.model_fields_set
@@ -878,7 +884,7 @@ def create_app() -> FastAPI:
         if result == "protected":
             raise HTTPException(status_code=403, detail=f"Cron job {job_id!r} is a protected system job")
         assert isinstance(result, CronJob)
-        return _to_cron_job_response(result, result.payload.session_key)
+        return _to_cron_job_response(result)
 
     @api.patch(
         "/souls/{soul_id}/prompt-files",
