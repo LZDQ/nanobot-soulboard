@@ -8,6 +8,7 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
+from threading import RLock
 from typing import Callable, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -47,6 +48,10 @@ from nanobot_soulboard.cron import SoulCronPayload, SoulCronService, SoulCronToo
 from nanobot_soulboard.skills import DiscoveredSkill, discover_skills_in_pool
 
 SOUL_PROMPT_FILES = ("AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "SYSTEM.md")
+
+
+class ChannelConflictError(ValueError):
+    """Raised when more than one soul would own the same channel."""
 
 
 @dataclass(frozen=True)
@@ -376,21 +381,97 @@ class SoulSupervisor:
         self.provider_factory = provider_factory
         self._running_souls: dict[str, RunningSoul] = {}
         self._soul_specs: dict[str, SoulSpec] = {}
+        self._state_lock = RLock()
+        self._lifecycle_lock = asyncio.Lock()
         self._skill_pool_cache: dict[str, list[DiscoveredSkill]] = {}
         self._skill_pools_loaded: bool = False
         self._reload_soul_specs()
 
     def _reload_soul_specs(self) -> None:
-        self._soul_specs = {
+        specs = {
             spec.soul_id: spec for spec in discover_soul_specs(self.nano_root)
         }
+        with self._state_lock:
+            self._soul_specs = specs
 
     def list_specs(self) -> list[SoulSpec]:
         """List all resolved soul specs."""
-        specs = dict(self._soul_specs)
-        for soul_id, running in self._running_souls.items():
-            specs.setdefault(soul_id, running.spec)
+        with self._state_lock:
+            specs = dict(self._soul_specs)
+            for soul_id, running in self._running_souls.items():
+                specs.setdefault(soul_id, running.spec)
         return sorted(specs.values(), key=lambda spec: spec.soul_id)
+
+    def _channel_conflicts(
+        self,
+        soul_id: str,
+        channels: list[str],
+        *,
+        running_only: bool,
+    ) -> dict[str, list[str]]:
+        """Return requested channels owned by other configured or running souls."""
+        requested = set(channels)
+        if not requested:
+            return {}
+
+        if running_only:
+            specs = {
+                other_soul_id: running.spec
+                for other_soul_id, running in self._running_souls.items()
+            }
+        else:
+            specs = dict(self._soul_specs)
+            for other_soul_id, running in self._running_souls.items():
+                specs.setdefault(other_soul_id, running.spec)
+
+        conflicts: dict[str, list[str]] = {}
+        for other_soul_id, spec in specs.items():
+            if other_soul_id == soul_id:
+                continue
+            for channel in requested.intersection(spec.overrides.channels):
+                conflicts.setdefault(channel, []).append(other_soul_id)
+        return {
+            channel: sorted(owner_ids)
+            for channel, owner_ids in sorted(conflicts.items())
+        }
+
+    @staticmethod
+    def _format_channel_conflicts(conflicts: dict[str, list[str]]) -> str:
+        return ", ".join(
+            f"{channel} ({', '.join(owner_ids)})"
+            for channel, owner_ids in conflicts.items()
+        )
+
+    def _validate_channel_assignment(
+        self,
+        soul_id: str,
+        channels: list[str],
+    ) -> None:
+        conflicts = self._channel_conflicts(
+            soul_id,
+            channels,
+            running_only=False,
+        )
+        if conflicts:
+            detail = self._format_channel_conflicts(conflicts)
+            raise ChannelConflictError(
+                f"Cannot configure soul '{soul_id}': channels already assigned to other souls: {detail}"
+            )
+
+    def _validate_runtime_channels_available(self, spec: SoulSpec) -> None:
+        conflicts = self._channel_conflicts(
+            spec.soul_id,
+            list(spec.overrides.channels),
+            running_only=True,
+        )
+        if conflicts:
+            detail = self._format_channel_conflicts(conflicts)
+            message = (
+                f"Cannot start soul '{spec.soul_id}': channels already in use by running souls: "
+                f"{detail}"
+            )
+            logger.error(message)
+            raise ChannelConflictError(message)
 
     def get_spec(self, soul_id: str) -> SoulSpec:
         """Return one soul spec or raise KeyError."""
@@ -398,6 +479,20 @@ class SoulSupervisor:
             if spec.soul_id == soul_id:
                 return spec
         raise KeyError(f"Unknown soul: {soul_id}")
+
+    def _reload_soul_spec_from_disk(self, soul_id: str) -> SoulSpec:
+        """Refresh one stopped soul so manual config edits are checked at startup."""
+        spec = self._soul_specs.get(soul_id)
+        if spec is None:
+            raise KeyError(f"Unknown soul: {soul_id}")
+        overrides = load_soul_config(spec.workspace / "config.json")
+        refreshed = SoulSpec(
+            soul_id=soul_id,
+            workspace=spec.workspace,
+            overrides=overrides,
+        )
+        self._soul_specs[soul_id] = refreshed
+        return refreshed
 
     def _prune_missing_mcp_servers(self, soul_id: str) -> None:
         """Remove stale MCP server references from one soul override set."""
@@ -649,19 +744,21 @@ class SoulSupervisor:
 
     def modify_soul(self, soul_id: str, overrides: SoulOverrides) -> None:
         """Update one soul definition unless it is currently running."""
-        if soul_id in self._running_souls:
-            raise RuntimeError(f"Cannot modify running soul: {soul_id}")
-        validate_soul_id(soul_id)
-        _validate_mcp_http_header_overrides(self.base_config.tools.mcp_servers, overrides)
-        spec = self._soul_specs.get(soul_id)
-        if spec is None:
-            raise KeyError(f"Unknown soul: {soul_id}")
-        save_soul_config(overrides, get_soul_config_path(self.nano_root, soul_id))
-        self._soul_specs[soul_id] = SoulSpec(
-            soul_id=soul_id,
-            workspace=spec.workspace,
-            overrides=overrides,
-        )
+        with self._state_lock:
+            if soul_id in self._running_souls:
+                raise RuntimeError(f"Cannot modify running soul: {soul_id}")
+            validate_soul_id(soul_id)
+            _validate_mcp_http_header_overrides(self.base_config.tools.mcp_servers, overrides)
+            spec = self._soul_specs.get(soul_id)
+            if spec is None:
+                raise KeyError(f"Unknown soul: {soul_id}")
+            self._validate_channel_assignment(soul_id, list(overrides.channels))
+            save_soul_config(overrides, get_soul_config_path(self.nano_root, soul_id))
+            self._soul_specs[soul_id] = SoulSpec(
+                soul_id=soul_id,
+                workspace=spec.workspace,
+                overrides=overrides,
+            )
 
     def create_soul(
         self,
@@ -669,20 +766,28 @@ class SoulSupervisor:
         overrides: SoulOverrides | None = None,
     ) -> SoulSpec:
         """Create and persist a new soul definition."""
-        validate_soul_id(soul_id)
-        workspace = get_souls_root(self.nano_root) / soul_id
-        if workspace.exists() or workspace.is_symlink():
-            raise ValueError(f"Soul already exists: {soul_id}")
-        resolved_overrides = overrides or SoulOverrides()
-        _validate_mcp_http_header_overrides(self.base_config.tools.mcp_servers, resolved_overrides)
-        spec = SoulSpec(
-            soul_id=soul_id,
-            workspace=workspace,
-            overrides=resolved_overrides,
-        )
-        save_soul_config(resolved_overrides, workspace / "config.json")
-        self._soul_specs[soul_id] = spec
-        return spec
+        with self._state_lock:
+            validate_soul_id(soul_id)
+            workspace = get_souls_root(self.nano_root) / soul_id
+            if workspace.exists() or workspace.is_symlink():
+                raise ValueError(f"Soul already exists: {soul_id}")
+            resolved_overrides = overrides or SoulOverrides()
+            _validate_mcp_http_header_overrides(
+                self.base_config.tools.mcp_servers,
+                resolved_overrides,
+            )
+            self._validate_channel_assignment(
+                soul_id,
+                list(resolved_overrides.channels),
+            )
+            spec = SoulSpec(
+                soul_id=soul_id,
+                workspace=workspace,
+                overrides=resolved_overrides,
+            )
+            save_soul_config(resolved_overrides, workspace / "config.json")
+            self._soul_specs[soul_id] = spec
+            return spec
 
     def clone_soul(
         self,
@@ -695,9 +800,31 @@ class SoulSupervisor:
         cron_jobs: list[SoulCloneCronJob],
     ) -> SoulSpec:
         """Clone selected workspace content while always clearing memory and sessions."""
+        with self._state_lock:
+            return self._clone_soul_locked(
+                source_soul_id,
+                soul_id,
+                overrides,
+                prompt_files=prompt_files,
+                skill_names=skill_names,
+                cron_jobs=cron_jobs,
+            )
+
+    def _clone_soul_locked(
+        self,
+        source_soul_id: str,
+        soul_id: str,
+        overrides: SoulOverrides,
+        *,
+        prompt_files: dict[str, str],
+        skill_names: list[str],
+        cron_jobs: list[SoulCloneCronJob],
+    ) -> SoulSpec:
+        """Clone a soul while the supervisor state lock is held."""
         source = self.get_spec(source_soul_id)
         validate_soul_id(soul_id)
         _validate_mcp_http_header_overrides(self.base_config.tools.mcp_servers, overrides)
+        self._validate_channel_assignment(soul_id, list(overrides.channels))
         unknown_prompt_files = sorted(set(prompt_files) - set(SOUL_PROMPT_FILES))
         if unknown_prompt_files:
             unknown_str = ", ".join(unknown_prompt_files)
@@ -786,14 +913,15 @@ class SoulSupervisor:
 
     def delete_soul(self, soul_id: str) -> None:
         """Delete a soul definition unless it is currently running."""
-        if soul_id in self._running_souls:
-            raise RuntimeError(f"Cannot delete running soul: {soul_id}")
-        spec = self._soul_specs.get(soul_id)
-        if spec is None:
-            raise KeyError(f"Unknown soul: {soul_id}")
-        del self._soul_specs[soul_id]
-        if spec.workspace.exists():
-            shutil.rmtree(spec.workspace)
+        with self._state_lock:
+            if soul_id in self._running_souls:
+                raise RuntimeError(f"Cannot delete running soul: {soul_id}")
+            spec = self._soul_specs.get(soul_id)
+            if spec is None:
+                raise KeyError(f"Unknown soul: {soul_id}")
+            del self._soul_specs[soul_id]
+            if spec.workspace.exists():
+                shutil.rmtree(spec.workspace)
 
     def list_mcp_servers(self) -> dict[str, MCPServerConfig]:
         """Return MCP server definitions from the base nanobot config."""
@@ -1090,10 +1218,18 @@ class SoulSupervisor:
 
     async def start_soul(self, soul_id: str) -> SoulAgentLoop:
         """Create and start a soul runtime, returning its agent loop."""
-        running = self._running_souls.get(soul_id)
-        if running is None:
-            running = self._build_running_soul(soul_id)
-            self._running_souls[soul_id] = running
+        async with self._lifecycle_lock:
+            return await self._start_soul_locked(soul_id)
+
+    async def _start_soul_locked(self, soul_id: str) -> SoulAgentLoop:
+        """Start one soul while lifecycle operations are serialized."""
+        with self._state_lock:
+            running = self._running_souls.get(soul_id)
+            if running is None:
+                spec = self._reload_soul_spec_from_disk(soul_id)
+                self._validate_runtime_channels_available(spec)
+                running = self._build_running_soul(soul_id)
+                self._running_souls[soul_id] = running
         if not running.cron_started:
             await running.cron_service.start()
             running.cron_started = True
@@ -1133,12 +1269,23 @@ class SoulSupervisor:
         loops: list[SoulAgentLoop] = []
         for spec in self.list_specs():
             if spec.overrides.autostart:
-                loops.append(await self.start_soul(spec.soul_id))
+                try:
+                    loops.append(await self.start_soul(spec.soul_id))
+                except ChannelConflictError:
+                    # start_soul logs the complete ownership conflict. Keep the
+                    # server available and leave this invalid legacy soul stopped.
+                    continue
         return loops
 
     async def stop_soul(self, soul_id: str) -> None:
         """Stop a running soul if present."""
-        running = self._running_souls.pop(soul_id, None)
+        async with self._lifecycle_lock:
+            await self._stop_soul_locked(soul_id)
+
+    async def _stop_soul_locked(self, soul_id: str) -> None:
+        """Stop one soul while lifecycle operations are serialized."""
+        with self._state_lock:
+            running = self._running_souls.pop(soul_id, None)
         if running is None:
             return
         running.agent_loop.stop()

@@ -2,6 +2,7 @@
 
 from nanobot_soulboard.agent.loop import SoulAgentLoop
 from nanobot_soulboard.agent.supervisor import (
+    ChannelConflictError,
     SOUL_PROMPT_FILES,
     SoulCloneCronJob,
     SoulSpec,
@@ -11,6 +12,7 @@ from nanobot_soulboard.agent.supervisor import (
 )
 
 __all__ = [
+    "ChannelConflictError",
     "SOUL_PROMPT_FILES",
     "SoulAgentLoop",
     "SoulCloneCronJob",

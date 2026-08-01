@@ -26,6 +26,7 @@ from nanobot_soulboard.config import (
     load_soulboard_config,
 )
 from nanobot_soulboard.agent import (
+    ChannelConflictError,
     SOUL_PROMPT_FILES,
     SoulAgentLoop,
     SoulCloneCronJob,
@@ -600,11 +601,12 @@ def create_app() -> FastAPI:
     @api.post(
         "/souls",
         response_model=SoulResponse,
-        responses={400: {"model": ErrorResponse}},
+        responses={400: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
         summary="Create Soul",
         description=(
             "Create a new soul workspace with its own config.json and return the resolved definition. "
-            "If the local overrides set autostart=true, the new soul is started immediately."
+            "Each channel may be assigned to only one soul. If the local overrides set autostart=true, "
+            "the new soul is started immediately."
         ),
     )
     async def create_soul(request: Request, body: CreateSoulRequest) -> SoulResponse:
@@ -614,6 +616,8 @@ def create_app() -> FastAPI:
                 body.soul_id,
                 body.overrides,
             )
+        except ChannelConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         _sync_soul_workspace(spec)
@@ -625,17 +629,25 @@ def create_app() -> FastAPI:
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
         if spec.overrides.autostart:
-            await supervisor.start_soul(spec.soul_id)
+            try:
+                await supervisor.start_soul(spec.soul_id)
+            except ChannelConflictError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _to_soul_response(supervisor, spec)
 
     @api.post(
         "/souls/{source_soul_id}/clone",
         response_model=SoulResponse,
-        responses={404: {"model": ErrorResponse}, 400: {"model": ErrorResponse}},
+        responses={
+            404: {"model": ErrorResponse},
+            400: {"model": ErrorResponse},
+            409: {"model": ErrorResponse},
+        },
         summary="Clone Soul",
         description=(
             "Clone selected configuration and workspace content into a new soul directory. Memory and "
-            "sessions are always reset. The source may be running or stopped."
+            "sessions are always reset. The source may be running or stopped, and every selected channel "
+            "must be unassigned."
         ),
     )
     async def clone_soul(
@@ -681,11 +693,16 @@ def create_app() -> FastAPI:
             )
         except KeyError as exc:
             _raise_not_found(_error_detail(exc))
+        except ChannelConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         _sync_soul_workspace(spec)
         if body.start:
-            await supervisor.start_soul(spec.soul_id)
+            try:
+                await supervisor.start_soul(spec.soul_id)
+            except ChannelConflictError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _to_soul_response(supervisor, spec)
 
     @api.get(
@@ -978,11 +995,15 @@ def create_app() -> FastAPI:
     @api.patch(
         "/souls/{soul_id}",
         response_model=SoulResponse,
-        responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+        responses={
+            404: {"model": ErrorResponse},
+            400: {"model": ErrorResponse},
+            409: {"model": ErrorResponse},
+        },
         summary="Update Soul",
         description=(
             "Replace the workspace-local config.json for a soul. This endpoint refuses to modify a running "
-            "soul so runtime state and persisted config cannot diverge."
+            "soul or assign a channel already owned by another soul."
         ),
     )
     def update_soul(request: Request, soul_id: str, body: UpdateSoulRequest) -> SoulResponse:
@@ -991,8 +1012,12 @@ def create_app() -> FastAPI:
             supervisor.modify_soul(soul_id, body.overrides)
         except KeyError as exc:
             _raise_not_found(_error_detail(exc))
+        except ChannelConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         spec = supervisor.get_spec(soul_id)
         _sync_soul_workspace(spec)
         return _to_soul_response(supervisor, spec)
@@ -1019,11 +1044,16 @@ def create_app() -> FastAPI:
     @api.post(
         "/souls/{soul_id}/start",
         response_model=SoulResponse,
-        responses={404: {"model": ErrorResponse}, 400: {"model": ErrorResponse}},
+        responses={
+            404: {"model": ErrorResponse},
+            400: {"model": ErrorResponse},
+            409: {"model": ErrorResponse},
+        },
         summary="Start Soul",
         description=(
             "Build the in-memory nanobot runtime for a soul and start its AgentLoop and enabled channels. "
-            "The stored soul config remains the source of truth; this endpoint only affects runtime state."
+            "The stored soul config remains the source of truth and is refreshed before startup. Startup "
+            "is refused if another running soul already uses any selected channel."
         ),
     )
     async def start_soul(request: Request, soul_id: str) -> SoulResponse:
@@ -1035,6 +1065,8 @@ def create_app() -> FastAPI:
             spec = supervisor.get_spec(soul_id)
         except KeyError as exc:
             _raise_not_found(_error_detail(exc))
+        except ChannelConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _to_soul_response(supervisor, spec)
