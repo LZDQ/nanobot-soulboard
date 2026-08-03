@@ -15,6 +15,7 @@ import { CloneSoulPage } from "./components/CloneSoulPage";
 import { GroupListEditor } from "./components/GroupListEditor";
 import { MarkdownMessage } from "./components/MarkdownMessage";
 import { ToolCallsDetails } from "./components/ToolCallsDetails";
+import { ToolResultDetails } from "./components/ToolResultDetails";
 import { CronJobRegistryDialog } from "./components/registries/CronJobRegistryDialog";
 import { McpServersDialog } from "./components/registries/McpServersDialog";
 import { SkillPoolsDialog } from "./components/registries/SkillPoolsDialog";
@@ -50,7 +51,6 @@ import {
   renderHeaderOverrideSummary,
   renderOverrideValue,
   renderToolList,
-  summarizeToolResult,
 } from "./lib/format";
 import { appendMessages, prependSessionWindow } from "./lib/sessionWindows";
 import { getFocusFromUrl, navigateToFocus, syncFocusToUrl } from "./lib/urlFocus";
@@ -3087,10 +3087,7 @@ export default function App() {
                   ) : null}
                   {toolCalls ? <ToolCallsDetails toolCalls={toolCalls} /> : null}
                   {role === "tool" ? (
-                    <details className="tool-result-details">
-                      <summary>Result: {summarizeToolResult(content)}</summary>
-                      <pre>{renderedContent}</pre>
-                    </details>
+                    <ToolResultDetails content={content} />
                   ) : role === "assistant" ? (
                     <MarkdownMessage content={renderedContent} />
                   ) : (
