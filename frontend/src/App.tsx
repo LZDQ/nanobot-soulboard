@@ -14,6 +14,7 @@ import { CreateSoulDialog } from "./components/CreateSoulDialog";
 import { CloneSoulPage } from "./components/CloneSoulPage";
 import { GroupListEditor } from "./components/GroupListEditor";
 import { MarkdownMessage } from "./components/MarkdownMessage";
+import { ToolCallsDetails } from "./components/ToolCallsDetails";
 import { CronJobRegistryDialog } from "./components/registries/CronJobRegistryDialog";
 import { McpServersDialog } from "./components/registries/McpServersDialog";
 import { SkillPoolsDialog } from "./components/registries/SkillPoolsDialog";
@@ -3084,12 +3085,7 @@ export default function App() {
                       <pre>{reasoning}</pre>
                     </details>
                   ) : null}
-                  {toolCalls ? (
-                    <details className="tool-result-details">
-                      <summary>Tool calls ({toolCalls.length})</summary>
-                      <pre>{JSON.stringify(toolCalls, null, 2)}</pre>
-                    </details>
-                  ) : null}
+                  {toolCalls ? <ToolCallsDetails toolCalls={toolCalls} /> : null}
                   {role === "tool" ? (
                     <details className="tool-result-details">
                       <summary>Result: {summarizeToolResult(content)}</summary>

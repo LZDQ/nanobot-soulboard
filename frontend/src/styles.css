@@ -1276,6 +1276,102 @@ label span {
   margin-bottom: 0.5rem;
 }
 
+.tool-calls-browser {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 7fr);
+  min-height: 8rem;
+  overflow: hidden;
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.48);
+}
+
+.tool-calls-list {
+  border-right: 1px solid var(--panel-border);
+}
+
+button.tool-call-row {
+  display: block;
+  width: 100%;
+  padding: 0.7rem 0.8rem;
+  overflow: hidden;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.8rem;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.tool-call-row + button.tool-call-row {
+  border-top: 1px solid var(--panel-border);
+}
+
+button.tool-call-row:hover {
+  transform: none;
+  background: rgba(255, 216, 188, 0.42);
+}
+
+button.tool-call-row.selected {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.tool-call-payload {
+  display: grid;
+  align-content: start;
+  min-width: 0;
+  max-height: 24rem;
+  overflow: auto;
+  font-size: 0.8rem;
+}
+
+.tool-call-payload > .muted,
+.tool-call-payload > .tool-call-payload-value {
+  padding: 0.8rem;
+}
+
+.tool-call-payload-title {
+  padding: 0.7rem 0.8rem;
+  border-bottom: 1px solid var(--panel-border);
+  color: var(--accent-strong);
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.82rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.tool-call-payload-field {
+  display: grid;
+  grid-template-columns: minmax(7rem, 30%) minmax(0, 1fr);
+  align-items: start;
+}
+
+.tool-call-payload-field + .tool-call-payload-field {
+  border-top: 1px solid var(--panel-border);
+}
+
+.tool-call-payload-field:last-child {
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.tool-call-payload-name,
+.tool-call-payload-field .tool-call-payload-value {
+  padding: 0.7rem 0.8rem;
+}
+
+.tool-call-payload-name {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.tool-call-payload-field .tool-call-payload-value {
+  min-width: 0;
+  border-left: 1px solid var(--panel-border);
+}
+
 .markdown-content {
   line-height: 1.6;
   word-break: break-word;
@@ -1496,6 +1592,10 @@ label span {
     padding-top: 1rem;
     border-left: 0;
     border-top: 1px solid var(--panel-border);
+  }
+
+  .tool-calls-browser {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 7fr);
   }
 
   .hero {
