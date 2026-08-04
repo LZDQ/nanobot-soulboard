@@ -98,7 +98,7 @@ export function CloneSoulPage({
   const [cronDrafts, setCronDrafts] = useState<Record<string, CloneCronJobDraft>>({});
   const [cronPending, setCronPending] = useState(true);
   const [cronError, setCronError] = useState("");
-  const [startNow, setStartNow] = useState(false);
+  const [startNow, setStartNow] = useState(source.overrides.autostart);
   const [pending, setPending] = useState(false);
 
   const selectedChannels = draft.channels
