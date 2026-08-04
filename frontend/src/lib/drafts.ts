@@ -54,6 +54,7 @@ export function getEmptyDraftOverrides(): DraftOverrides {
     description: "",
     model: "",
     provider: "",
+    max_tool_iterations: "",
     channels: "",
     mcp_servers: [],
     mcp_http_headers: {},
@@ -83,6 +84,7 @@ export function overridesToDraft(overrides: SoulOverrides): DraftOverrides {
     description: overrides.description ?? "",
     model: overrides.model ?? "",
     provider: overrides.provider ?? "",
+    max_tool_iterations: overrides.max_tool_iterations == null ? "" : String(overrides.max_tool_iterations),
     channels: overrides.channels.join(", "),
     mcp_servers: [...overrides.mcp_servers],
     mcp_http_headers: Object.fromEntries(
@@ -180,6 +182,12 @@ export function updateDraftToolPolicy(
 }
 
 export function draftToOverrides(draft: DraftOverrides): SoulOverrides {
+  const maxToolIterations = draft.max_tool_iterations.trim()
+    ? Number(draft.max_tool_iterations)
+    : null;
+  if (maxToolIterations !== null && (!Number.isInteger(maxToolIterations) || maxToolIterations < 1)) {
+    throw new Error("Max tool iterations must be a positive integer");
+  }
   const mcpHttpHeaders = Object.fromEntries(
     Object.entries(normalizeSoulMcpHeaderDraft(draft.mcp_servers, draft.mcp_http_headers)).map(
       ([name, rawHeaders]) => [name, parseRecordInput(`mcp_http_headers.${name}`, rawHeaders)],
@@ -189,6 +197,7 @@ export function draftToOverrides(draft: DraftOverrides): SoulOverrides {
     description: draft.description,
     model: draft.model || null,
     provider: draft.provider || null,
+    max_tool_iterations: maxToolIterations,
     channels: splitCsv(draft.channels),
     mcp_servers: [...draft.mcp_servers],
     mcp_http_headers: mcpHttpHeaders,

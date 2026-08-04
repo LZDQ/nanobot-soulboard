@@ -197,6 +197,8 @@ def build_runtime_config(base_config: Config, spec: SoulSpec) -> Config:
         config.agents.defaults.model = spec.overrides.model
     if spec.overrides.provider:
         config.agents.defaults.provider = spec.overrides.provider
+    if spec.overrides.max_tool_iterations is not None:
+        config.agents.defaults.max_tool_iterations = spec.overrides.max_tool_iterations
     _apply_channel_selection(config, list(spec.overrides.channels))
     _validate_mcp_http_header_overrides(base_config.tools.mcp_servers, spec.overrides)
     _apply_mcp_selection(config, list(spec.overrides.mcp_servers))

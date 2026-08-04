@@ -37,6 +37,7 @@ from nanobot_soulboard.schemas import (
     AddSoulCronJobsFromRegistryRequest,
     CreateSoulCronJobRequest,
     AddSoulSkillRequest,
+    ChatResponse,
     ChatRequest,
     CloneSoulRequest,
     CreateMCPServerRequest,
@@ -48,6 +49,7 @@ from nanobot_soulboard.schemas import (
     CronJobStateResponse,
     DisabledToolsResponse,
     ErrorResponse,
+    HealthResponse,
     MCPServerResponse,
     PathsResponse,
     SessionDetailResponse,
@@ -337,11 +339,12 @@ def create_app() -> FastAPI:
 
     @app.get(
         "/health",
+        response_model=HealthResponse,
         summary="Health Check",
         description="Lightweight liveness endpoint for checking whether the FastAPI server process is up.",
     )
-    def health() -> dict[str, str]:
-        return {"status": "ok"}
+    def health() -> HealthResponse:
+        return HealthResponse(status="ok")
 
     @api.get(
         "/paths",
@@ -1180,8 +1183,32 @@ def create_app() -> FastAPI:
         session = manager.get_or_create(session_key)
         return _build_session_detail_response(session, before=before, limit=limit)
 
+    @api.delete(
+        "/souls/{soul_id}/sessions/{session_key}",
+        status_code=204,
+        responses={404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+        summary="Delete Session",
+        description=(
+            "Permanently delete one persisted session from the selected soul's workspace and invalidate "
+            "the corresponding in-memory SessionManager entry."
+        ),
+    )
+    def delete_session(request: Request, soul_id: str, session_key: str) -> None:
+        supervisor = _get_supervisor(request)
+        try:
+            spec = supervisor.get_spec(soul_id)
+        except KeyError as exc:
+            _raise_not_found(_error_detail(exc))
+        manager = _get_session_manager(supervisor, spec)
+        known = {item["key"] for item in manager.list_sessions()}
+        if session_key not in known:
+            _raise_not_found(f"Unknown session: {session_key}")
+        if not manager.delete_session(session_key):
+            raise HTTPException(status_code=500, detail=f"Could not delete session: {session_key}")
+
     @api.post(
         "/souls/{soul_id}/chat",
+        response_model=ChatResponse,
         responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
         summary="Chat With Running Soul",
         description=(
@@ -1189,7 +1216,7 @@ def create_app() -> FastAPI:
             "final assistant response text. This endpoint requires the soul to already be running."
         ),
     )
-    async def chat(request: Request, soul_id: str, body: ChatRequest) -> dict[str, str]:
+    async def chat(request: Request, soul_id: str, body: ChatRequest) -> ChatResponse:
         supervisor = _get_supervisor(request)
         try:
             agent_loop = supervisor.get_agent_loop(soul_id)
@@ -1205,7 +1232,7 @@ def create_app() -> FastAPI:
             channel=body.channel,
             chat_id=body.chat_id,
         )
-        return {"content": response.content if response is not None else ""}
+        return ChatResponse(content=response.content if response is not None else "")
 
     @api.websocket("/ws/souls/{soul_id}/chat")
     async def stream_chat(websocket: WebSocket, soul_id: str) -> None:

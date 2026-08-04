@@ -75,6 +75,14 @@ class SoulOverrides(BaseModel):
         default=None,
         description="Optional provider override layered on top of the base nanobot config.",
     )
+    max_tool_iterations: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Optional maximum number of model/tool iterations for one soul turn. "
+            "When omitted, the soul inherits agents.defaults.maxToolIterations from the base config."
+        ),
+    )
     channels: list[str] = Field(
         default_factory=list,
         description="List of channel names enabled for this soul runtime.",

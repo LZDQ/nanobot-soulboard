@@ -2,6 +2,7 @@ export type SoulOverrides = {
   description: string;
   model?: string | null;
   provider?: string | null;
+  max_tool_iterations?: number | null;
   channels: string[];
   mcp_servers: string[];
   mcp_http_headers: Record<string, Record<string, string>>;
@@ -244,6 +245,7 @@ export type DraftOverrides = {
   description: string;
   model: string;
   provider: string;
+  max_tool_iterations: string;
   channels: string;
   mcp_servers: string[];
   mcp_http_headers: Record<string, string>;

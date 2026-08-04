@@ -309,6 +309,17 @@ export function CloneSoulPage({
               />
             </label>
             <label>
+              <span>Max tool iterations</span>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                value={draft.max_tool_iterations}
+                onChange={(event) => setDraft((current) => ({ ...current, max_tool_iterations: event.target.value }))}
+                placeholder="inherits from base config"
+              />
+            </label>
+            <label>
               <span>Channels</span>
               <GroupListEditor
                 value={selectedChannels}

@@ -48,9 +48,12 @@ export function summarizeToolResult(value: unknown): string {
   return singleLine.length > 96 ? `${singleLine.slice(0, 96)}...` : singleLine;
 }
 
-export function renderOverrideValue(value: string | string[] | boolean | null | undefined): string {
+export function renderOverrideValue(value: string | string[] | boolean | number | null | undefined): string {
   if (typeof value === "boolean") {
     return value ? "enabled" : "disabled";
+  }
+  if (typeof value === "number") {
+    return String(value);
   }
   if (Array.isArray(value)) {
     return value.length ? value.join(", ") : "inherits from base config";

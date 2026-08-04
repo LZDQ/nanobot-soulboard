@@ -114,6 +114,12 @@ class ChatRequest(BaseModel):
     )
 
 
+class ChatResponse(BaseModel):
+    """Final assistant response from a direct chat request."""
+
+    content: str
+
+
 class StreamInputMessage(BaseModel):
     """Inbound websocket chat payload."""
 
@@ -419,6 +425,12 @@ class PathsResponse(BaseModel):
     nano_root: str
     base_config_path: str
     soulboard_config_path: str
+
+
+class HealthResponse(BaseModel):
+    """Server liveness status."""
+
+    status: Literal["ok"]
 
 
 class ToolCatalogItemResponse(BaseModel):

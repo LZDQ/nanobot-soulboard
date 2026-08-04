@@ -1189,6 +1189,44 @@ export default function App() {
     });
   }
 
+  async function deleteSession(key: string) {
+    if (!selectedSoul) {
+      return;
+    }
+    if (!window.confirm(`Permanently delete session ${key}?`)) {
+      return;
+    }
+    const deletingActiveSession = sessionKey === key;
+    const nextPage = sessions.length === 1 && sessionsPage > 0 ? sessionsPage - 1 : sessionsPage;
+    await runAction("delete-session", async () => {
+      if (deletingActiveSession) {
+        socketRef.current?.close();
+        socketRef.current = null;
+        setSocketState("closed");
+      }
+      await api<void>(
+        `/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/sessions/${encodeURIComponent(key)}`,
+        { method: "DELETE" },
+      );
+      if (deletingActiveSession) {
+        setSessionDetail(null);
+        setSessionKey(null);
+        setOlderMessagesPending(false);
+        setChatContent("");
+        setChatReasoning("");
+        setFinalizedMessages([]);
+      }
+      setSessionsPage(nextPage);
+      await refreshSessions(selectedSoul.soul_id, { page: nextPage });
+      toast.success(`Session ${key} deleted`);
+    }).catch((cause) => {
+      if (deletingActiveSession) {
+        setSocketEpoch((current) => current + 1);
+      }
+      notifyError(cause);
+    });
+  }
+
   async function updateMcpServer() {
     if (!selectedMcpServerName) {
       return;
@@ -1707,11 +1745,23 @@ export default function App() {
               ) : null}
               <div className="session-list">
                 {sessions.map((session) => (
-                  <button key={session.key} className="session-card" onClick={() => void loadSession(session.key)}>
-                    <strong>{session.key}</strong>
-                    <span>updated {formatDate(session.updated_at)}</span>
-                    <code>{session.path}</code>
-                  </button>
+                  <div key={session.key} className="session-list-item">
+                    <button className="session-card" onClick={() => void loadSession(session.key)}>
+                      <strong>{session.key}</strong>
+                      <span>updated {formatDate(session.updated_at)}</span>
+                      <code>{session.path}</code>
+                    </button>
+                    <button
+                      type="button"
+                      className="danger session-delete-button"
+                      aria-label={`Delete session ${session.key}`}
+                      title={`Delete session ${session.key}`}
+                      onClick={() => void deleteSession(session.key)}
+                      disabled={!!pending}
+                    >
+                      Delete
+                    </button>
+                  </div>
                 ))}
                 {sessionsTotal === 0 ? <p className="muted">No sessions found for this soul.</p> : null}
               </div>
@@ -2119,6 +2169,17 @@ export default function App() {
                         />
                       </label>
                       <label>
+                        <span>Max tool iterations</span>
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={draft.max_tool_iterations}
+                          onChange={(event) => setDraft((current) => ({ ...current, max_tool_iterations: event.target.value }))}
+                          placeholder="inherits from base config"
+                        />
+                      </label>
+                      <label>
                         <span>Channels</span>
                         <input
                           value={draft.channels}
@@ -2227,6 +2288,10 @@ export default function App() {
                       <article className="override-card">
                         <span>Provider</span>
                         <strong>{renderOverrideValue(selectedSoul.overrides.provider)}</strong>
+                      </article>
+                      <article className="override-card">
+                        <span>Max tool iterations</span>
+                        <strong>{renderOverrideValue(selectedSoul.overrides.max_tool_iterations)}</strong>
                       </article>
                       <article className="override-card">
                         <span>Channels</span>
