@@ -10,8 +10,10 @@ from loguru import logger
 from nanobot.agent.loop import AgentLoop
 from nanobot.agent.tools import mcp as mcp_tools
 from nanobot.agent.tools.base import Tool
+from nanobot.session.goal_state import runner_wall_llm_timeout_s
 
 from nanobot_soulboard.agent.shell import SoulExecTool
+from nanobot_soulboard.agent.subagent import SoulSubagentManager
 from nanobot_soulboard.context import SoulboardContextBuilder
 from nanobot_soulboard.cron import SoulCronTool
 
@@ -56,6 +58,25 @@ class SoulAgentLoop(AgentLoop):
         )
 
     def _register_default_tools(self) -> None:
+        if not isinstance(self.subagents, SoulSubagentManager):
+            upstream_manager = self.subagents
+            self.subagents = SoulSubagentManager(
+                provider=self.provider,
+                workspace=self.workspace,
+                bus=self.bus,
+                model=self.model,
+                tools_config=self.tools_config,
+                max_tool_result_chars=self.max_tool_result_chars,
+                restrict_to_workspace=self.restrict_to_workspace,
+                disabled_skills=sorted(upstream_manager.disabled_skills),
+                disabled_tools=self.disabled_tools,
+                max_iterations=self.max_iterations,
+                max_concurrent_subagents=upstream_manager.max_concurrent_subagents,
+                llm_wall_timeout_for_session=lambda session_key: runner_wall_llm_timeout_s(
+                    self.sessions,
+                    session_key,
+                ),
+            )
         super()._register_default_tools()
         if self.exec_config.enable:
             self.tools.unregister("exec")

@@ -1127,6 +1127,7 @@ class SoulSupervisor:
             workspace=config.workspace_path,
             model=config.agents.defaults.model,
             max_iterations=config.agents.defaults.max_tool_iterations,
+            max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
             context_window_tokens=config.agents.defaults.context_window_tokens,
             context_block_limit=config.agents.defaults.context_block_limit,
             max_tool_result_chars=config.agents.defaults.max_tool_result_chars,
