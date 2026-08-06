@@ -431,16 +431,6 @@ pre {
   color: var(--muted);
 }
 
-.session-list-item {
-  display: flex;
-  align-items: stretch;
-  gap: 0.6rem;
-}
-
-.session-list-item .session-card {
-  min-width: 0;
-}
-
 .session-delete-button {
   flex: 0 0 auto;
   align-self: center;

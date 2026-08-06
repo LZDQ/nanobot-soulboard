@@ -1745,23 +1745,11 @@ export default function App() {
               ) : null}
               <div className="session-list">
                 {sessions.map((session) => (
-                  <div key={session.key} className="session-list-item">
-                    <button className="session-card" onClick={() => void loadSession(session.key)}>
-                      <strong>{session.key}</strong>
-                      <span>updated {formatDate(session.updated_at)}</span>
-                      <code>{session.path}</code>
-                    </button>
-                    <button
-                      type="button"
-                      className="danger session-delete-button"
-                      aria-label={`Delete session ${session.key}`}
-                      title={`Delete session ${session.key}`}
-                      onClick={() => void deleteSession(session.key)}
-                      disabled={!!pending}
-                    >
-                      Delete
-                    </button>
-                  </div>
+                  <button key={session.key} className="session-card" onClick={() => void loadSession(session.key)}>
+                    <strong>{session.key}</strong>
+                    <span>updated {formatDate(session.updated_at)}</span>
+                    <code>{session.path}</code>
+                  </button>
                 ))}
                 {sessionsTotal === 0 ? <p className="muted">No sessions found for this soul.</p> : null}
               </div>
@@ -3079,6 +3067,16 @@ export default function App() {
                 {socketState === "open" ? "open" : socketState}
               </span>
               <code>{sessionKey}</code>
+              <button
+                type="button"
+                className="danger session-delete-button"
+                aria-label={`Delete session ${sessionKey}`}
+                title={`Delete session ${sessionKey}`}
+                onClick={() => void deleteSession(sessionKey)}
+                disabled={!!pending}
+              >
+                Delete
+              </button>
             </div>
           </div>
 
