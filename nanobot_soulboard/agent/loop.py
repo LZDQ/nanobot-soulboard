@@ -24,6 +24,25 @@ from nanobot_soulboard.context import SoulboardContextBuilder
 from nanobot_soulboard.cron import SoulCronTool
 
 
+def _add_soul_context_to_tool_call_log(record: dict[str, Any]) -> None:
+    """Add Soulboard routing context to upstream tool-call log messages."""
+    if (
+        record["name"] != "nanobot.agent.progress_hook"
+        or record["function"] != "before_execute_tools"
+        or not record["message"].startswith("Tool call: ")
+    ):
+        return
+
+    soul_id = record["extra"].get("soul_id", "-")
+    session_key = record["extra"].get("session_key", "-")
+    record["message"] = (
+        f"soul={soul_id} session={session_key} | {record['message']}"
+    )
+
+
+logger.configure(patcher=_add_soul_context_to_tool_call_log)
+
+
 @dataclass(frozen=True)
 class SoulMcpReconnectRequest:
     """A reconnect request that must be fulfilled by the MCP owner task."""
@@ -62,6 +81,24 @@ class SoulAgentLoop(AgentLoop):
             timezone=self.context.timezone,
             disabled_skills=disabled_skills,
         )
+
+    async def _run_agent_loop(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> tuple[str | None, list[str], list[dict], str, bool]:
+        """Run upstream iterations with async-local Soulboard log context."""
+        session = kwargs.get("session")
+        session_key = (
+            session.key
+            if isinstance(session, Session)
+            else kwargs.get("session_key")
+        )
+        with logger.contextualize(
+            soul_id=self.soul_id,
+            session_key=session_key or "-",
+        ):
+            return await super()._run_agent_loop(*args, **kwargs)
 
     def _register_default_tools(self) -> None:
         if not isinstance(self.subagents, SoulSubagentManager):
