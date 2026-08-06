@@ -1,6 +1,7 @@
 """Soulboard-specific agent loop."""
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from typing import Any
@@ -10,6 +11,8 @@ from loguru import logger
 from nanobot.agent.loop import AgentLoop
 from nanobot.agent.tools import mcp as mcp_tools
 from nanobot.agent.tools.base import Tool
+from nanobot.agent.tools.registry import ToolRegistry
+from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.session.goal_state import runner_wall_llm_timeout_s
 
 from nanobot_soulboard.agent.shell import SoulExecTool
@@ -105,6 +108,78 @@ class SoulAgentLoop(AgentLoop):
     def _apply_disabled_tools(self) -> None:
         for name in self.disabled_tools:
             self.tools.unregister(name)
+
+    async def process_direct(
+        self,
+        content: str,
+        session_key: str = "cli:direct",
+        channel: str = "cli",
+        chat_id: str = "direct",
+        media: list[str] | None = None,
+        on_progress: Callable[..., Awaitable[None]] | None = None,
+        on_stream: Callable[[str], Awaitable[None]] | None = None,
+        on_stream_end: Callable[..., Awaitable[None]] | None = None,
+        ephemeral: bool = False,
+        tools: ToolRegistry | None = None,
+        register_pending_queue: bool = False,
+    ) -> OutboundMessage | None:
+        """Upstream ``process_direct`` plus an opt-in mid-turn injection queue.
+
+        With *register_pending_queue*, the session's injection queue is
+        published for the duration of the turn (as bus dispatch does), so bus
+        messages targeting the session — e.g. subagent results — are injected
+        into this turn instead of dispatched as separate turns. The call then
+        stays open while subagents spawned in the turn are still running.
+
+        The queued branch mirrors ``AgentLoop.process_direct`` and must be
+        kept in sync with it on upstream bumps.
+        """
+        if not register_pending_queue:
+            return await super().process_direct(
+                content=content,
+                session_key=session_key,
+                channel=channel,
+                chat_id=chat_id,
+                media=media,
+                on_progress=on_progress,
+                on_stream=on_stream,
+                on_stream_end=on_stream_end,
+                ephemeral=ephemeral,
+                tools=tools,
+            )
+
+        await self._connect_mcp()
+        msg = InboundMessage(
+            channel=channel, sender_id="user", chat_id=chat_id,
+            content=content, media=media or [],
+        )
+        # Share the dispatch lock so direct calls serialize with bus turns.
+        lock = self._session_locks.setdefault(session_key, asyncio.Lock())
+        try:
+            async with lock:
+                kwargs: dict[str, Any] = {
+                    "session_key": session_key,
+                    "on_progress": on_progress,
+                    "on_stream": on_stream,
+                    "on_stream_end": on_stream_end,
+                    "ephemeral": ephemeral,
+                }
+                if tools is not None:
+                    kwargs["tools"] = tools
+                # Only the lock owner may publish the injection queue.
+                pending: asyncio.Queue = asyncio.Queue(maxsize=20)
+                self._pending_queues[session_key] = pending
+                kwargs["pending_queue"] = pending
+                try:
+                    return await self._process_message(
+                        msg,
+                        **kwargs,
+                    )
+                finally:
+                    self._pending_queues.pop(session_key, None)
+        finally:
+            await self._runtime_events().run_status_changed(msg, session_key, "idle")
+            self._runtime_events().clear_turn(session_key)
 
     def _has_missing_mcp_servers(self) -> bool:
         return any(name not in self._mcp_stacks for name in self._mcp_servers)

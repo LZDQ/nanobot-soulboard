@@ -1231,6 +1231,7 @@ def create_app() -> FastAPI:
             session_key=body.session_key,
             channel=body.channel,
             chat_id=body.chat_id,
+            register_pending_queue=True,
         )
         return ChatResponse(content=response.content if response is not None else "")
 

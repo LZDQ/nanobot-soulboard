@@ -153,6 +153,7 @@ class ChatStreamManager:
                 on_progress=_send_progress,
                 on_stream=_send_stream,
                 on_stream_end=_send_stream_end,
+                register_pending_queue=True,
             )
             payloads = [
                 StreamFinalizedMessageResponse(
