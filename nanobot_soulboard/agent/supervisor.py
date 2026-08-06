@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from threading import RLock
-from typing import Callable, Literal
+from typing import Awaitable, Callable, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from loguru import logger
@@ -381,6 +381,9 @@ class SoulSupervisor:
         self.config_path = get_soulboard_config_path(nano_root)
         self.base_config_path = get_base_config_path(nano_root)
         self.provider_factory = provider_factory
+        # Set by the server so stop can cancel frontend chat turns, which run
+        # in ChatStreamManager tasks the supervisor cannot see.
+        self.chat_stream_canceller: Callable[[str], Awaitable[int]] | None = None
         self._running_souls: dict[str, RunningSoul] = {}
         self._soul_specs: dict[str, SoulSpec] = {}
         self._state_lock = RLock()
@@ -1285,12 +1288,63 @@ class SoulSupervisor:
         async with self._lifecycle_lock:
             await self._stop_soul_locked(soul_id)
 
+    async def _drain_soul_work(self, running: RunningSoul) -> None:
+        """Cancel in-flight turns and subagents so stop leaves no orphan tasks.
+
+        Cancellation follows the /stop command semantics: dispatch turns restore
+        their runtime checkpoint into the session, and cancelled subagents emit
+        no announce. A short grace window lets the still-running consumer
+        dispatch announces already queued on the bus (their turns persist the
+        subagent result early); the second sweep then stops those turns without
+        waiting for their summary LLM calls.
+        """
+        soul_id = running.spec.soul_id
+        if self.chat_stream_canceller is not None:
+            stream_cancelled = await self.chat_stream_canceller(soul_id)
+            if stream_cancelled:
+                logger.info(
+                    "Soul '{}': cancelled {} frontend chat turn(s)", soul_id, stream_cancelled
+                )
+        loop = running.agent_loop
+        subagents = loop.subagents
+
+        async def _cancel_sessions() -> int:
+            keys = set(loop._active_tasks.keys()) | set(subagents._session_tasks.keys())
+            total = 0
+            for key in keys:
+                total += await loop._cancel_active_tasks(key)
+            return total
+
+        cancelled = await _cancel_sessions()
+        event_loop = asyncio.get_running_loop()
+        deadline = event_loop.time() + 5.0
+        while running.bus.inbound_size and event_loop.time() < deadline:
+            await asyncio.sleep(0.1)
+        if cancelled or running.bus.inbound_size:
+            # Brief settle so freshly dispatched announce turns reach the
+            # early-persistence point before the sweep cancels them.
+            await asyncio.sleep(0.5)
+        cancelled += await _cancel_sessions()
+        # Defensive: sweep any subagent tasks not tracked under a session key.
+        leftover = [t for t in subagents._running_tasks.values() if not t.done()]
+        for task in leftover:
+            task.cancel()
+        if leftover:
+            await asyncio.gather(*leftover, return_exceptions=True)
+        if cancelled or leftover:
+            logger.info(
+                "Soul '{}': cancelled {} in-flight turn(s)/subagent(s)",
+                soul_id,
+                cancelled + len(leftover),
+            )
+
     async def _stop_soul_locked(self, soul_id: str) -> None:
         """Stop one soul while lifecycle operations are serialized."""
         with self._state_lock:
             running = self._running_souls.pop(soul_id, None)
         if running is None:
             return
+        await self._drain_soul_work(running)
         running.agent_loop.stop()
         # Tear down MCP via the owner task so close_mcp runs on the same task
         # that entered the cancel scopes.
@@ -1319,6 +1373,10 @@ class SoulSupervisor:
         if running.cron_started:
             running.cron_service.stop()
             running.cron_started = False
+        # Flush cached sessions to durable storage (mirrors gateway shutdown).
+        flushed = running.agent_loop.sessions.flush_all()
+        if flushed:
+            logger.info("Soul '{}': flushed {} session(s) to disk", soul_id, flushed)
 
     async def stop_all(self) -> None:
         """Stop all running souls."""

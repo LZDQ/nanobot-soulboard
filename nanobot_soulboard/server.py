@@ -319,6 +319,7 @@ def create_app() -> FastAPI:
             soulboard_config_path=resolved_soulboard_config_path,
         )
         app.state.chat_streams = ChatStreamManager()
+        supervisor.chat_stream_canceller = app.state.chat_streams.cancel_for_soul
         supervisor.refresh_skill_pools()
         for spec in supervisor.list_specs():
             _sync_soul_workspace(spec)

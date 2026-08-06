@@ -1,6 +1,7 @@
 """Websocket chat stream management for nanobot-soulboard."""
 
 import asyncio
+from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -76,6 +77,21 @@ class ChatStreamManager:
         async with stream.lock:
             stream.websockets.discard(websocket)
         await self._cleanup_if_idle(key, stream)
+
+    async def cancel_for_soul(self, soul_id: str) -> int:
+        """Cancel in-flight chat turns for *soul_id*. Returns count cancelled."""
+        cancelled = 0
+        for key, stream in list(self._streams.items()):
+            if key[0] != soul_id:
+                continue
+            task = stream.task
+            if task is None or task.done():
+                continue
+            task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await task
+            cancelled += 1
+        return cancelled
 
     async def enqueue(self, key: StreamKey, agent_loop: AgentLoop, body: ChatRequest) -> None:
         stream = self.get_or_create(key)
