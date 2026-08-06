@@ -1,9 +1,11 @@
 """Soulboard-specific agent loop."""
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 import httpx
@@ -14,6 +16,7 @@ from nanobot.agent.tools.base import Tool
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.session.goal_state import runner_wall_llm_timeout_s
+from nanobot.session.manager import Session
 
 from nanobot_soulboard.agent.shell import SoulExecTool
 from nanobot_soulboard.agent.subagent import SoulSubagentManager
@@ -197,6 +200,144 @@ class SoulAgentLoop(AgentLoop):
         finally:
             await self._runtime_events().run_status_changed(msg, session_key, "idle")
             self._runtime_events().clear_turn(session_key)
+
+    def _persist_subagent_followup(self, session: Session, msg: InboundMessage) -> bool:
+        """Persist subagent follow-ups as user turns, not upstream's assistant-role prefill.
+
+        A message list ending in an assistant-role turn reads to most
+        providers as "continue writing this", not "here is new information".
+        That made the ghost-turn path (below) reliably reproduce the model
+        just re-narrating its own prior status instead of reacting to the
+        subagent's result. Using "user" here keeps the persisted shape
+        identical to mid-turn injections (``AgentLoop._drain_pending``),
+        which inject announces as user messages and do not exhibit the bug.
+
+        Must be kept in sync with upstream ``AgentLoop._persist_subagent_followup``.
+        """
+        if not msg.content:
+            return False
+        task_id = msg.metadata.get("subagent_task_id") if isinstance(msg.metadata, dict) else None
+        if task_id and any(
+            m.get("injected_event") == "subagent_result" and m.get("subagent_task_id") == task_id
+            for m in session.messages
+        ):
+            return False
+        session.add_message(
+            "user",
+            msg.content,
+            sender_id=msg.sender_id,
+            injected_event="subagent_result",
+            subagent_task_id=task_id,
+        )
+        return True
+
+    async def _process_system_message(
+        self,
+        msg: InboundMessage,
+        session_key: str | None = None,
+        on_progress: Callable[..., Awaitable[None]] | None = None,
+        on_stream: Callable[[str], Awaitable[None]] | None = None,
+        on_stream_end: Callable[..., Awaitable[None]] | None = None,
+        pending_queue: asyncio.Queue | None = None,
+    ) -> OutboundMessage | None:
+        """Upstream ``_process_system_message`` with the current turn always
+        addressed as ``role="user"``, including for subagent announces.
+
+        Upstream sets ``current_role="assistant"`` for subagent messages,
+        which — combined with the assistant-role persistence this overrides
+        above — leaves the LLM call ending in an assistant-role message.
+        Providers treat that as a completion to continue, not new input to
+        respond to, so the model silently ignores the announce and repeats
+        its last status line. See ``_persist_subagent_followup`` above.
+
+        Must be kept in sync with upstream ``AgentLoop._process_system_message``
+        on version bumps.
+        """
+        channel, chat_id = (
+            msg.chat_id.split(":", 1) if ":" in msg.chat_id else ("cli", msg.chat_id)
+        )
+        logger.info("Processing system message from {}", msg.sender_id)
+        key = msg.session_key_override or f"{channel}:{chat_id}"
+        session = self.sessions.get_or_create(key)
+        if self._restore_runtime_checkpoint(session):
+            self.sessions.save(session)
+        if self._restore_pending_user_turn(session):
+            self.sessions.save(session)
+
+        session, pending = self.auto_compact.prepare_session(session, key)
+        if pending:
+            logger.info("Memory compact triggered for session {}", key)
+
+        await self.consolidator.maybe_consolidate_by_tokens(
+            session,
+            replay_max_messages=self._max_messages,
+        )
+        is_subagent = msg.sender_id == "subagent"
+        if is_subagent and self._persist_subagent_followup(session, msg):
+            logger.debug("Subagent result persisted for session {}", key)
+            self.sessions.save(session)
+        self._set_tool_context(
+            channel, chat_id, msg.metadata.get("message_id"),
+            msg.metadata, session_key=key,
+        )
+        history = session.get_history(
+            max_messages=self._max_messages,
+            max_tokens=self._replay_token_budget(),
+            include_timestamps=True,
+        )
+        workspace_scope = self.workspace_scopes.for_message(msg, session.metadata)
+
+        messages = self.context.build_messages(
+            history=history,
+            current_message="" if is_subagent else msg.content,
+            channel=channel,
+            chat_id=chat_id,
+            current_role="user",
+            sender_id=msg.sender_id,
+            session_summary=pending,
+            session_metadata=session.metadata,
+            workspace=workspace_scope.project_path,
+            runtime_state=self,
+            inbound_message=msg,
+            skip_runtime_lines=is_subagent,
+            session_key=key,
+            unified_session=self._unified_session,
+        )
+        t_wall = time.time()
+        final_content, _, all_msgs, stop_reason, _ = await self._run_agent_loop(
+            messages, session=session, channel=channel, chat_id=chat_id,
+            message_id=msg.metadata.get("message_id"),
+            metadata=msg.metadata,
+            session_key=key,
+            pending_queue=pending_queue,
+        )
+        wall_done = time.time()
+        latency_ms = max(0, int((wall_done - t_wall) * 1000))
+        self._save_turn(session, all_msgs, 1 + len(history), turn_latency_ms=latency_ms)
+        self._runtime_events().record_turn_latency(key, latency_ms)
+        session.enforce_file_cap(
+            on_archive=partial(self.context.memory.raw_archive, session_key=key)
+        )
+        self._clear_runtime_checkpoint(session)
+        self.sessions.save(session)
+        self._schedule_background(
+            self.consolidator.maybe_consolidate_by_tokens(
+                session,
+                replay_max_messages=self._max_messages,
+            )
+        )
+        content = final_content or "Background task completed."
+        outbound_metadata: dict[str, Any] = {}
+        if channel == "slack" and key.startswith("slack:") and key.count(":") >= 2:
+            outbound_metadata["slack"] = {"thread_ts": key.split(":", 2)[2]}
+        if origin_message_id := msg.metadata.get("origin_message_id"):
+            outbound_metadata["origin_message_id"] = origin_message_id
+        return OutboundMessage(
+            channel=channel,
+            chat_id=chat_id,
+            content=content,
+            metadata=outbound_metadata,
+        )
 
     def _has_missing_mcp_servers(self) -> bool:
         return any(name not in self._mcp_stacks for name in self._mcp_servers)
