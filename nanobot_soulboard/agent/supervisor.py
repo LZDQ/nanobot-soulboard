@@ -1364,6 +1364,12 @@ class SoulSupervisor:
                 pass
         current_loop = asyncio.get_running_loop()
         if running.agent_task and running.agent_task.get_loop() is current_loop and not running.agent_task.get_loop().is_closed():
+            # Cancel rather than wait out run()'s <=1s bus poll timeout: _drain_soul_work
+            # already quiesced in-flight turns, and run()'s CancelledError handler
+            # re-raises immediately once _running is False (see loop.py), so this is
+            # the same graceful exit, just triggered instead of polled for.
+            if not running.agent_task.done():
+                running.agent_task.cancel()
             await asyncio.gather(running.agent_task, return_exceptions=True)
         if running.channels_task:
             running.channels_task.cancel()
