@@ -5,4 +5,5 @@ rsync -rzuP \
 	--exclude node_modules \
 	--exclude static \
 	--exclude nanobot \
+	--exclude .ruff_cache
 	lemon:ldq/nanobot-soulboard/. .

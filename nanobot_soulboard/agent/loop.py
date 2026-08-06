@@ -176,7 +176,24 @@ class SoulAgentLoop(AgentLoop):
                         **kwargs,
                     )
                 finally:
-                    self._pending_queues.pop(session_key, None)
+                    # Drain any messages still in the pending queue and
+                    # re-publish them to the bus so they are processed as
+                    # fresh inbound messages rather than silently lost.
+                    if self._pending_queues.get(session_key) is pending:
+                        self._pending_queues.pop(session_key, None)
+                    leftover = 0
+                    while True:
+                        try:
+                            item = pending.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                        await self.bus.publish_inbound(item)
+                        leftover += 1
+                    if leftover:
+                        logger.info(
+                            "Re-published {} leftover message(s) to bus for session {}",
+                            leftover, session_key,
+                        )
         finally:
             await self._runtime_events().run_status_changed(msg, session_key, "idle")
             self._runtime_events().clear_turn(session_key)
