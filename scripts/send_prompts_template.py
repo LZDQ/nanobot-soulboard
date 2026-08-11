@@ -19,7 +19,7 @@ START_DATE = date.fromisoformat("2026-01-01")
 END_DATE = date.fromisoformat("2026-01-31")
 SOUL_ID = "your-soul-id"
 SESSION_PREFIX = "daily-task"
-BACKEND = "http://127.0.0.1:18791"
+BACKEND = "http://127.0.0.1:18791/soulboard/api"
 WORKERS = 1
 
 
@@ -42,7 +42,7 @@ def dates_between(start: date, end: date) -> Iterator[date]:
         day += timedelta(days=1)
 
 async def require_running_soul(client: httpx.AsyncClient, soul_id: str) -> None:
-    response = await client.get(f"/soulboard/api/souls/{quote(soul_id, safe='')}")
+    response = await client.get(f"/souls/{quote(soul_id, safe='')}")
     response.raise_for_status()
     payload = response.json()
     if not isinstance(payload, dict) or payload.get("running") is not True:
@@ -68,7 +68,7 @@ async def send_prompt(
     )
     async with semaphore:
         response = await client.post(
-            f"/soulboard/api/souls/{quote(soul_id, safe='')}/chat",
+            f"/souls/{quote(soul_id, safe='')}/chat",
             json=request.model_dump(),
         )
         response.raise_for_status()
