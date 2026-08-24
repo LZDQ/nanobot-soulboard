@@ -198,8 +198,15 @@ export default function App() {
     return Array.from(seen).sort((a, b) => a.localeCompare(b));
   }, [souls]);
   const visibleSouls = useMemo(() => {
-    if (!soulGroupFilter) return souls;
-    return souls.filter((soul) => (soul.overrides.groups ?? []).includes(soulGroupFilter));
+    const filteredSouls = soulGroupFilter
+      ? souls.filter((soul) => (soul.overrides.groups ?? []).includes(soulGroupFilter))
+      : souls;
+    return [...filteredSouls].sort((left, right) => {
+      if (left.running !== right.running) {
+        return left.running ? -1 : 1;
+      }
+      return left.soul_id.localeCompare(right.soul_id);
+    });
   }, [souls, soulGroupFilter]);
   const sessionsTotalPages = Math.max(1, Math.ceil(sessionsTotal / sessionsPerPage));
   const clampedSessionsPage = Math.min(sessionsPage, sessionsTotalPages - 1);
