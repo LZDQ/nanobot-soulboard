@@ -261,6 +261,7 @@ async def _reconnect_mcp_from_owner(
         tool = await agent_loop.reconnect_mcp_server_from_owner(
             request.server_name,
             request.tool_name,
+            request.stale_tool,
         )
     except asyncio.CancelledError:
         if _current_task_is_cancelling():
@@ -299,7 +300,7 @@ async def _wait_for_mcp_owner_request(
     shutdown_task = asyncio.create_task(shutdown.wait())
     tasks = {connect_task, reconnect_task, shutdown_task}
     try:
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         if shutdown_task in done and shutdown.is_set():
             return "shutdown", None
         if reconnect_task in done:

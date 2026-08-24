@@ -18,6 +18,11 @@ from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.session.goal_state import runner_wall_llm_timeout_s
 from nanobot.session.manager import Session
 
+from nanobot_soulboard.agent.mcp import (
+    SoulMCPPromptWrapper,
+    SoulMCPResourceWrapper,
+    SoulMCPToolWrapper,
+)
 from nanobot_soulboard.agent.shell import SoulExecTool
 from nanobot_soulboard.agent.subagent import SoulSubagentManager
 from nanobot_soulboard.context import SoulboardContextBuilder
@@ -49,6 +54,7 @@ class SoulMcpReconnectRequest:
 
     server_name: str
     tool_name: str
+    stale_tool: Tool
     future: asyncio.Future[Tool | None]
 
 
@@ -389,12 +395,12 @@ class SoulAgentLoop(AgentLoop):
         tool_name: str,
         stale_tool: Tool,
     ) -> Tool | None:
-        del stale_tool
         future: asyncio.Future[Tool | None] = asyncio.get_running_loop().create_future()
         await self._mcp_reconnect_requests.put(
             SoulMcpReconnectRequest(
                 server_name=server_name,
                 tool_name=tool_name,
+                stale_tool=stale_tool,
                 future=future,
             )
         )
@@ -546,7 +552,7 @@ class SoulAgentLoop(AgentLoop):
                         name,
                     )
                     continue
-                wrapper = mcp_tools.MCPToolWrapper(
+                wrapper = SoulMCPToolWrapper(
                     session,
                     name,
                     tool_def,
@@ -576,7 +582,7 @@ class SoulAgentLoop(AgentLoop):
             try:
                 resources_result = await session.list_resources()
                 for resource in resources_result.resources:
-                    wrapper = mcp_tools.MCPResourceWrapper(
+                    wrapper = SoulMCPResourceWrapper(
                         session,
                         name,
                         resource,
@@ -595,7 +601,7 @@ class SoulAgentLoop(AgentLoop):
             try:
                 prompts_result = await session.list_prompts()
                 for prompt in prompts_result.prompts:
-                    wrapper = mcp_tools.MCPPromptWrapper(
+                    wrapper = SoulMCPPromptWrapper(
                         session,
                         name,
                         prompt,
@@ -659,10 +665,18 @@ class SoulAgentLoop(AgentLoop):
         self,
         server_name: str,
         tool_name: str,
+        stale_tool: Tool,
     ) -> Tool | None:
         cfg = self._mcp_servers.get(server_name)
         if cfg is None:
             return None
+        current_tool = self.tools.get(tool_name)
+        if (
+            current_tool is not None
+            and current_tool is not stale_tool
+            and server_name in self._mcp_stacks
+        ):
+            return current_tool
         mcp_tools._unregister_server_tools(self, self.tools, server_name)
         stack = self._mcp_stacks.pop(server_name, None)
         if stack is not None:
