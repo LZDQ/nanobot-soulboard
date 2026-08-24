@@ -232,7 +232,16 @@ def _current_task_is_cancelling() -> bool:
 
 async def _connect_mcp_from_owner(agent_loop: SoulAgentLoop, ready: asyncio.Future) -> None:
     try:
-        await agent_loop.connect_mcp_from_owner()
+        async with asyncio.timeout(agent_loop.mcp_reconnect_timeout):
+            await agent_loop.connect_mcp_from_owner()
+    except TimeoutError:
+        logger.warning(
+            "Soul '{}' MCP owner connect timed out after {}s",
+            agent_loop.soul_id,
+            agent_loop.mcp_reconnect_timeout,
+        )
+        if not ready.done():
+            ready.set_result(None)
     except asyncio.CancelledError as e:
         if _current_task_is_cancelling():
             if not ready.done():
@@ -255,14 +264,24 @@ async def _reconnect_mcp_from_owner(
     agent_loop: SoulAgentLoop,
     request: SoulMcpReconnectRequest,
 ) -> None:
-    if request.future.done():
-        return
     try:
-        tool = await agent_loop.reconnect_mcp_server_from_owner(
+        async with asyncio.timeout(agent_loop.mcp_reconnect_timeout):
+            tool = await agent_loop.reconnect_mcp_server_from_owner(
+                request.server_name,
+                request.tool_name,
+                request.stale_tool,
+            )
+    except TimeoutError:
+        logger.warning(
+            "Soul '{}' MCP owner reconnect for server '{}' timed out after {}s",
+            agent_loop.soul_id,
             request.server_name,
-            request.tool_name,
-            request.stale_tool,
+            agent_loop.mcp_reconnect_timeout,
         )
+        agent_loop._request_mcp_owner_connect()
+        if not request.future.done():
+            request.future.set_result(None)
+        return
     except asyncio.CancelledError:
         if _current_task_is_cancelling():
             if not request.future.done():
@@ -273,6 +292,7 @@ async def _reconnect_mcp_from_owner(
             agent_loop.soul_id,
             request.server_name,
         )
+        agent_loop._request_mcp_owner_connect()
         if not request.future.done():
             request.future.set_result(None)
         return
@@ -283,6 +303,7 @@ async def _reconnect_mcp_from_owner(
             request.server_name,
             e,
         )
+        agent_loop._request_mcp_owner_connect()
         if not request.future.done():
             request.future.set_result(None)
         return
@@ -344,11 +365,23 @@ async def _own_mcp_lifecycle(
     try:
         await _connect_mcp_from_owner(agent_loop, ready)
         while not shutdown.is_set():
-            request_kind, request = await _wait_for_mcp_owner_request(
-                connect_requested,
-                reconnect_requests,
-                shutdown,
-            )
+            try:
+                request_kind, request = await _wait_for_mcp_owner_request(
+                    connect_requested,
+                    reconnect_requests,
+                    shutdown,
+                )
+            except asyncio.CancelledError:
+                if _current_task_is_cancelling() or shutdown.is_set():
+                    raise
+                logger.warning(
+                    "Soul '{}' MCP owner was cancelled by SDK; discarding stale sessions",
+                    agent_loop.soul_id,
+                )
+                await agent_loop.reset_mcp_connections_from_owner()
+                _drain_mcp_reconnect_requests(reconnect_requests)
+                connect_requested.set()
+                continue
             if request_kind == "shutdown":
                 break
             if request_kind == "reconnect" and request is not None:
@@ -361,6 +394,7 @@ async def _own_mcp_lifecycle(
     finally:
         _drain_mcp_reconnect_requests(reconnect_requests)
     try:
+        await agent_loop.reset_mcp_connections_from_owner()
         await agent_loop.close_mcp()
     except (RuntimeError, BaseExceptionGroup):
         pass
