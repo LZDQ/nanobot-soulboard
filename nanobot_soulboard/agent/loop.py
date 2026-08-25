@@ -18,12 +18,6 @@ from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.session.goal_state import runner_wall_llm_timeout_s
 from nanobot.session.manager import Session
 
-from nanobot_soulboard.agent.mcp import (
-    DEFAULT_MCP_RECONNECT_TIMEOUT_SECONDS,
-    SoulMCPPromptWrapper,
-    SoulMCPResourceWrapper,
-    SoulMCPToolWrapper,
-)
 from nanobot_soulboard.agent.shell import SoulExecTool
 from nanobot_soulboard.agent.subagent import SoulSubagentManager
 from nanobot_soulboard.context import SoulboardContextBuilder
@@ -55,7 +49,6 @@ class SoulMcpReconnectRequest:
 
     server_name: str
     tool_name: str
-    stale_tool: Tool
     future: asyncio.Future[Tool | None]
 
 
@@ -81,7 +74,6 @@ class SoulAgentLoop(AgentLoop):
         self._mcp_reconnect_requests: asyncio.Queue[SoulMcpReconnectRequest] = (
             asyncio.Queue()
         )
-        self._mcp_reconnect_timeout = DEFAULT_MCP_RECONNECT_TIMEOUT_SECONDS
         super().__init__(*args, disabled_skills=disabled_skills, **kwargs)
         self.context = SoulboardContextBuilder(
             self.workspace,
@@ -391,71 +383,28 @@ class SoulAgentLoop(AgentLoop):
         if self._has_missing_mcp_servers():
             self._mcp_connect_requested.set()
 
-    @property
-    def mcp_reconnect_timeout(self) -> float:
-        return self._mcp_reconnect_timeout
-
     async def _reconnect_mcp_from_owner(
         self,
         server_name: str,
         tool_name: str,
         stale_tool: Tool,
     ) -> Tool | None:
+        del stale_tool
         future: asyncio.Future[Tool | None] = asyncio.get_running_loop().create_future()
         await self._mcp_reconnect_requests.put(
             SoulMcpReconnectRequest(
                 server_name=server_name,
                 tool_name=tool_name,
-                stale_tool=stale_tool,
                 future=future,
             )
         )
-        try:
-            async with asyncio.timeout(self._mcp_reconnect_timeout):
-                return await future
-        except TimeoutError:
-            future.cancel()
-            self._mcp_connect_requested.set()
-            logger.warning(
-                "MCP server '{}' reconnect request timed out after {}s; "
-                "a fresh connection will be attempted again",
-                server_name,
-                self._mcp_reconnect_timeout,
-            )
-            return None
+        return await future
 
     def _attach_soulboard_mcp_reconnect_handlers(self) -> None:
         for tool_name in list(self.tools.tool_names):
             tool = self.tools.get(tool_name)
             if isinstance(tool, mcp_tools._MCPWrapperBase):
                 tool.set_reconnect_handler(self._reconnect_mcp_from_owner)
-
-    def _snapshot_mcp_capabilities(
-        self,
-        server_names: set[str],
-    ) -> list[mcp_tools._MCPWrapperBase]:
-        capabilities: list[mcp_tools._MCPWrapperBase] = []
-        for tool_name in list(self.tools.tool_names):
-            tool = self.tools.get(tool_name)
-            if (
-                isinstance(tool, mcp_tools._MCPWrapperBase)
-                and tool._server_name in server_names
-            ):
-                capabilities.append(tool)
-        return capabilities
-
-    def _restore_disconnected_mcp_capabilities(
-        self,
-        capabilities: list[mcp_tools._MCPWrapperBase],
-    ) -> None:
-        connected_servers = set(self._mcp_stacks)
-        for capability in capabilities:
-            if capability._server_name not in connected_servers:
-                self.tools.register(capability)
-
-    def _unregister_mcp_servers(self, server_names: set[str]) -> None:
-        for server_name in server_names:
-            mcp_tools._unregister_server_tools(self, self.tools, server_name)
 
     async def _close_mcp_stack_from_owner(
         self,
@@ -470,22 +419,6 @@ class SoulAgentLoop(AgentLoop):
             logger.debug("MCP server '{}' cleanup cancelled by SDK", server_name)
         except (RuntimeError, BaseExceptionGroup) as e:
             logger.debug("MCP server '{}' cleanup error: {}", server_name, e)
-
-    async def reset_mcp_connections_from_owner(self) -> None:
-        """Discard all MCP sessions while preserving their tool entry points."""
-        server_stacks = list(self._mcp_stacks.items())
-        self._mcp_stacks.clear()
-        self._mcp_connected = False
-        cancellation: asyncio.CancelledError | None = None
-        for server_name, server_stack in reversed(server_stacks):
-            try:
-                await self._close_mcp_stack_from_owner(server_name, server_stack)
-            except asyncio.CancelledError as exc:
-                # A reconnect deadline must not strand the other AnyIO cancel
-                # scopes. Attempt every stack in reverse order, then propagate.
-                cancellation = exc
-        if cancellation is not None:
-            raise cancellation
 
     async def _connect_single_mcp_server_from_owner(
         self,
@@ -613,7 +546,7 @@ class SoulAgentLoop(AgentLoop):
                         name,
                     )
                     continue
-                wrapper = SoulMCPToolWrapper(
+                wrapper = mcp_tools.MCPToolWrapper(
                     session,
                     name,
                     tool_def,
@@ -643,7 +576,7 @@ class SoulAgentLoop(AgentLoop):
             try:
                 resources_result = await session.list_resources()
                 for resource in resources_result.resources:
-                    wrapper = SoulMCPResourceWrapper(
+                    wrapper = mcp_tools.MCPResourceWrapper(
                         session,
                         name,
                         resource,
@@ -662,7 +595,7 @@ class SoulAgentLoop(AgentLoop):
             try:
                 prompts_result = await session.list_prompts()
                 for prompt in prompts_result.prompts:
-                    wrapper = SoulMCPPromptWrapper(
+                    wrapper = mcp_tools.MCPPromptWrapper(
                         session,
                         name,
                         prompt,
@@ -700,9 +633,6 @@ class SoulAgentLoop(AgentLoop):
             result_name, stack = await self._connect_single_mcp_server_from_owner(name, cfg)
             if stack is not None:
                 server_stacks[result_name] = stack
-                # Keep partial progress reachable if a later server reaches the
-                # overall reconnect deadline.
-                self._mcp_stacks[result_name] = stack
         return server_stacks
 
     async def connect_mcp_from_owner(self) -> None:
@@ -711,9 +641,6 @@ class SoulAgentLoop(AgentLoop):
         }
         if self._mcp_connecting or not missing_servers:
             return
-        server_names = set(missing_servers)
-        stale_capabilities = self._snapshot_mcp_capabilities(server_names)
-        self._unregister_mcp_servers(server_names)
         self._mcp_connecting = True
         try:
             connected = await self._connect_mcp_servers_from_owner(missing_servers)
@@ -725,45 +652,28 @@ class SoulAgentLoop(AgentLoop):
                 logger.warning("No MCP servers connected successfully (will retry next message)")
         finally:
             self._mcp_connecting = False
-            self._restore_disconnected_mcp_capabilities(stale_capabilities)
-            self._apply_disabled_tools()
-            self._attach_soulboard_mcp_reconnect_handlers()
+        self._apply_disabled_tools()
+        self._attach_soulboard_mcp_reconnect_handlers()
 
     async def reconnect_mcp_server_from_owner(
         self,
         server_name: str,
         tool_name: str,
-        stale_tool: Tool,
     ) -> Tool | None:
         cfg = self._mcp_servers.get(server_name)
         if cfg is None:
             return None
-        current_tool = self.tools.get(tool_name)
-        if (
-            current_tool is not None
-            and current_tool is not stale_tool
-            and server_name in self._mcp_stacks
-        ):
-            return current_tool
-
-        # The transport contexts are all entered by this task and must be
-        # exited in reverse order. Refresh the complete set so the failed
-        # session is never retained and AnyIO cancel scopes remain balanced.
-        server_names = set(self._mcp_servers)
-        stale_capabilities = self._snapshot_mcp_capabilities(server_names)
-        self._unregister_mcp_servers(server_names)
-        try:
-            await self.reset_mcp_connections_from_owner()
-            await self._connect_mcp_servers_from_owner(dict(self._mcp_servers))
-        finally:
-            self._restore_disconnected_mcp_capabilities(stale_capabilities)
-            self._mcp_connected = bool(self._mcp_stacks)
-            self._apply_disabled_tools()
-            self._attach_soulboard_mcp_reconnect_handlers()
-
-        if server_name not in self._mcp_stacks:
-            self._mcp_connect_requested.set()
+        mcp_tools._unregister_server_tools(self, self.tools, server_name)
+        stack = self._mcp_stacks.pop(server_name, None)
+        if stack is not None:
+            await self._close_mcp_stack_from_owner(server_name, stack)
+        connected = await self._connect_mcp_servers_from_owner({server_name: cfg})
+        self._mcp_stacks.update(connected)
+        self._mcp_connected = bool(self._mcp_stacks)
+        if server_name not in connected:
             return None
+        self._apply_disabled_tools()
+        self._attach_soulboard_mcp_reconnect_handlers()
         return self.tools.get(tool_name)
 
     async def _connect_mcp(self) -> None:
