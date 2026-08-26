@@ -48,6 +48,14 @@ export function getFocusFromUrl(): UrlFocus {
   };
 }
 
+export function getFocusHref(
+  soulId: string,
+  sessionKey: string | null = null,
+  subPath: string = "",
+): string {
+  return buildFocusUrl(soulId, subPath, sessionKey).toString();
+}
+
 export function syncFocusToUrl(
   soulId: string,
   sessionKey: string | null,

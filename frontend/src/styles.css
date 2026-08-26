@@ -386,6 +386,13 @@ pre {
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.75);
   color: var(--text);
+  cursor: pointer;
+  text-decoration: none;
+  transition: transform 140ms ease, opacity 140ms ease;
+}
+
+.soul-card:hover {
+  transform: translateY(-1px);
 }
 
 .soul-card strong {
@@ -1637,6 +1644,15 @@ button.tool-call-row.selected {
   justify-content: space-between;
   cursor: pointer;
   font-weight: 600;
+}
+
+.md-file summary.md-file-summary-with-path {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.prompt-file-path-button {
+  grid-column: 1 / -1;
 }
 
 .md-file-title {

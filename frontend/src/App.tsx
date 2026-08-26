@@ -53,7 +53,7 @@ import {
   renderToolList,
 } from "./lib/format";
 import { appendMessages, prependSessionWindow } from "./lib/sessionWindows";
-import { getFocusFromUrl, navigateToFocus, syncFocusToUrl } from "./lib/urlFocus";
+import { getFocusFromUrl, getFocusHref, navigateToFocus, syncFocusToUrl } from "./lib/urlFocus";
 import {
   DEFAULT_CHAT_CHANNEL,
   DEFAULT_CHAT_ID,
@@ -1060,29 +1060,6 @@ export default function App() {
     }
   }
 
-  async function restartSoul() {
-    if (!selectedSoul || !selectedSoul.running) {
-      return;
-    }
-    const soulId = selectedSoul.soul_id;
-    try {
-      await runAction("restart", async () => {
-        await api<Soul>(`/api/souls/${encodeURIComponent(soulId)}/stop`, {
-          method: "POST",
-        });
-        await api<Soul>(`/api/souls/${encodeURIComponent(soulId)}/start`, {
-          method: "POST",
-        });
-        await refreshSouls(soulId);
-        await refreshCronJobs(soulId);
-        await refreshPromptFiles(soulId, true);
-      });
-      toast.success(`${soulId} restarted`);
-    } catch (cause) {
-      notifyError(cause);
-    }
-  }
-
   async function deleteSoul() {
     if (!selectedSoul) {
       return;
@@ -1666,12 +1643,17 @@ export default function App() {
           </div>
           <div className="soul-list">
             {visibleSouls.map((soul) => (
-              <button
+              <a
                 key={soul.soul_id}
                 className={`soul-card ${soul.running ? "running" : "stopped"} ${selectedSoulId === soul.soul_id ? "active" : ""}`}
+                href={getFocusHref(soul.soul_id)}
                 aria-label={`${soul.soul_id}, ${soul.running ? "running" : "stopped"}`}
                 title={`${soul.soul_id} · ${soul.running ? "Running" : "Stopped"}`}
-                onClick={() => {
+                onClick={(event) => {
+                  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+                    return;
+                  }
+                  event.preventDefault();
                   navigateToFocus(soul.soul_id);
                   setSelectedSoulId(soul.soul_id);
                   setActiveSubPath("");
@@ -1680,7 +1662,7 @@ export default function App() {
               >
                 <span className="soul-status-dot" aria-hidden="true" />
                 <strong>{soul.soul_id}</strong>
-              </button>
+              </a>
             ))}
             {!souls.length ? (
               <p className="muted">No souls configured yet.</p>
@@ -2031,11 +2013,6 @@ export default function App() {
                 <button onClick={() => void toggleSoulRunning()} disabled={!!pending}>
                   {selectedSoul.running ? "Stop" : "Start"}
                 </button>
-                {selectedSoul.running ? (
-                  <button className="ghost" onClick={() => void restartSoul()} disabled={!!pending}>
-                    Restart
-                  </button>
-                ) : null}
                 <button
                   className="ghost"
                   onClick={() => {
@@ -2996,6 +2973,7 @@ export default function App() {
                         return (
                           <details key={name} className="md-file" open={isEditingPromptFiles ? selected : undefined}>
                             <summary
+                              className={name === "SYSTEM.md" ? "md-file-summary-with-path" : undefined}
                               onClick={
                                 isEditingPromptFiles
                                   ? (event) => {
@@ -3021,6 +2999,23 @@ export default function App() {
                                 <span>{name}</span>
                               </span>
                               <span className={`pill ${exists ? "live" : "idle"}`}>{exists ? "present" : "missing"}</span>
+                              {name === "SYSTEM.md" ? (
+                                <button
+                                  type="button"
+                                  className="ghost skill-path-button prompt-file-path-button"
+                                  title={`Copy ${selectedSoul.workspace}/SYSTEM.md`}
+                                  onClick={(event) => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    const path = `${selectedSoul.workspace.replace(/[\\/]+$/, "")}/SYSTEM.md`;
+                                    void copyToClipboard(path).then(() => {
+                                      toast.success("Copied SYSTEM.md path");
+                                    });
+                                  }}
+                                >
+                                  <code>{`${selectedSoul.workspace.replace(/[\\/]+$/, "")}/SYSTEM.md`}</code>
+                                </button>
+                              ) : null}
                             </summary>
                             {isEditingPromptFiles && selected ? (
                               <label>
