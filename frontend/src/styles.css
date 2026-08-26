@@ -1647,7 +1647,14 @@ button.tool-call-row.selected {
 }
 
 .prompt-file-path-button {
+  width: fit-content;
+  max-width: 100%;
   min-width: 0;
+  justify-self: center;
+}
+
+.prompt-file-path-button code {
+  width: auto;
 }
 
 .md-file-title {
