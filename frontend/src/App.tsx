@@ -2964,6 +2964,7 @@ export default function App() {
                         const exists = file?.exists ?? false;
                         const content = isEditingPromptFiles ? promptDraft[name] : (file?.content ?? "");
                         const selected = promptSelection[name];
+                        const path = `${selectedSoul.workspace.replace(/[\\/]+$/, "")}/${name}`;
                         const toggleSelection = () => {
                           setPromptSelection((current) => ({
                             ...current,
@@ -2973,7 +2974,6 @@ export default function App() {
                         return (
                           <details key={name} className="md-file" open={isEditingPromptFiles ? selected : undefined}>
                             <summary
-                              className={name === "SYSTEM.md" ? "md-file-summary-with-path" : undefined}
                               onClick={
                                 isEditingPromptFiles
                                   ? (event) => {
@@ -2998,24 +2998,21 @@ export default function App() {
                                 ) : null}
                                 <span>{name}</span>
                               </span>
+                              <button
+                                type="button"
+                                className="ghost skill-path-button prompt-file-path-button"
+                                title={`Copy ${path}`}
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  void copyToClipboard(path).then(() => {
+                                    toast.success(`Copied ${name} path`);
+                                  });
+                                }}
+                              >
+                                <code>{path}</code>
+                              </button>
                               <span className={`pill ${exists ? "live" : "idle"}`}>{exists ? "present" : "missing"}</span>
-                              {name === "SYSTEM.md" ? (
-                                <button
-                                  type="button"
-                                  className="ghost skill-path-button prompt-file-path-button"
-                                  title={`Copy ${selectedSoul.workspace}/SYSTEM.md`}
-                                  onClick={(event) => {
-                                    event.preventDefault();
-                                    event.stopPropagation();
-                                    const path = `${selectedSoul.workspace.replace(/[\\/]+$/, "")}/SYSTEM.md`;
-                                    void copyToClipboard(path).then(() => {
-                                      toast.success("Copied SYSTEM.md path");
-                                    });
-                                  }}
-                                >
-                                  <code>{`${selectedSoul.workspace.replace(/[\\/]+$/, "")}/SYSTEM.md`}</code>
-                                </button>
-                              ) : null}
                             </summary>
                             {isEditingPromptFiles && selected ? (
                               <label>

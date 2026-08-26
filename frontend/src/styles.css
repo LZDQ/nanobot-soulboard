@@ -1638,21 +1638,16 @@ button.tool-call-row.selected {
 }
 
 .md-file summary {
-  display: flex;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
   gap: 0.75rem;
   align-items: center;
-  justify-content: space-between;
   cursor: pointer;
   font-weight: 600;
 }
 
-.md-file summary.md-file-summary-with-path {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-}
-
 .prompt-file-path-button {
-  grid-column: 1 / -1;
+  min-width: 0;
 }
 
 .md-file-title {
@@ -1662,7 +1657,7 @@ button.tool-call-row.selected {
 }
 
 .md-file-title.editable {
-  width: 100%;
+  min-width: max-content;
 }
 
 .md-file-title input {
