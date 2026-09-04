@@ -18,6 +18,7 @@ from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.session.goal_state import runner_wall_llm_timeout_s
 from nanobot.session.manager import Session
 
+from nanobot_soulboard.agent.search import replace_grep_tool
 from nanobot_soulboard.agent.shell import SoulExecTool
 from nanobot_soulboard.agent.subagent import SoulSubagentManager
 from nanobot_soulboard.context import SoulboardContextBuilder
@@ -121,6 +122,7 @@ class SoulAgentLoop(AgentLoop):
                 ),
             )
         super()._register_default_tools()
+        replace_grep_tool(self.tools)
         if self.exec_config.enable:
             self.tools.unregister("exec")
             self.tools.register(

@@ -28,6 +28,7 @@ from nanobot.providers.image_generation import image_gen_provider_configs
 from nanobot.session.manager import SessionManager
 
 from nanobot_soulboard.agent.loop import SoulAgentLoop, SoulMcpReconnectRequest
+from nanobot_soulboard.agent.search import replace_grep_tool
 from nanobot_soulboard.agent.shell import SoulExecTool
 from nanobot_soulboard.config import (
     CronJobRegistryEntry,
@@ -960,6 +961,7 @@ class SoulSupervisor:
             timezone=self.base_config.agents.defaults.timezone,
         )
         ToolLoader().load(ctx, registry)
+        replace_grep_tool(registry)
 
         if tools_config.my.enable:
             registry.register(

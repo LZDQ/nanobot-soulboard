@@ -9,6 +9,7 @@ from nanobot.bus.queue import MessageBus
 from nanobot.config.schema import ToolsConfig
 from nanobot.providers.base import LLMProvider
 
+from nanobot_soulboard.agent.search import replace_grep_tool
 from nanobot_soulboard.agent.shell import SoulExecTool
 
 
@@ -53,6 +54,7 @@ class SoulSubagentManager(SubagentManager):
         root = self.workspace if workspace is None else workspace
         config = tools_config if tools_config is not None else self._subagent_tools_config()
         registry = super()._build_tools(workspace=root, tools_config=config)
+        replace_grep_tool(registry)
 
         if config.exec.enable and registry.has("exec"):
             registry.unregister("exec")
