@@ -985,6 +985,9 @@ export default function App() {
     try {
       await runAction("update", async () => {
         if (selectedSoul.running) {
+          socketRef.current?.close();
+          socketRef.current = null;
+          setSocketState("closed");
           await api<Soul>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/stop`, {
             method: "POST",
           });
@@ -997,6 +1000,7 @@ export default function App() {
           await api<Soul>(`/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/start`, {
             method: "POST",
           });
+          setSocketEpoch((current) => current + 1);
         }
         await refreshSouls(selectedSoul.soul_id);
         setIsEditingSoul(false);
