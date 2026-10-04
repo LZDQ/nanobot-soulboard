@@ -19,6 +19,7 @@ from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.session.goal_state import runner_wall_llm_timeout_s
 from nanobot.session.manager import Session
 
+from nanobot_soulboard.agent.autocompact import SoulAutoCompact
 from nanobot_soulboard.agent.search import replace_grep_tool
 from nanobot_soulboard.agent.shell import SoulExecTool
 from nanobot_soulboard.agent.subagent import SoulSubagentManager
@@ -70,6 +71,7 @@ class SoulAgentLoop(AgentLoop):
         disabled_tools: list[str] | None = None,
         include_timestamps: bool = True,
         include_runtime_context: bool = True,
+        session_ttl_minutes: int = 0,
         **kwargs,
     ):
         self.soul_id = soul_id
@@ -78,7 +80,17 @@ class SoulAgentLoop(AgentLoop):
         self._mcp_reconnect_requests: asyncio.Queue[SoulMcpReconnectRequest] = (
             asyncio.Queue()
         )
-        super().__init__(*args, disabled_skills=disabled_skills, **kwargs)
+        super().__init__(
+            *args,
+            disabled_skills=disabled_skills,
+            session_ttl_minutes=session_ttl_minutes,
+            **kwargs,
+        )
+        self.auto_compact = SoulAutoCompact(
+            sessions=self.sessions,
+            consolidator=self.consolidator,
+            session_ttl_minutes=session_ttl_minutes,
+        )
         self.context = SoulboardContextBuilder(
             self.workspace,
             soul_id=soul_id,
