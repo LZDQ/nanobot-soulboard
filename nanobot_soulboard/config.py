@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -83,6 +84,21 @@ class SoulOverrides(BaseModel):
             "When omitted, the soul inherits agents.defaults.maxToolIterations from the base config."
         ),
     )
+    timezone: str | None = Field(
+        default=None,
+        description=(
+            "Optional IANA timezone override. When omitted, the soul inherits "
+            "agents.defaults.timezone from the base config."
+        ),
+    )
+    include_timestamps: bool = Field(
+        default=True,
+        description="Whether replayed user messages include their persisted message timestamps.",
+    )
+    include_runtime_context: bool = Field(
+        default=True,
+        description="Whether the current message includes nanobot runtime context metadata.",
+    )
     channels: list[str] = Field(
         default_factory=list,
         description="List of channel names enabled for this soul runtime.",
@@ -132,6 +148,20 @@ class SoulOverrides(BaseModel):
                 continue
             normalized.append(item)
             seen.add(item)
+        return normalized
+
+    @field_validator("timezone")
+    @classmethod
+    def _validate_timezone(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("timezone must be an IANA timezone name")
+        try:
+            ZoneInfo(normalized)
+        except ZoneInfoNotFoundError:
+            raise ValueError(f"unknown timezone '{normalized}'") from None
         return normalized
 
     @field_validator("enabled_tools", "disabled_tools")

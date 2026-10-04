@@ -3,6 +3,9 @@ export type SoulOverrides = {
   model?: string | null;
   provider?: string | null;
   max_tool_iterations?: number | null;
+  timezone?: string | null;
+  include_timestamps: boolean;
+  include_runtime_context: boolean;
   channels: string[];
   mcp_servers: string[];
   mcp_http_headers: Record<string, Record<string, string>>;
@@ -246,6 +249,9 @@ export type DraftOverrides = {
   model: string;
   provider: string;
   max_tool_iterations: string;
+  timezone: string;
+  include_timestamps: boolean;
+  include_runtime_context: boolean;
   channels: string;
   mcp_servers: string[];
   mcp_http_headers: Record<string, string>;

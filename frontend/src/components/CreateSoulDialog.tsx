@@ -150,6 +150,30 @@ export function CreateSoulDialog({
                 />
               </label>
               <label>
+                <span>Timezone</span>
+                <input
+                  value={draft.timezone}
+                  onChange={(event) => setDraft((current) => ({ ...current, timezone: event.target.value }))}
+                  placeholder="inherits from base config"
+                />
+              </label>
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={draft.include_timestamps}
+                  onChange={(event) => setDraft((current) => ({ ...current, include_timestamps: event.target.checked }))}
+                />
+                <span>Include message timestamps</span>
+              </label>
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={draft.include_runtime_context}
+                  onChange={(event) => setDraft((current) => ({ ...current, include_runtime_context: event.target.checked }))}
+                />
+                <span>Include runtime context</span>
+              </label>
+              <label>
                 <span>Channels</span>
                 <GroupListEditor
                   value={selectedChannels}

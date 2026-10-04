@@ -10,9 +10,10 @@ from typing import Any
 
 import httpx
 from loguru import logger
-from nanobot.agent.loop import AgentLoop
+from nanobot.agent.loop import AgentLoop, TurnContext
 from nanobot.agent.tools import mcp as mcp_tools
 from nanobot.agent.tools.base import Tool
+from nanobot.agent.tools.message import MessageTool
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.session.goal_state import runner_wall_llm_timeout_s
@@ -67,6 +68,8 @@ class SoulAgentLoop(AgentLoop):
         soul_id: str,
         disabled_skills: list[str] | None = None,
         disabled_tools: list[str] | None = None,
+        include_timestamps: bool = True,
+        include_runtime_context: bool = True,
         **kwargs,
     ):
         self.soul_id = soul_id
@@ -81,7 +84,56 @@ class SoulAgentLoop(AgentLoop):
             soul_id=soul_id,
             timezone=self.context.timezone,
             disabled_skills=disabled_skills,
+            include_timestamps=include_timestamps,
+            include_runtime_context=include_runtime_context,
         )
+
+    async def _state_build(self, ctx: TurnContext) -> str:
+        """Build a normal turn using this soul's history timestamp policy."""
+        if not ctx.ephemeral:
+            await self.consolidator.maybe_consolidate_by_tokens(
+                ctx.session,
+                replay_max_messages=self._max_messages,
+            )
+        self._set_tool_context(
+            ctx.msg.channel,
+            ctx.msg.chat_id,
+            ctx.msg.metadata.get("message_id"),
+            ctx.msg.metadata,
+            session_key=ctx.session_key,
+        )
+        message_tool = self.tools.get("message")
+        if isinstance(message_tool, MessageTool):
+            message_tool.start_turn()
+
+        ctx.history = ctx.session.get_history(
+            max_messages=self._max_messages,
+            max_tokens=self._replay_token_budget(),
+            include_timestamps=self.context.include_timestamps,
+        )
+        self._runtime_events().record_turn_runtime(
+            ctx.session_key,
+            self.llm_runtime(),
+        )
+
+        ctx.initial_messages = self._build_initial_messages(
+            ctx.msg,
+            ctx.session,
+            ctx.history,
+            ctx.pending_summary,
+            include_memory_recent_history=not ctx.ephemeral,
+        )
+        ctx.user_persisted_early = self._persist_user_message_early(
+            ctx.msg,
+            ctx.session,
+        )
+
+        if ctx.on_progress is None:
+            ctx.on_progress = await self._build_bus_progress_callback(ctx.msg)
+        if ctx.on_retry_wait is None:
+            ctx.on_retry_wait = await self._build_retry_wait_callback(ctx.msg)
+
+        return "ok"
 
     async def _run_agent_loop(
         self,
@@ -114,6 +166,7 @@ class SoulAgentLoop(AgentLoop):
                 restrict_to_workspace=self.restrict_to_workspace,
                 disabled_skills=sorted(upstream_manager.disabled_skills),
                 disabled_tools=self.disabled_tools,
+                timezone=self.context.timezone,
                 max_iterations=self.max_iterations,
                 max_concurrent_subagents=upstream_manager.max_concurrent_subagents,
                 llm_wall_timeout_for_session=lambda session_key: runner_wall_llm_timeout_s(
@@ -322,7 +375,7 @@ class SoulAgentLoop(AgentLoop):
         history = session.get_history(
             max_messages=self._max_messages,
             max_tokens=self._replay_token_budget(),
-            include_timestamps=True,
+            include_timestamps=self.context.include_timestamps,
         )
         workspace_scope = self.workspace_scopes.for_message(msg, session.metadata)
 

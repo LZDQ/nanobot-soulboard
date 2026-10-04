@@ -2152,6 +2152,30 @@ export default function App() {
                         />
                       </label>
                       <label>
+                        <span>Timezone</span>
+                        <input
+                          value={draft.timezone}
+                          onChange={(event) => setDraft((current) => ({ ...current, timezone: event.target.value }))}
+                          placeholder="inherits from base config"
+                        />
+                      </label>
+                      <label className="checkbox">
+                        <input
+                          type="checkbox"
+                          checked={draft.include_timestamps}
+                          onChange={(event) => setDraft((current) => ({ ...current, include_timestamps: event.target.checked }))}
+                        />
+                        <span>Include message timestamps</span>
+                      </label>
+                      <label className="checkbox">
+                        <input
+                          type="checkbox"
+                          checked={draft.include_runtime_context}
+                          onChange={(event) => setDraft((current) => ({ ...current, include_runtime_context: event.target.checked }))}
+                        />
+                        <span>Include runtime context</span>
+                      </label>
+                      <label>
                         <span>Channels</span>
                         <input
                           value={draft.channels}
@@ -2264,6 +2288,18 @@ export default function App() {
                       <article className="override-card">
                         <span>Max tool iterations</span>
                         <strong>{renderOverrideValue(selectedSoul.overrides.max_tool_iterations)}</strong>
+                      </article>
+                      <article className="override-card">
+                        <span>Timezone</span>
+                        <strong>{renderOverrideValue(selectedSoul.overrides.timezone)}</strong>
+                      </article>
+                      <article className="override-card">
+                        <span>Message timestamps</span>
+                        <strong>{(selectedSoul.overrides.include_timestamps ?? true) ? "Included" : "Excluded"}</strong>
+                      </article>
+                      <article className="override-card">
+                        <span>Runtime context</span>
+                        <strong>{(selectedSoul.overrides.include_runtime_context ?? true) ? "Included" : "Excluded"}</strong>
                       </article>
                       <article className="override-card">
                         <span>Channels</span>

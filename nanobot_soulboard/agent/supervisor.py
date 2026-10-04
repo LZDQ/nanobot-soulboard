@@ -200,6 +200,8 @@ def build_runtime_config(base_config: Config, spec: SoulSpec) -> Config:
         config.agents.defaults.provider = spec.overrides.provider
     if spec.overrides.max_tool_iterations is not None:
         config.agents.defaults.max_tool_iterations = spec.overrides.max_tool_iterations
+    if spec.overrides.timezone is not None:
+        config.agents.defaults.timezone = spec.overrides.timezone
     _apply_channel_selection(config, list(spec.overrides.channels))
     _validate_mcp_http_header_overrides(base_config.tools.mcp_servers, spec.overrides)
     _apply_mcp_selection(config, list(spec.overrides.mcp_servers))
@@ -1147,6 +1149,8 @@ class SoulSupervisor:
             consolidation_ratio=config.agents.defaults.consolidation_ratio,
             unified_session=config.agents.defaults.unified_session,
             disabled_skills=config.agents.defaults.disabled_skills,
+            include_timestamps=spec.overrides.include_timestamps,
+            include_runtime_context=spec.overrides.include_runtime_context,
             disabled_tools=_effective_disabled_tools(
                 self.soulboard_config.disabled_tools,
                 spec.overrides,

@@ -1,13 +1,16 @@
 """Soulboard-specific subagent management."""
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
+from nanobot.agent.context import ContextBuilder
+from nanobot.agent.skills import SkillsLoader
 from nanobot.agent.subagent import SubagentManager
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.bus.queue import MessageBus
 from nanobot.config.schema import ToolsConfig
 from nanobot.providers.base import LLMProvider
+from nanobot.utils.prompt_templates import render_template
 
 from nanobot_soulboard.agent.search import replace_grep_tool
 from nanobot_soulboard.agent.shell import SoulExecTool
@@ -27,11 +30,13 @@ class SoulSubagentManager(SubagentManager):
         restrict_to_workspace: bool = False,
         disabled_skills: list[str] | None = None,
         disabled_tools: set[str] | None = None,
+        timezone: str | None = None,
         max_iterations: int | None = None,
         max_concurrent_subagents: int | None = None,
         llm_wall_timeout_for_session: Callable[[str | None], float | None] | None = None,
     ):
         self.disabled_tools = set(disabled_tools or set())
+        self.timezone = timezone
         super().__init__(
             provider=provider,
             workspace=workspace,
@@ -44,6 +49,25 @@ class SoulSubagentManager(SubagentManager):
             max_iterations=max_iterations,
             max_concurrent_subagents=max_concurrent_subagents,
             llm_wall_timeout_for_session=llm_wall_timeout_for_session,
+        )
+
+    def _build_subagent_prompt(self, workspace: Path | None = None) -> str:
+        """Build a subagent prompt using the owning soul's timezone."""
+        root = workspace or self.workspace
+        time_context = ContextBuilder._build_runtime_context(
+            None,
+            None,
+            self.timezone,
+        )
+        skills_summary = SkillsLoader(
+            root,
+            disabled_skills=self.disabled_skills,
+        ).build_skills_summary()
+        return render_template(
+            "agent/subagent_system.md",
+            time_ctx=time_context,
+            workspace=str(root),
+            skills_summary=skills_summary or "",
         )
 
     def _build_tools(

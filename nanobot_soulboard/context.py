@@ -1,10 +1,12 @@
 """Soulboard-specific context builder."""
 
 import platform
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from nanobot.agent.context import ContextBuilder
+from nanobot.agent.context import ContextBuilder, runtime_lines
+from nanobot.session.goal_state import goal_state_runtime_lines
 
 
 class SoulboardContextBuilder(ContextBuilder):
@@ -18,9 +20,87 @@ class SoulboardContextBuilder(ContextBuilder):
         soul_id: str,
         timezone: str | None = None,
         disabled_skills: list[str] | None = None,
+        include_timestamps: bool = True,
+        include_runtime_context: bool = True,
     ):
         super().__init__(workspace, timezone=timezone, disabled_skills=disabled_skills)
         self.soul_id = soul_id
+        self.include_timestamps = include_timestamps
+        self.include_runtime_context = include_runtime_context
+
+    def build_messages(
+        self,
+        history: list[dict[str, Any]],
+        current_message: str,
+        skill_names: list[str] | None = None,
+        media: list[str] | None = None,
+        channel: str | None = None,
+        chat_id: str | None = None,
+        current_role: str = "user",
+        sender_id: str | None = None,
+        session_summary: str | None = None,
+        session_metadata: Mapping[str, Any] | None = None,
+        current_runtime_lines: Sequence[str] | None = None,
+        workspace: Path | None = None,
+        runtime_state: Any | None = None,
+        inbound_message: Any | None = None,
+        skip_runtime_lines: bool = False,
+        include_memory_recent_history: bool = True,
+        session_key: str | None = None,
+        unified_session: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Build model messages with optional runtime metadata."""
+        root = workspace or self.workspace
+        user_content = self._build_user_content(current_message, media)
+        merged: str | list[dict[str, Any]] = user_content
+
+        if self.include_runtime_context:
+            extra = [*goal_state_runtime_lines(session_metadata)]
+            if runtime_state is not None and inbound_message is not None:
+                extra.extend(
+                    runtime_lines(
+                        runtime_state,
+                        inbound_message,
+                        root,
+                        skip=skip_runtime_lines,
+                    )
+                )
+            if current_runtime_lines:
+                extra.extend(line for line in current_runtime_lines if line)
+            runtime_context = self._build_runtime_context(
+                channel,
+                chat_id,
+                self.timezone,
+                sender_id=sender_id,
+                supplemental_lines=extra or None,
+            )
+            if isinstance(user_content, str):
+                merged = f"{user_content}\n\n{runtime_context}"
+            else:
+                merged = user_content + [{"type": "text", "text": runtime_context}]
+
+        messages = [
+            {
+                "role": "system",
+                "content": self.build_system_prompt(
+                    skill_names,
+                    channel=channel,
+                    session_summary=session_summary,
+                    workspace=root,
+                    include_memory_recent_history=include_memory_recent_history,
+                    session_key=session_key,
+                    unified_session=unified_session,
+                ),
+            },
+            *history,
+        ]
+        if messages[-1].get("role") == current_role:
+            last = dict(messages[-1])
+            last["content"] = self._merge_message_content(last.get("content"), merged)
+            messages[-1] = last
+            return messages
+        messages.append({"role": current_role, "content": merged})
+        return messages
 
     def build_system_prompt(
         self,
@@ -28,8 +108,8 @@ class SoulboardContextBuilder(ContextBuilder):
         channel: str | None = None,
         **kwargs: Any,
     ) -> str:
-        # Upstream's inherited build_messages() now calls build_system_prompt
-        # with extra kwargs (session_summary, workspace,
+        # build_messages() calls build_system_prompt with upstream-compatible
+        # extra kwargs (session_summary, workspace,
         # include_memory_recent_history, session_key, unified_session).
         # Soulboard builds its prompt purely from SYSTEM.md + skills, so we
         # accept and ignore them to stay call-compatible.
