@@ -979,6 +979,7 @@ class SoulSupervisor:
                     sandbox=tools_config.exec.sandbox,
                     path_append=tools_config.exec.path_append,
                     allowed_env_keys=tools_config.exec.allowed_env_keys,
+                    timezone=self.base_config.agents.defaults.timezone,
                     allow_patterns=tools_config.exec.allow_patterns,
                     deny_patterns=tools_config.exec.deny_patterns,
                 )

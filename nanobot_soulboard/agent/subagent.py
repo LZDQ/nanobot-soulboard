@@ -90,6 +90,7 @@ class SoulSubagentManager(SubagentManager):
                     sandbox=config.exec.sandbox,
                     path_append=config.exec.path_append,
                     allowed_env_keys=config.exec.allowed_env_keys,
+                    timezone=self.timezone,
                     allow_patterns=config.exec.allow_patterns,
                     deny_patterns=config.exec.deny_patterns,
                 )

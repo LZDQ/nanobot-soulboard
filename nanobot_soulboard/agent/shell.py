@@ -36,8 +36,10 @@ class SoulExecTool(ExecTool):
         sandbox: str = "",
         path_append: str = "",
         allowed_env_keys: list[str] | None = None,
+        timezone: str | None = None,
     ):
         self.workspace = workspace
+        self.timezone = timezone
         super().__init__(
             timeout=timeout,
             working_dir=str(workspace),
@@ -48,6 +50,12 @@ class SoulExecTool(ExecTool):
             path_append=path_append,
             allowed_env_keys=allowed_env_keys,
         )
+
+    def _build_env(self) -> dict[str, str]:
+        env = super()._build_env()
+        if self.timezone:
+            env["TZ"] = self.timezone
+        return env
 
     async def execute(
         self,
