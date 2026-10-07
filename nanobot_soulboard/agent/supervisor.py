@@ -363,6 +363,7 @@ async def _own_mcp_lifecycle(
     finally:
         _drain_mcp_reconnect_requests(reconnect_requests)
     try:
+        await agent_loop.reset_mcp_connections_from_owner()
         await agent_loop.close_mcp()
     except (RuntimeError, BaseExceptionGroup):
         pass

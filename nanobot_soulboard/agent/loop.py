@@ -488,6 +488,26 @@ class SoulAgentLoop(AgentLoop):
         except (RuntimeError, BaseExceptionGroup) as e:
             logger.debug("MCP server '{}' cleanup error: {}", server_name, e)
 
+    async def reset_mcp_connections_from_owner(self) -> None:
+        """Close all MCP stacks in reverse order on their owner task.
+
+        Every MCP transport enters an AnyIO cancel scope on the same owner
+        task. Those scopes are consequently nested across servers and must be
+        exited in strict reverse connection order. Closing only one failed
+        server can otherwise orphan its cancel scope and spin the event loop.
+        """
+        server_stacks = list(self._mcp_stacks.items())
+        self._mcp_stacks.clear()
+        self._mcp_connected = False
+        cancellation: asyncio.CancelledError | None = None
+        for server_name, server_stack in reversed(server_stacks):
+            try:
+                await self._close_mcp_stack_from_owner(server_name, server_stack)
+            except asyncio.CancelledError as error:
+                cancellation = error
+        if cancellation is not None:
+            raise cancellation
+
     async def _connect_single_mcp_server_from_owner(
         self,
         name: str,
@@ -728,14 +748,16 @@ class SoulAgentLoop(AgentLoop):
         server_name: str,
         tool_name: str,
     ) -> Tool | None:
-        cfg = self._mcp_servers.get(server_name)
-        if cfg is None:
+        if server_name not in self._mcp_servers:
             return None
-        mcp_tools._unregister_server_tools(self, self.tools, server_name)
-        stack = self._mcp_stacks.pop(server_name, None)
-        if stack is not None:
-            await self._close_mcp_stack_from_owner(server_name, stack)
-        connected = await self._connect_mcp_servers_from_owner({server_name: cfg})
+
+        # All server cancel scopes are nested on this task. A single server
+        # cannot be removed safely unless it happens to be the most recently
+        # connected one, so rebuild the complete MCP set in stack order.
+        for configured_name in self._mcp_servers:
+            mcp_tools._unregister_server_tools(self, self.tools, configured_name)
+        await self.reset_mcp_connections_from_owner()
+        connected = await self._connect_mcp_servers_from_owner(dict(self._mcp_servers))
         self._mcp_stacks.update(connected)
         self._mcp_connected = bool(self._mcp_stacks)
         if server_name not in connected:
