@@ -72,6 +72,7 @@ from nanobot_soulboard.schemas import (
     UpdateSoulPromptFilesRequest,
     UpdateSoulRequest,
 )
+from nanobot_soulboard.session import SoulSessionManager, consolidation_indices
 from nanobot_soulboard.skills import count_text_stats, skill_summary
 
 
@@ -90,15 +91,17 @@ def _build_session_detail_response(
     session: Any,
     *,
     before: int | None = None,
-    limit: int | None = None,
 ) -> SessionDetailResponse:
     """Build one session detail response for the requested history window."""
     total_messages = len(session.messages)
     window_end = total_messages if before is None else max(0, min(before, total_messages))
-    if limit is None:
+    if before is None:
         window_start = min(session.last_consolidated, window_end)
     else:
-        window_start = max(0, window_end - max(limit, 0))
+        window_start = max(
+            (index for index in consolidation_indices(session) if index < window_end),
+            default=0,
+        )
     return SessionDetailResponse(
         created_at=session.created_at.isoformat(),
         updated_at=session.updated_at.isoformat(),
@@ -251,7 +254,7 @@ def _get_session_manager(supervisor: SoulSupervisor, spec: SoulSpec) -> SessionM
         agent_loop: SoulAgentLoop = supervisor.get_agent_loop(spec.soul_id)
         return agent_loop.sessions
     except KeyError:
-        return SessionManager(spec.workspace)
+        return SoulSessionManager(spec.workspace)
 
 
 def _build_prompt_files_response(files: dict[str, str | None]) -> SoulPromptFilesResponse:
@@ -1162,7 +1165,8 @@ def create_app() -> FastAPI:
         description=(
             "Load one persisted history window from a single session in the selected soul's workspace. "
             "Without paging arguments, this returns all unconsolidated messages from the last consolidation "
-            "point onward. The session key should match the key used by nanobot SessionManager."
+            "point onward. With before, it returns messages back to the preceding consolidation point. "
+            "The session key should match the key used by nanobot SessionManager."
         ),
     )
     def get_session(
@@ -1170,7 +1174,6 @@ def create_app() -> FastAPI:
         soul_id: str,
         session_key: str,
         before: int | None = Query(default=None, ge=0),
-        limit: int | None = Query(default=None, ge=1),
     ) -> SessionDetailResponse:
         supervisor = _get_supervisor(request)
         try:
@@ -1182,7 +1185,7 @@ def create_app() -> FastAPI:
         if session_key not in known:
             _raise_not_found(f"Unknown session: {session_key}")
         session = manager.get_or_create(session_key)
-        return _build_session_detail_response(session, before=before, limit=limit)
+        return _build_session_detail_response(session, before=before)
 
     @api.delete(
         "/souls/{soul_id}/sessions/{session_key}",

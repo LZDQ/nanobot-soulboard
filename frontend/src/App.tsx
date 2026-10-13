@@ -1086,7 +1086,7 @@ export default function App() {
 
   async function fetchSessionWindow(
     key: string,
-    options?: { before?: number; limit?: number },
+    options?: { before?: number },
   ): Promise<SessionDetail> {
     if (!selectedSoul) {
       throw new Error("No soul selected");
@@ -1094,9 +1094,6 @@ export default function App() {
     const params = new URLSearchParams();
     if (typeof options?.before === "number") {
       params.set("before", String(options.before));
-    }
-    if (typeof options?.limit === "number") {
-      params.set("limit", String(options.limit));
     }
     const queryString = params.toString();
     const query = queryString ? `?${queryString}` : "";
@@ -1136,7 +1133,6 @@ export default function App() {
     try {
       const detail = await fetchSessionWindow(sessionKey, {
         before: sessionDetail.history_start,
-        limit: 20,
       });
       setSessionDetail((current) => prependSessionWindow(current, detail));
     } catch (cause) {
@@ -3140,7 +3136,7 @@ export default function App() {
                     }}
                     disabled={olderMessagesPending}
                   >
-                    {olderMessagesPending ? "Loading..." : "Load 20 older messages"}
+                    {olderMessagesPending ? "Loading..." : "Load previous consolidation"}
                   </button>
                 </div>
               ) : null}

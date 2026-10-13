@@ -25,7 +25,6 @@ from nanobot.cron.bound_runner import run_bound_cron_job
 from nanobot.cron.types import CronJob, CronSchedule
 from nanobot.providers.base import LLMProvider
 from nanobot.providers.image_generation import image_gen_provider_configs
-from nanobot.session.manager import SessionManager
 
 from nanobot_soulboard.agent.loop import SoulAgentLoop, SoulMcpReconnectRequest
 from nanobot_soulboard.agent.search import replace_grep_tool
@@ -46,6 +45,7 @@ from nanobot_soulboard.config import (
     validate_soul_id,
 )
 from nanobot_soulboard.cron import SoulCronPayload, SoulCronService, SoulCronTool
+from nanobot_soulboard.session import SoulSessionManager
 from nanobot_soulboard.skills import DiscoveredSkill, discover_skills_in_pool
 
 SOUL_PROMPT_FILES = ("AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "SYSTEM.md")
@@ -1128,7 +1128,7 @@ class SoulSupervisor:
         provider = self.provider_factory(config)
         bus = MessageBus()
         cron_service = self._build_cron_service(spec)
-        session_manager = SessionManager(config.workspace_path)
+        session_manager = SoulSessionManager(config.workspace_path)
         agent_loop = SoulAgentLoop(
             soul_id=spec.soul_id,
             bus=bus,
