@@ -7,17 +7,31 @@ from importlib.resources import files as pkg_files
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    FastAPI,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
-
 from nanobot.config.loader import load_config
-from nanobot_soulboard.providers import make_provider
 from nanobot.cron.types import CronJob, CronSchedule
-from nanobot_soulboard.cron import SoulCronPayload
 from nanobot.session.manager import SessionManager
+
+from nanobot_soulboard.agent import (
+    SOUL_PROMPT_FILES,
+    ChannelConflictError,
+    SoulAgentLoop,
+    SoulCloneCronJob,
+    SoulSpec,
+    SoulSupervisor,
+)
 from nanobot_soulboard.chat_streams import ChatStreamManager
 from nanobot_soulboard.config import (
     SoulboardSettings,
@@ -25,23 +39,17 @@ from nanobot_soulboard.config import (
     get_soulboard_config_path,
     load_soulboard_config,
 )
-from nanobot_soulboard.agent import (
-    ChannelConflictError,
-    SOUL_PROMPT_FILES,
-    SoulAgentLoop,
-    SoulCloneCronJob,
-    SoulSpec,
-    SoulSupervisor,
-)
+from nanobot_soulboard.cron import SoulCronPayload
+from nanobot_soulboard.providers import make_provider
 from nanobot_soulboard.schemas import (
     AddSoulCronJobsFromRegistryRequest,
-    CreateSoulCronJobRequest,
     AddSoulSkillRequest,
-    ChatResponse,
     ChatRequest,
+    ChatResponse,
     CloneSoulRequest,
     CreateMCPServerRequest,
     CreateSessionRequest,
+    CreateSoulCronJobRequest,
     CreateSoulRequest,
     CronJobRegistryResponse,
     CronJobResponse,
@@ -145,7 +153,8 @@ def _sync_soul_workspace(spec: SoulSpec) -> None:
     """Sync the soulboard workspace scaffold without default USER.md/TOOLS.md."""
     try:
         templates = pkg_files("nanobot") / "templates"
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - workspace scaffolding is optional
+        logger.warning("Could not load nanobot workspace templates: {}", exc)
         return
     if not templates.is_dir():
         return

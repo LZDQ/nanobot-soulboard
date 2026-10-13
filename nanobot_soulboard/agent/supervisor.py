@@ -3,13 +3,14 @@
 import asyncio
 import shutil
 import tempfile
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from threading import RLock
-from typing import Awaitable, Callable, Literal
+from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from loguru import logger
@@ -32,8 +33,8 @@ from nanobot_soulboard.agent.search import replace_grep_tool
 from nanobot_soulboard.agent.shell import SoulExecTool
 from nanobot_soulboard.config import (
     CronJobRegistryEntry,
-    SoulOverrides,
     SoulboardConfig,
+    SoulOverrides,
     get_base_config_path,
     get_soul_config_path,
     get_soulboard_config_path,
@@ -245,11 +246,10 @@ async def _connect_mcp_from_owner(agent_loop: SoulAgentLoop, ready: asyncio.Futu
         logger.warning("Soul '{}' MCP owner connect was cancelled by SDK", agent_loop.soul_id)
         if not ready.done():
             ready.set_result(None)
-    except BaseException as e:
+    except Exception as e:  # noqa: BLE001 - provider/SDK failures must reach the waiter
+        logger.warning("Soul '{}' MCP owner connect failed: {}", agent_loop.soul_id, e)
         if not ready.done():
             ready.set_exception(e)
-        else:
-            logger.warning("Soul '{}' MCP owner connect failed: {}", agent_loop.soul_id, e)
     else:
         if not ready.done():
             ready.set_result(None)
@@ -279,7 +279,7 @@ async def _reconnect_mcp_from_owner(
         if not request.future.done():
             request.future.set_result(None)
         return
-    except BaseException as e:
+    except Exception as e:  # noqa: BLE001 - provider/SDK failures must not stop the owner
         logger.warning(
             "Soul '{}' MCP owner reconnect failed for server '{}': {}",
             agent_loop.soul_id,
@@ -303,7 +303,7 @@ async def _wait_for_mcp_owner_request(
     shutdown_task = asyncio.create_task(shutdown.wait())
     tasks = {connect_task, reconnect_task, shutdown_task}
     try:
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         if shutdown_task in done and shutdown.is_set():
             return "shutdown", None
         if reconnect_task in done:
@@ -1002,7 +1002,8 @@ class SoulSupervisor:
                 continue
             try:
                 description = tool.description
-            except Exception:
+            except Exception as e:  # noqa: BLE001 - third-party tool properties may fail
+                logger.warning("Failed to read description for tool '{}': {}", name, e)
                 description = ""
             items.append(ToolCatalogItem(name=name, description=description))
         return sorted(items, key=lambda item: item.name)
@@ -1269,7 +1270,7 @@ class SoulSupervisor:
             )
             try:
                 await ready
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - provider/SDK failures are nonfatal here
                 logger.warning("Soul '{}' MCP connect failed: {}", soul_id, e)
         if not running.agent_task or running.agent_task.done():
             running.agent_task = asyncio.create_task(running.agent_loop.run())
@@ -1364,13 +1365,13 @@ class SoulSupervisor:
                 await asyncio.wait_for(
                     asyncio.shield(running.mcp_owner_task), timeout=10.0
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("Soul '{}' MCP owner did not exit in 10s; cancelling", soul_id)
                 running.mcp_owner_task.cancel()
                 with suppress(BaseException):
                     await running.mcp_owner_task
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001 - shutdown continues after logging
+                logger.warning("Soul '{}' MCP owner shutdown failed: {}", soul_id, e)
         current_loop = asyncio.get_running_loop()
         if running.agent_task and running.agent_task.get_loop() is current_loop and not running.agent_task.get_loop().is_closed():
             # Cancel rather than wait out run()'s <=1s bus poll timeout: _drain_soul_work
