@@ -25,6 +25,7 @@ from nanobot.cron.bound_runner import run_bound_cron_job
 from nanobot.cron.types import CronJob, CronSchedule
 from nanobot.providers.base import LLMProvider
 from nanobot.providers.image_generation import image_gen_provider_configs
+from nanobot.session.manager import SessionManager
 
 from nanobot_soulboard.agent.loop import SoulAgentLoop, SoulMcpReconnectRequest
 from nanobot_soulboard.agent.search import replace_grep_tool

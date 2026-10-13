@@ -2,7 +2,6 @@
 
 from nanobot.session.manager import Session, SessionManager
 
-
 CONSOLIDATION_INDICES_KEY = "_consolidation_indices"
 
 
