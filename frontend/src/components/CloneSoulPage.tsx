@@ -57,6 +57,8 @@ type CloneCronJobDraft = {
   tz: string;
 };
 
+type PromptFileCloneMode = "copy" | "hard_link";
+
 function cronJobToDraft(job: CronJob): CloneCronJobDraft {
   return {
     selected: true,
@@ -91,6 +93,12 @@ export function CloneSoulPage({
   const [promptFiles, setPromptFiles] = useState<SoulPromptFile[]>([]);
   const [promptDraft, setPromptDraft] = useState<SoulPromptDraft>(getEmptyPromptDraft());
   const [promptSelection, setPromptSelection] = useState<Record<SoulPromptFileName, boolean>>(getEmptyPromptSelection());
+  const [promptCloneModes, setPromptCloneModes] = useState<Record<SoulPromptFileName, PromptFileCloneMode>>(() => (
+    Object.fromEntries(SOUL_PROMPT_FILE_NAMES.map((name) => [name, "copy"])) as Record<
+      SoulPromptFileName,
+      PromptFileCloneMode
+    >
+  ));
   const [promptPending, setPromptPending] = useState(true);
   const [promptError, setPromptError] = useState("");
   const [selectedSkillNames, setSelectedSkillNames] = useState<string[]>(() => source.skills.map((skill) => skill.name));
@@ -237,7 +245,11 @@ export function CloneSoulPage({
           overrides: draftToOverrides(draft),
           prompt_files: SOUL_PROMPT_FILE_NAMES
             .filter((name) => promptSelection[name])
-            .map((name) => ({ name, content: promptDraft[name] })),
+            .map((name) => ({
+              name,
+              content: promptDraft[name],
+              hard_link: promptCloneModes[name] === "hard_link",
+            })),
           skill_names: selectedSkillNames,
           cron_jobs: buildCronPayload(),
           start: startNow,
@@ -448,7 +460,7 @@ export function CloneSoulPage({
             </button>
           </div>
           {promptError ? <div className="banner error">{promptError}</div> : null}
-          <div className="md-file-list">
+          <div className="md-file-list clone-prompt-file-list">
             {promptFiles.length ? SOUL_PROMPT_FILE_NAMES.map((name) => {
               const file = promptFiles.find((item) => item.name === name);
               const exists = file?.exists ?? false;
@@ -470,22 +482,44 @@ export function CloneSoulPage({
                       />
                       <span>{name}</span>
                     </span>
+                    {exists ? (
+                      <label
+                        className="clone-prompt-hard-link"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={promptCloneModes[name] === "hard_link"}
+                          onChange={(event) => setPromptCloneModes((current) => ({
+                            ...current,
+                            [name]: event.target.checked ? "hard_link" : "copy",
+                          }))}
+                        />
+                        <span>Hard link</span>
+                      </label>
+                    ) : <span />}
                     <span className={`pill ${exists ? "live" : "idle"}`}>
                       {exists ? "present" : "missing"}
                     </span>
                   </summary>
                   {selected ? (
-                    <label>
-                      <span>{name}</span>
-                      <textarea
-                        value={promptDraft[name]}
-                        onChange={(event) => setPromptDraft((current) => ({
-                          ...current,
-                          [name]: event.target.value,
-                        }))}
-                        placeholder={`Enter ${name} content`}
-                      />
-                    </label>
+                    <div className="clone-prompt-file-editor">
+                      {promptCloneModes[name] === "hard_link" ? (
+                        <p className="muted">Changes made by either soul will affect this shared file.</p>
+                      ) : (
+                        <label>
+                          <span>{name}</span>
+                          <textarea
+                            value={promptDraft[name]}
+                            onChange={(event) => setPromptDraft((current) => ({
+                              ...current,
+                              [name]: event.target.value,
+                            }))}
+                            placeholder={`Enter ${name} content`}
+                          />
+                        </label>
+                      )}
+                    </div>
                   ) : (
                     <p className="muted">Enable this file to preserve or edit it in the cloned soul.</p>
                   )}

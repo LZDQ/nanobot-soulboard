@@ -2019,6 +2019,29 @@ button.tool-call-row.selected {
   grid-column: 1 / -1;
 }
 
+.clone-prompt-file-editor {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.clone-prompt-file-list .md-file summary {
+  grid-template-columns: max-content max-content minmax(5rem, 1fr);
+}
+
+.clone-prompt-hard-link {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  gap: 0.4rem;
+  justify-self: center;
+  white-space: nowrap;
+}
+
+.clone-prompt-hard-link input[type="checkbox"] {
+  margin: 0;
+  width: auto;
+}
+
 .clone-skill-tile {
   align-items: flex-start;
 }

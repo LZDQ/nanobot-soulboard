@@ -2,9 +2,9 @@
 
 from typing import Any, Literal
 
+from nanobot.config.schema import MCPServerConfig
 from pydantic import BaseModel, Field
 
-from nanobot.config.schema import MCPServerConfig
 from nanobot_soulboard.config import CronJobRegistryEntry, SoulOverrides
 
 
@@ -44,10 +44,17 @@ class UpdateSoulRequest(BaseModel):
 
 
 class CloneSoulPromptFileRequest(BaseModel):
-    """One prompt file to write into a cloned soul."""
+    """One prompt file to copy or hard link into a cloned soul."""
 
     name: str
     content: str
+    hard_link: bool = Field(
+        default=False,
+        description=(
+            "Hard link the source soul's prompt file instead of writing an independent copy. "
+            "The source file must exist."
+        ),
+    )
 
 
 class CloneSoulCronJobScheduleRequest(BaseModel):

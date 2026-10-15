@@ -704,6 +704,7 @@ def create_app() -> FastAPI:
                 body.soul_id,
                 body.overrides,
                 prompt_files={item.name: item.content for item in body.prompt_files},
+                hard_link_prompt_files={item.name for item in body.prompt_files if item.hard_link},
                 skill_names=body.skill_names,
                 cron_jobs=cron_jobs,
             )

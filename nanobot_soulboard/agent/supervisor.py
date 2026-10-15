@@ -806,6 +806,7 @@ class SoulSupervisor:
         overrides: SoulOverrides,
         *,
         prompt_files: dict[str, str],
+        hard_link_prompt_files: set[str],
         skill_names: list[str],
         cron_jobs: list[SoulCloneCronJob],
     ) -> SoulSpec:
@@ -816,6 +817,7 @@ class SoulSupervisor:
                 soul_id,
                 overrides,
                 prompt_files=prompt_files,
+                hard_link_prompt_files=hard_link_prompt_files,
                 skill_names=skill_names,
                 cron_jobs=cron_jobs,
             )
@@ -827,6 +829,7 @@ class SoulSupervisor:
         overrides: SoulOverrides,
         *,
         prompt_files: dict[str, str],
+        hard_link_prompt_files: set[str],
         skill_names: list[str],
         cron_jobs: list[SoulCloneCronJob],
     ) -> SoulSpec:
@@ -839,6 +842,10 @@ class SoulSupervisor:
         if unknown_prompt_files:
             unknown_str = ", ".join(unknown_prompt_files)
             raise ValueError(f"Unknown prompt file(s): {unknown_str}")
+        unknown_hard_links = sorted(hard_link_prompt_files - set(prompt_files))
+        if unknown_hard_links:
+            unknown_str = ", ".join(unknown_hard_links)
+            raise ValueError(f"Cannot hard link unselected prompt file(s): {unknown_str}")
 
         normalized_skill_names: list[str] = []
         seen_skill_names: set[str] = set()
@@ -864,7 +871,19 @@ class SoulSupervisor:
         try:
             save_soul_config(overrides, staging / "config.json")
             for filename, content in prompt_files.items():
-                (staging / filename).write_text(content, encoding="utf-8")
+                target_prompt_file = staging / filename
+                if filename in hard_link_prompt_files:
+                    source_prompt_file = source.workspace / filename
+                    if not source_prompt_file.is_file():
+                        raise ValueError(f"Prompt file not found in source soul: {filename}")
+                    try:
+                        target_prompt_file.hardlink_to(source_prompt_file)
+                    except OSError as exc:
+                        raise ValueError(
+                            f"Could not hard link source prompt file {filename}: {exc}"
+                        ) from exc
+                else:
+                    target_prompt_file.write_text(content, encoding="utf-8")
 
             if normalized_skill_names:
                 target_skills_root = staging / "skills"
