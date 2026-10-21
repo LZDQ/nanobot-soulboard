@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
@@ -92,6 +93,15 @@ type FloatingButtonPosition = {
   y: number;
 };
 
+/** A prompt shown in the transcript from the moment it is sent until the backend echoes it back. */
+type PendingUserMessage = {
+  id: string;
+  content: string;
+  sentAt: string;
+};
+
+const CHAT_INPUT_MAX_HEIGHT_PX = 200;
+
 type FloatingButtonDrag = {
   pointerId: number;
   startClientX: number;
@@ -131,6 +141,8 @@ export default function App() {
   const [chatReasoning, setChatReasoning] = useState("");
   const [chatContent, setChatContent] = useState("");
   const [finalizedMessages, setFinalizedMessages] = useState<StreamFinalizedMessage[]>([]);
+  const [pendingUserMessages, setPendingUserMessages] = useState<PendingUserMessage[]>([]);
+  const [isChatPinnedToBottom, setIsChatPinnedToBottom] = useState(true);
   const [pending, setPending] = useState<string>("");
   const [soulError, setSoulError] = useState<string>("");
   const [createSoulId, setCreateSoulId] = useState("");
@@ -179,6 +191,9 @@ export default function App() {
   const conversationTopButtonDragRef = useRef<FloatingButtonDrag | null>(null);
   const suppressConversationTopButtonClickRef = useRef(false);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const pendingUserMessageIdRef = useRef(0);
+  const chatScrollFrameRef = useRef(0);
   const initializedRef = useRef(false);
   const [showConversationTopButton, setShowConversationTopButton] = useState(false);
   const [conversationTopButtonPosition, setConversationTopButtonPosition] = useState<FloatingButtonPosition | null>(null);
@@ -252,6 +267,7 @@ export default function App() {
       setChatContent("");
       setChatReasoning("");
       setFinalizedMessages([]);
+      setPendingUserMessages([]);
       socketRef.current?.close();
       socketRef.current = null;
       setSocketState("closed");
@@ -672,6 +688,7 @@ export default function App() {
     setChatContent("");
     setChatReasoning("");
     setFinalizedMessages([]);
+    setPendingUserMessages([]);
     socketRef.current?.close();
     socketRef.current = null;
     setSocketState("closed");
@@ -841,6 +858,9 @@ export default function App() {
       }
       setChatContent("");
       setChatReasoning("");
+      if (message.role === "user") {
+        dropPendingUserMessage(renderContent(message.content));
+      }
       setFinalizedMessages((current) => [...current, message]);
       void refreshSessions(soulId).catch(() => {});
     };
@@ -1118,6 +1138,7 @@ export default function App() {
         setChatContent("");
         setChatReasoning("");
         setFinalizedMessages([]);
+        setPendingUserMessages([]);
         setSocketEpoch((current) => current + 1);
       });
     } catch (cause) {
@@ -1165,6 +1186,7 @@ export default function App() {
       setChatContent("");
       setChatReasoning("");
       setFinalizedMessages([]);
+      setPendingUserMessages([]);
       setSessionsPage(0);
       await refreshSessions(selectedSoul.soul_id, { page: 0 });
       setSocketEpoch((current) => current + 1);
@@ -1199,6 +1221,7 @@ export default function App() {
         setChatContent("");
         setChatReasoning("");
         setFinalizedMessages([]);
+        setPendingUserMessages([]);
       }
       setSessionsPage(nextPage);
       await refreshSessions(selectedSoul.soul_id, { page: nextPage });
@@ -1279,17 +1302,75 @@ export default function App() {
     }
   }
 
-  async function submitChat(event: FormEvent) {
-    event.preventDefault();
-    if (!chatInput.trim() || socketState !== "open") {
+  /**
+   * Remove the echo of a prompt we are already showing optimistically. Matching on
+   * content keeps queued prompts paired up; the oldest entry is dropped otherwise so
+   * a reworded echo can never leave a duplicate behind.
+   */
+  function dropPendingUserMessage(echoed: string): void {
+    const normalized = echoed.trim();
+    setPendingUserMessages((current) => {
+      if (!current.length) {
+        return current;
+      }
+      const matched = current.findIndex((item) => item.content === normalized);
+      const index = matched < 0 ? 0 : matched;
+      return [...current.slice(0, index), ...current.slice(index + 1)];
+    });
+  }
+
+  function resizeChatInput(): void {
+    const input = chatInputRef.current;
+    if (!input) {
+      return;
+    }
+    input.style.height = "auto";
+    input.style.height = `${Math.min(input.scrollHeight, CHAT_INPUT_MAX_HEIGHT_PX)}px`;
+  }
+
+  function sendChat(): void {
+    const content = chatInput.trim();
+    if (!content || socketState !== "open") {
       return;
     }
     const socket = socketRef.current;
     if (!socket) {
       return;
     }
-    socket.send(JSON.stringify({ content: chatInput.trim() }));
+    socket.send(JSON.stringify({ content }));
+    pendingUserMessageIdRef.current += 1;
+    // The backend only echoes the prompt once the whole turn is persisted, so
+    // show it immediately and reconcile when the finalized message arrives.
+    setPendingUserMessages((current) => [
+      ...current,
+      { id: String(pendingUserMessageIdRef.current), content, sentAt: new Date().toISOString() },
+    ]);
     setChatInput("");
+    setIsChatPinnedToBottom(true);
+    window.requestAnimationFrame(jumpToChatEnd);
+  }
+
+  async function submitChat(event: FormEvent) {
+    event.preventDefault();
+    sendChat();
+  }
+
+  function handleChatInputKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>): void {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) {
+      return;
+    }
+    event.preventDefault();
+    sendChat();
+  }
+
+  function handleChatInputFocus(): void {
+    if (!isChatPinnedToBottom) {
+      return;
+    }
+    // Give the on-screen keyboard time to resize the visual viewport.
+    window.setTimeout(() => {
+      chatEndRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
+    }, 250);
   }
 
   function getChatScrollBehavior(): ScrollBehavior {
@@ -1297,6 +1378,7 @@ export default function App() {
   }
 
   function jumpToChatEnd(): void {
+    setIsChatPinnedToBottom(true);
     chatEndRef.current?.scrollIntoView({
       behavior: getChatScrollBehavior(),
       block: "end",
@@ -1315,12 +1397,23 @@ export default function App() {
     });
   }
 
+  /** Visual viewport, so the button stays reachable when a mobile keyboard is open. */
+  function getViewportSize(): { width: number; height: number } {
+    const viewport = window.visualViewport;
+    return {
+      width: viewport ? viewport.width : window.innerWidth,
+      height: viewport ? viewport.height : window.innerHeight,
+    };
+  }
+
   function getDefaultConversationTopButtonPosition(): FloatingButtonPosition {
     const buttonSize = 44;
     const edgeOffset = 20;
+    const composerClearance = 92; // keeps the button off the sticky composer
+    const viewport = getViewportSize();
     return {
-      x: window.innerWidth - buttonSize - edgeOffset,
-      y: window.innerHeight - buttonSize - edgeOffset,
+      x: viewport.width - buttonSize - edgeOffset,
+      y: viewport.height - buttonSize - edgeOffset - composerClearance,
     };
   }
 
@@ -1329,9 +1422,10 @@ export default function App() {
     const buttonBounds = conversationTopButtonRef.current?.getBoundingClientRect();
     const buttonWidth = buttonBounds?.width ?? 44;
     const buttonHeight = buttonBounds?.height ?? 44;
+    const viewport = getViewportSize();
     return {
-      x: Math.min(Math.max(position.x, edgeOffset), Math.max(edgeOffset, window.innerWidth - buttonWidth - edgeOffset)),
-      y: Math.min(Math.max(position.y, edgeOffset), Math.max(edgeOffset, window.innerHeight - buttonHeight - edgeOffset)),
+      x: Math.min(Math.max(position.x, edgeOffset), Math.max(edgeOffset, viewport.width - buttonWidth - edgeOffset)),
+      y: Math.min(Math.max(position.y, edgeOffset), Math.max(edgeOffset, viewport.height - buttonHeight - edgeOffset)),
     };
   }
 
@@ -1519,7 +1613,18 @@ export default function App() {
   const runningCount = souls.filter((soul) => soul.running).length;
   const chatHistory = [...(sessionDetail?.messages ?? []), ...finalizedMessages] as Array<Record<string, unknown>>;
   const hasStreamingTurn = !!chatReasoning || !!chatContent;
+  const isAwaitingResponse = pendingUserMessages.length > 0 && !hasStreamingTurn;
+  const isTurnInFlight = hasStreamingTurn || isAwaitingResponse;
+  const isChatReady = !!selectedSoul?.running && socketState === "open";
+  const chatPlaceholder = !selectedSoul?.running
+    ? "Start this soul to chat"
+    : socketState === "connecting"
+      ? "Connecting to the soul..."
+      : socketState !== "open"
+        ? "Chat connection closed - press Reconnect above"
+        : "Message this soul - Enter sends, Shift+Enter for a new line";
   const canLoadOlderMessages = !!sessionDetail && sessionDetail.history_start > 0;
+
   const skillPoolCount = skillPools.length;
   const cronRegistryCount = cronJobRegistry.length;
   const mcpServerCount = mcpServers.length;
@@ -1529,6 +1634,57 @@ export default function App() {
   const selectedSoulPromptFileCount = promptFiles.filter((file) => file.exists).length;
   const isSoulPage = Boolean(selectedSoulId);
   const isClonePage = isSoulPage && activeSubPath === "clone";
+
+  // The transcript follows the stream only while the reader is already at the end.
+  useEffect(() => {
+    const anchor = chatEndRef.current;
+    if (!sessionKey || !anchor) {
+      setIsChatPinnedToBottom(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => setIsChatPinnedToBottom(entries[entries.length - 1].isIntersecting),
+      { rootMargin: "0px 0px 160px 0px" },
+    );
+    observer.observe(anchor);
+    return () => observer.disconnect();
+  }, [sessionKey]);
+
+  useEffect(() => {
+    if (!sessionKey || !isChatPinnedToBottom) {
+      return;
+    }
+    window.cancelAnimationFrame(chatScrollFrameRef.current);
+    chatScrollFrameRef.current = window.requestAnimationFrame(() => {
+      chatEndRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
+    });
+    return () => window.cancelAnimationFrame(chatScrollFrameRef.current);
+  }, [
+    sessionKey,
+    isChatPinnedToBottom,
+    chatContent,
+    chatReasoning,
+    chatHistory.length,
+    pendingUserMessages.length,
+  ]);
+
+  useEffect(() => {
+    resizeChatInput();
+  }, [sessionKey, chatInput]);
+
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) {
+      return;
+    }
+    const keepFloatingButtonInViewport = () => {
+      setConversationTopButtonPosition((current) => (
+        current ? clampConversationTopButtonPosition(current) : current
+      ));
+    };
+    viewport.addEventListener("resize", keepFloatingButtonInViewport);
+    return () => viewport.removeEventListener("resize", keepFloatingButtonInViewport);
+  }, []);
 
   return (
     <div className="app-shell">
@@ -3094,13 +3250,28 @@ export default function App() {
           <div className="panel-head">
             <h2>Live chat</h2>
             <div className="chat-meta">
-              <button type="button" className="ghost chat-jump-button" onClick={jumpToChatEnd}>
-                <span className="chat-jump-icon" aria-hidden="true">↓</span>
-                Jump to end
-              </button>
+              {isChatPinnedToBottom ? null : (
+                <button
+                  type="button"
+                  className={`ghost chat-jump-button ${isTurnInFlight ? "has-new" : ""}`}
+                  onClick={jumpToChatEnd}
+                >
+                  <span className="chat-jump-icon" aria-hidden="true">↓</span>
+                  {isTurnInFlight ? "Follow reply" : "Jump to end"}
+                </button>
+              )}
               <span className={`pill chat-status-pill ${socketState === "open" ? "live" : "idle"}`}>
                 {socketState === "open" ? "open" : socketState}
               </span>
+              {selectedSoul?.running && socketState === "closed" ? (
+                <button
+                  type="button"
+                  className="ghost chat-reconnect-button"
+                  onClick={() => setSocketEpoch((current) => current + 1)}
+                >
+                  Reconnect
+                </button>
+              ) : null}
               <code>{sessionKey}</code>
               <button
                 type="button"
@@ -3194,6 +3365,31 @@ export default function App() {
                 </div>
                 );
               })}
+              {pendingUserMessages.map((message) => (
+                <div key={message.id} className="message-card pending">
+                  <div className="message-head">
+                    <strong>user</strong>
+                    <div className="message-head-actions">
+                      <time className="message-time" dateTime={message.sentAt} title={formatDate(message.sentAt)}>
+                        {formatMessageTime(message.sentAt)}
+                      </time>
+                      <span className="muted">sending</span>
+                    </div>
+                  </div>
+                  <pre>{message.content}</pre>
+                </div>
+              ))}
+              {isAwaitingResponse ? (
+                <div className="message-card streaming" aria-live="polite">
+                  <div className="message-head">
+                    <strong>assistant</strong>
+                    <span className="muted">working</span>
+                  </div>
+                  <span className="chat-typing" aria-label="Waiting for the soul to reply">
+                    <i /><i /><i />
+                  </span>
+                </div>
+              ) : null}
               {hasStreamingTurn ? (
                 <div className="message-card streaming">
                   <div className="message-head">
@@ -3222,21 +3418,34 @@ export default function App() {
                       <pre>{chatReasoning}</pre>
                     </details>
                   ) : null}
-                  {chatContent ? <MarkdownMessage content={chatContent} /> : <pre>(waiting for content)</pre>}
+                  {chatContent ? (
+                    <MarkdownMessage content={chatContent} />
+                  ) : (
+                    <span className="chat-typing" aria-label="Waiting for the first token">
+                      <i /><i /><i />
+                    </span>
+                  )}
                 </div>
               ) : null}
-              {!chatHistory.length ? <p className="muted">Open a session to load its message history.</p> : null}
+              {!chatHistory.length && !pendingUserMessages.length && !hasStreamingTurn ? (
+                <p className="muted">No messages yet — send a prompt below to start this session.</p>
+              ) : null}
             </div>
           </article>
 
           <form className="chat-form" onSubmit={(event) => void submitChat(event)}>
             <textarea
+              ref={chatInputRef}
               value={chatInput}
               onChange={(event) => setChatInput(event.target.value)}
-              placeholder={selectedSoul?.running ? "Send a message to the running soul" : "Start a soul to chat"}
-              disabled={!selectedSoul?.running || socketState !== "open"}
+              onKeyDown={handleChatInputKeyDown}
+              onFocus={handleChatInputFocus}
+              rows={1}
+              placeholder={chatPlaceholder}
+              aria-label="Message this soul"
+              disabled={!isChatReady}
             />
-            <button type="submit" disabled={!chatInput.trim() || !selectedSoul?.running || socketState !== "open"}>
+            <button type="submit" disabled={!chatInput.trim() || !isChatReady}>
               Send
             </button>
           </form>
