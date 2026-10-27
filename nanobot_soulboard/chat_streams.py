@@ -7,7 +7,6 @@ from typing import Any
 
 from fastapi import WebSocket
 from loguru import logger
-
 from nanobot.agent.loop import AgentLoop
 from nanobot_soulboard.schemas import (
     ChatRequest,
@@ -25,6 +24,7 @@ class StreamState:
 
     reasoning_content: str = ""
     content: str = ""
+    tool_events: dict[str, dict[str, Any]] = field(default_factory=dict)
     websockets: set[WebSocket] = field(default_factory=set)
     queue: asyncio.Queue[ChatRequest] = field(default_factory=asyncio.Queue)
     backlog: list[dict[str, Any]] = field(default_factory=list)
@@ -48,6 +48,7 @@ class ChatStreamManager:
             reset = StreamResetResponse(
                 content=stream.content or None,
                 reasoning_content=stream.reasoning_content or None,
+                tool_events=list(stream.tool_events.values()),
             ).model_dump()
             backlog = list(stream.backlog)
         try:
@@ -139,22 +140,42 @@ class ChatStreamManager:
         async with stream.lock:
             stream.reasoning_content = ""
             stream.content = ""
+            stream.tool_events.clear()
             stream.backlog.clear()
         await self._broadcast(stream, StreamResetResponse().model_dump())
 
-        async def _send_progress(content: str, *, tool_hint: bool = False) -> None:
-            if tool_hint:
-                payload = StreamChunkResponse(content=content, reasoning_content=None).model_dump()
+        async def _send_progress(
+            content: str,
+            *,
+            tool_hint: bool = False,
+            tool_events: list[dict[str, Any]] | None = None,
+            reasoning: bool = False,
+            reasoning_end: bool = False,
+        ) -> None:
+            del reasoning, reasoning_end
+            if tool_events:
+                async with stream.lock:
+                    for event in tool_events:
+                        call_id = event.get("call_id")
+                        if isinstance(call_id, str) and call_id:
+                            stream.tool_events[call_id] = event
+                payload = StreamChunkResponse(
+                    kind="tool",
+                    content=content or None,
+                    tool_events=tool_events,
+                ).model_dump()
+            elif tool_hint:
+                payload = StreamChunkResponse(kind="tool", content=content or None).model_dump()
             else:
                 async with stream.lock:
                     stream.reasoning_content += content
-                payload = StreamChunkResponse(content=None, reasoning_content=content).model_dump()
+                payload = StreamChunkResponse(kind="reasoning", content=content).model_dump()
             await self._broadcast(stream, payload)
 
         async def _send_stream(delta: str) -> None:
             async with stream.lock:
                 stream.content += delta
-            payload = StreamChunkResponse(content=delta, reasoning_content=None).model_dump()
+            payload = StreamChunkResponse(kind="answer", content=delta).model_dump()
             await self._broadcast(stream, payload)
 
         async def _send_stream_end(*, resuming: bool = False) -> None:
@@ -173,24 +194,61 @@ class ChatStreamManager:
             )
             payloads = [
                 StreamFinalizedMessageResponse(
+                    history_index=index,
+                    client_message_id=(
+                        body.client_message_id
+                        if index == before_count
+                        else None
+                    ),
                     role=message["role"],
                     content=message.get("content"),
                     timestamp=message.get("timestamp"),
                     tool_calls=message.get("tool_calls"),
                     tool_call_id=message.get("tool_call_id"),
                 ).model_dump()
-                for message in session.messages[before_count:]
+                for index, message in enumerate(session.messages[before_count:], start=before_count)
             ]
+            if not payloads:
+                payloads.append(
+                    StreamFinalizedMessageResponse(
+                        history_index=before_count,
+                        client_message_id=body.client_message_id,
+                        role="user",
+                        content=body.content,
+                    ).model_dump()
+                )
         except Exception as exc:
             logger.exception("Background websocket stream failed for session {}", body.session_key)
             payloads = [
                 StreamFinalizedMessageResponse(
+                    history_index=index,
+                    client_message_id=(body.client_message_id if index == before_count else None),
+                    role=message["role"],
+                    content=message.get("content"),
+                    timestamp=message.get("timestamp"),
+                    tool_calls=message.get("tool_calls"),
+                    tool_call_id=message.get("tool_call_id"),
+                ).model_dump()
+                for index, message in enumerate(session.messages[before_count:], start=before_count)
+            ]
+            if not payloads:
+                payloads.append(
+                    StreamFinalizedMessageResponse(
+                        history_index=before_count,
+                        client_message_id=body.client_message_id,
+                        role="user",
+                        content=body.content,
+                    ).model_dump()
+                )
+            payloads.append(
+                StreamFinalizedMessageResponse(
+                    history_index=before_count + len(payloads),
                     role="assistant",
                     content=f"Sorry, I encountered an error: {exc}",
                     tool_calls=None,
                     tool_call_id=None,
                 ).model_dump()
-            ]
+            )
 
         for payload in payloads:
             delivered = await self._broadcast(stream, payload)
@@ -201,6 +259,7 @@ class ChatStreamManager:
         async with stream.lock:
             stream.reasoning_content = ""
             stream.content = ""
+            stream.tool_events.clear()
 
     async def _cleanup_if_idle(self, key: StreamKey, stream: StreamState) -> None:
         async with stream.lock:
@@ -210,6 +269,7 @@ class ChatStreamManager:
                 and stream.task is None
                 and not stream.reasoning_content
                 and not stream.content
+                and not stream.tool_events
                 and not stream.backlog
             )
         if idle:

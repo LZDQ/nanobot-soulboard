@@ -118,7 +118,13 @@ def _build_session_detail_response(
         history_start=window_start,
         history_end=window_end,
         total_messages=total_messages,
-        messages=session.messages[window_start:window_end],
+        messages=[
+            {**message, "history_index": index}
+            for index, message in enumerate(
+                session.messages[window_start:window_end],
+                start=window_start,
+            )
+        ],
     )
 
 class AppState:
@@ -1283,6 +1289,7 @@ def create_app() -> FastAPI:
                     session_key=session_key,
                     channel=channel,
                     chat_id=chat_id,
+                    client_message_id=body.client_message_id,
                 ),
             )
 

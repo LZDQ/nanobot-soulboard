@@ -225,21 +225,37 @@ export type StreamResetMessage = {
   type: "reset";
   content: string | null;
   reasoning_content: string | null;
+  tool_events: ToolStreamEvent[];
 };
 
 export type StreamChunkMessage = {
   type: "chunk";
+  kind: "answer" | "reasoning" | "tool";
   content: string | null;
-  reasoning_content: string | null;
+  tool_events: ToolStreamEvent[] | null;
 };
 
 export type StreamFinalizedMessage = {
   type: "finalized";
+  history_index: number;
+  client_message_id: string | null;
   role: string;
   content: unknown;
   timestamp: string | null;
   tool_calls: Array<Record<string, unknown>> | null;
   tool_call_id: string | null;
+};
+
+export type ToolStreamEvent = {
+  version: number;
+  phase: "start" | "end" | "error";
+  call_id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+  result: unknown;
+  error: string | null;
+  files: unknown[];
+  embeds: unknown[];
 };
 
 export type StreamMessage = StreamResetMessage | StreamChunkMessage | StreamFinalizedMessage;

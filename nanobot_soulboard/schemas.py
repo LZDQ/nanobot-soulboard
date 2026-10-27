@@ -119,6 +119,10 @@ class ChatRequest(BaseModel):
         default="direct",
         description="Channel-local chat identifier paired with channel when building runtime context.",
     )
+    client_message_id: str | None = Field(
+        default=None,
+        description="Client-generated ID used to reconcile an optimistic user message.",
+    )
 
 
 class ChatResponse(BaseModel):
@@ -131,6 +135,7 @@ class StreamInputMessage(BaseModel):
     """Inbound websocket chat payload."""
 
     content: str = Field(min_length=1)
+    client_message_id: str | None = Field(default=None, min_length=1)
 
 
 class CreateSessionRequest(BaseModel):
@@ -146,8 +151,9 @@ class StreamChunkResponse(BaseModel):
     """One streamed chunk sent from server to frontend."""
 
     type: str = "chunk"
+    kind: Literal["answer", "reasoning", "tool"] = "answer"
     content: str | None = None
-    reasoning_content: str | None = None
+    tool_events: list[dict[str, Any]] | None = None
 
 
 class StreamResetResponse(BaseModel):
@@ -156,12 +162,15 @@ class StreamResetResponse(BaseModel):
     type: str = "reset"
     content: str | None = None
     reasoning_content: str | None = None
+    tool_events: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class StreamFinalizedMessageResponse(BaseModel):
     """Structured finalized message emitted after persistence."""
 
     type: str = "finalized"
+    history_index: int
+    client_message_id: str | None = None
     role: str
     content: Any = None
     timestamp: str | None = None

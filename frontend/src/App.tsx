@@ -1,6 +1,7 @@
 import {
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   type FormEvent,
@@ -15,12 +16,14 @@ import { CreateSoulDialog } from "./components/CreateSoulDialog";
 import { CloneSoulPage } from "./components/CloneSoulPage";
 import { GroupListEditor } from "./components/GroupListEditor";
 import { MarkdownMessage } from "./components/MarkdownMessage";
+import { StreamingTools } from "./components/StreamingTools";
 import { ToolCallsDetails } from "./components/ToolCallsDetails";
 import { ToolResultDetails } from "./components/ToolResultDetails";
 import { CronJobRegistryDialog } from "./components/registries/CronJobRegistryDialog";
 import { McpServersDialog } from "./components/registries/McpServersDialog";
 import { SkillPoolsDialog } from "./components/registries/SkillPoolsDialog";
 import { api, getWsBase } from "./lib/api";
+import { chatTranscriptReducer, emptyChatTranscript } from "./lib/chatTranscript";
 import { copyToClipboard } from "./lib/clipboard";
 import {
   draftToMcpPayload,
@@ -53,7 +56,6 @@ import {
   renderOverrideValue,
   renderToolList,
 } from "./lib/format";
-import { appendMessages, prependSessionWindow } from "./lib/sessionWindows";
 import { getFocusFromUrl, getFocusHref, navigateToFocus, syncFocusToUrl } from "./lib/urlFocus";
 import {
   DEFAULT_CHAT_CHANNEL,
@@ -83,7 +85,6 @@ import {
   type SoulPromptFileName,
   type SoulPromptFilesResponse,
   type SoulSkill,
-  type StreamFinalizedMessage,
   type StreamMessage,
   type ToolPolicyState,
 } from "./types";
@@ -93,14 +94,20 @@ type FloatingButtonPosition = {
   y: number;
 };
 
-/** A prompt shown in the transcript from the moment it is sent until the backend echoes it back. */
-type PendingUserMessage = {
-  id: string;
-  content: string;
-  sentAt: string;
-};
-
 const CHAT_INPUT_MAX_HEIGHT_PX = 200;
+type SessionMetadata = Omit<SessionDetail, "messages">;
+
+function sessionMetadata(detail: SessionDetail): SessionMetadata {
+  return {
+    created_at: detail.created_at,
+    updated_at: detail.updated_at,
+    metadata: detail.metadata,
+    last_consolidated: detail.last_consolidated,
+    history_start: detail.history_start,
+    history_end: detail.history_end,
+    total_messages: detail.total_messages,
+  };
+}
 
 type FloatingButtonDrag = {
   pointerId: number;
@@ -133,15 +140,12 @@ export default function App() {
   const [createMcpServerName, setCreateMcpServerName] = useState("");
   const [createSessionKey, setCreateSessionKey] = useState("");
   const [newSkillRegistryPath, setNewSkillRegistryPath] = useState("");
-  const [sessionDetail, setSessionDetail] = useState<SessionDetail | null>(null);
+  const [sessionDetail, setSessionDetail] = useState<SessionMetadata | null>(null);
   const [sessionKey, setSessionKey] = useState<string | null>(initialFocusRef.current.sessionKey);
   const [olderMessagesPending, setOlderMessagesPending] = useState(false);
   const [socketEpoch, setSocketEpoch] = useState(0);
   const [chatInput, setChatInput] = useState("");
-  const [chatReasoning, setChatReasoning] = useState("");
-  const [chatContent, setChatContent] = useState("");
-  const [finalizedMessages, setFinalizedMessages] = useState<StreamFinalizedMessage[]>([]);
-  const [pendingUserMessages, setPendingUserMessages] = useState<PendingUserMessage[]>([]);
+  const [transcript, dispatchTranscript] = useReducer(chatTranscriptReducer, emptyChatTranscript);
   const [isChatPinnedToBottom, setIsChatPinnedToBottom] = useState(true);
   const [pending, setPending] = useState<string>("");
   const [soulError, setSoulError] = useState<string>("");
@@ -264,10 +268,7 @@ export default function App() {
       setPromptSelection(getEmptyPromptSelection());
       setSessionDetail(null);
       setSessionKey(null);
-      setChatContent("");
-      setChatReasoning("");
-      setFinalizedMessages([]);
-      setPendingUserMessages([]);
+      dispatchTranscript({ type: "clear" });
       socketRef.current?.close();
       socketRef.current = null;
       setSocketState("closed");
@@ -283,6 +284,7 @@ export default function App() {
       setPromptSelection(getEmptyPromptSelection());
       setSessionDetail(null);
       setSessionKey(null);
+      dispatchTranscript({ type: "clear" });
       setIsEditingSoul(false);
       setIsEditingPromptFiles(false);
       setIsCreatingSoul(false);
@@ -685,10 +687,7 @@ export default function App() {
     setSoulError("");
     setSessionDetail(null);
     setSessionKey(pendingSessionKey);
-    setChatContent("");
-    setChatReasoning("");
-    setFinalizedMessages([]);
-    setPendingUserMessages([]);
+    dispatchTranscript({ type: "clear" });
     socketRef.current?.close();
     socketRef.current = null;
     setSocketState("closed");
@@ -839,29 +838,19 @@ export default function App() {
     socket.onmessage = (event) => {
       const message = JSON.parse(event.data) as StreamMessage;
       if (message.type === "reset") {
-        setFinalizedMessages((current) => {
-          setSessionDetail((detail) => appendMessages(detail, current));
-          return [];
-        });
-        setChatContent(message.content ?? "");
-        setChatReasoning(message.reasoning_content ?? "");
+        dispatchTranscript({ type: "reset_stream", message });
         return;
       }
       if (message.type === "chunk") {
-        if (message.content) {
-          setChatContent((current) => current + message.content!);
-        }
-        if (message.reasoning_content) {
-          setChatReasoning((current) => current + message.reasoning_content!);
-        }
+        dispatchTranscript({ type: "stream_chunk", message });
         return;
       }
-      setChatContent("");
-      setChatReasoning("");
-      if (message.role === "user") {
-        dropPendingUserMessage(renderContent(message.content));
-      }
-      setFinalizedMessages((current) => [...current, message]);
+      dispatchTranscript({ type: "finalize", message });
+      setSessionDetail((current) => current ? {
+        ...current,
+        history_end: Math.max(current.history_end, message.history_index + 1),
+        total_messages: Math.max(current.total_messages, message.history_index + 1),
+      } : current);
       void refreshSessions(soulId).catch(() => {});
     };
     return () => {
@@ -1131,14 +1120,12 @@ export default function App() {
         socketRef.current?.close();
         socketRef.current = null;
         setSocketState("closed");
+        dispatchTranscript({ type: "clear" });
         const detail = await fetchSessionWindow(key);
-        setSessionDetail(detail);
+        setSessionDetail(sessionMetadata(detail));
+        dispatchTranscript({ type: "merge_history", messages: detail.messages });
         setSessionKey(key);
         setOlderMessagesPending(false);
-        setChatContent("");
-        setChatReasoning("");
-        setFinalizedMessages([]);
-        setPendingUserMessages([]);
         setSocketEpoch((current) => current + 1);
       });
     } catch (cause) {
@@ -1155,7 +1142,15 @@ export default function App() {
       const detail = await fetchSessionWindow(sessionKey, {
         before: sessionDetail.history_start,
       });
-      setSessionDetail((current) => prependSessionWindow(current, detail));
+      dispatchTranscript({ type: "merge_history", messages: detail.messages });
+      setSessionDetail((current) => current ? {
+        ...current,
+        created_at: detail.created_at,
+        updated_at: detail.updated_at,
+        metadata: detail.metadata,
+        last_consolidated: detail.last_consolidated,
+        history_start: detail.history_start,
+      } : sessionMetadata(detail));
     } catch (cause) {
       notifyError(cause);
     } finally {
@@ -1180,13 +1175,10 @@ export default function App() {
         method: "POST",
         body: JSON.stringify({ key }),
       });
-      setSessionDetail(detail);
+      setSessionDetail(sessionMetadata(detail));
+      dispatchTranscript({ type: "replace_history", messages: detail.messages });
       setSessionKey(key);
       setCreateSessionKey("");
-      setChatContent("");
-      setChatReasoning("");
-      setFinalizedMessages([]);
-      setPendingUserMessages([]);
       setSessionsPage(0);
       await refreshSessions(selectedSoul.soul_id, { page: 0 });
       setSocketEpoch((current) => current + 1);
@@ -1218,10 +1210,7 @@ export default function App() {
         setSessionDetail(null);
         setSessionKey(null);
         setOlderMessagesPending(false);
-        setChatContent("");
-        setChatReasoning("");
-        setFinalizedMessages([]);
-        setPendingUserMessages([]);
+        dispatchTranscript({ type: "clear" });
       }
       setSessionsPage(nextPage);
       await refreshSessions(selectedSoul.soul_id, { page: nextPage });
@@ -1302,23 +1291,6 @@ export default function App() {
     }
   }
 
-  /**
-   * Remove the echo of a prompt we are already showing optimistically. Matching on
-   * content keeps queued prompts paired up; the oldest entry is dropped otherwise so
-   * a reworded echo can never leave a duplicate behind.
-   */
-  function dropPendingUserMessage(echoed: string): void {
-    const normalized = echoed.trim();
-    setPendingUserMessages((current) => {
-      if (!current.length) {
-        return current;
-      }
-      const matched = current.findIndex((item) => item.content === normalized);
-      const index = matched < 0 ? 0 : matched;
-      return [...current.slice(0, index), ...current.slice(index + 1)];
-    });
-  }
-
   function resizeChatInput(): void {
     const input = chatInputRef.current;
     if (!input) {
@@ -1337,17 +1309,14 @@ export default function App() {
     if (!socket) {
       return;
     }
-    socket.send(JSON.stringify({ content }));
     pendingUserMessageIdRef.current += 1;
-    // The backend only echoes the prompt once the whole turn is persisted, so
-    // show it immediately and reconcile when the finalized message arrives.
-    setPendingUserMessages((current) => [
-      ...current,
-      { id: String(pendingUserMessageIdRef.current), content, sentAt: new Date().toISOString() },
-    ]);
+    const clientMessageId = `${Date.now()}-${pendingUserMessageIdRef.current}`;
+    socket.send(JSON.stringify({ content, client_message_id: clientMessageId }));
+    dispatchTranscript({
+      type: "send",
+      message: { id: clientMessageId, content, sentAt: new Date().toISOString() },
+    });
     setChatInput("");
-    setIsChatPinnedToBottom(true);
-    window.requestAnimationFrame(jumpToChatEnd);
   }
 
   async function submitChat(event: FormEvent) {
@@ -1356,7 +1325,12 @@ export default function App() {
   }
 
   function handleChatInputKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>): void {
-    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing) {
+      return;
+    }
+    const isMac = /Mac|iPhone|iPad|iPod/.test(window.navigator.platform);
+    const shouldSend = isMac ? event.metaKey : event.ctrlKey;
+    if (!shouldSend) {
       return;
     }
     event.preventDefault();
@@ -1611,18 +1585,20 @@ export default function App() {
   }
 
   const runningCount = souls.filter((soul) => soul.running).length;
-  const chatHistory = [...(sessionDetail?.messages ?? []), ...finalizedMessages] as Array<Record<string, unknown>>;
-  const hasStreamingTurn = !!chatReasoning || !!chatContent;
-  const isAwaitingResponse = pendingUserMessages.length > 0 && !hasStreamingTurn;
+  const chatHistory = transcript.messages;
+  const hasStreamingTurn = !!transcript.reasoning || !!transcript.answer
+    || transcript.tools.length > 0 || transcript.toolHints.length > 0;
+  const isAwaitingResponse = transcript.pending.length > 0 && !hasStreamingTurn;
   const isTurnInFlight = hasStreamingTurn || isAwaitingResponse;
   const isChatReady = !!selectedSoul?.running && socketState === "open";
+  const chatSendShortcut = /Mac|iPhone|iPad|iPod/.test(window.navigator.platform) ? "Cmd+Enter" : "Ctrl+Enter";
   const chatPlaceholder = !selectedSoul?.running
     ? "Start this soul to chat"
     : socketState === "connecting"
       ? "Connecting to the soul..."
       : socketState !== "open"
         ? "Chat connection closed - press Reconnect above"
-        : "Message this soul - Enter sends, Shift+Enter for a new line";
+        : `Message this soul - Enter for a new line, ${chatSendShortcut} sends`;
   const canLoadOlderMessages = !!sessionDetail && sessionDetail.history_start > 0;
 
   const skillPoolCount = skillPools.length;
@@ -1662,10 +1638,12 @@ export default function App() {
   }, [
     sessionKey,
     isChatPinnedToBottom,
-    chatContent,
-    chatReasoning,
+    transcript.answer,
+    transcript.reasoning,
+    transcript.tools.length,
+    transcript.toolHints.length,
     chatHistory.length,
-    pendingUserMessages.length,
+    transcript.pending.length,
   ]);
 
   useEffect(() => {
@@ -3320,8 +3298,9 @@ export default function App() {
                 const renderedContent = renderContent(content) || "(empty)";
                 const timestamp = typeof message.timestamp === "string" ? message.timestamp : null;
                 const messageTime = timestamp ? formatMessageTime(timestamp) : "";
+                const historyIndex = typeof message.history_index === "number" ? message.history_index : index;
                 return (
-                <div key={`${role}-${index}`} className="message-card">
+                <div key={`history-${historyIndex}`} className="message-card">
                   <div className="message-head">
                     <strong>{role}</strong>
                     <div className="message-head-actions">
@@ -3365,7 +3344,7 @@ export default function App() {
                 </div>
                 );
               })}
-              {pendingUserMessages.map((message) => (
+              {transcript.pending.map((message) => (
                 <div key={message.id} className="message-card pending">
                   <div className="message-head">
                     <strong>user</strong>
@@ -3400,34 +3379,35 @@ export default function App() {
                         type="button"
                         className="ghost message-copy-button"
                         onClick={() => {
-                          void copyToClipboard(chatContent).then(() => {
+                          void copyToClipboard(transcript.answer).then(() => {
                             toast.success("Copied response");
                           }).catch((cause) => {
                             notifyError(cause);
                           });
                         }}
-                        disabled={!chatContent}
+                        disabled={!transcript.answer}
                       >
                         Copy
                       </button>
                     </div>
                   </div>
-                  {chatReasoning ? (
+                  {transcript.reasoning ? (
                     <details>
                       <summary>Reasoning</summary>
-                      <pre>{chatReasoning}</pre>
+                      <pre>{transcript.reasoning}</pre>
                     </details>
                   ) : null}
-                  {chatContent ? (
-                    <MarkdownMessage content={chatContent} />
+                  <StreamingTools events={transcript.tools} hints={transcript.toolHints} />
+                  {transcript.answer ? (
+                    <MarkdownMessage content={transcript.answer} />
                   ) : (
-                    <span className="chat-typing" aria-label="Waiting for the first token">
+                    !transcript.tools.length && !transcript.toolHints.length ? <span className="chat-typing" aria-label="Waiting for the first token">
                       <i /><i /><i />
-                    </span>
+                    </span> : null
                   )}
                 </div>
               ) : null}
-              {!chatHistory.length && !pendingUserMessages.length && !hasStreamingTurn ? (
+              {!chatHistory.length && !transcript.pending.length && !hasStreamingTurn ? (
                 <p className="muted">No messages yet — send a prompt below to start this session.</p>
               ) : null}
             </div>
@@ -3442,7 +3422,7 @@ export default function App() {
               onFocus={handleChatInputFocus}
               rows={1}
               placeholder={chatPlaceholder}
-              aria-label="Message this soul"
+              aria-label={`Message this soul; ${chatSendShortcut} sends`}
               disabled={!isChatReady}
             />
             <button type="submit" disabled={!chatInput.trim() || !isChatReady}>
