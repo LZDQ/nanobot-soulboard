@@ -20,11 +20,16 @@ from nanobot.session.goal_state import runner_wall_llm_timeout_s
 from nanobot.session.manager import Session
 
 from nanobot_soulboard.agent.autocompact import SoulAutoCompact
+from nanobot_soulboard.agent.consolidation import SoulConsolidator
 from nanobot_soulboard.agent.search import replace_grep_tool
 from nanobot_soulboard.agent.shell import SoulExecTool
 from nanobot_soulboard.agent.subagent import SoulSubagentManager
 from nanobot_soulboard.context import SoulboardContextBuilder
 from nanobot_soulboard.cron import SoulCronTool
+from nanobot_soulboard.session import (
+    clear_consolidation_history,
+    rebase_consolidation_history,
+)
 
 
 def _add_soul_context_to_tool_call_log(record: dict[str, Any]) -> None:
@@ -86,11 +91,7 @@ class SoulAgentLoop(AgentLoop):
             session_ttl_minutes=session_ttl_minutes,
             **kwargs,
         )
-        self.auto_compact = SoulAutoCompact(
-            sessions=self.sessions,
-            consolidator=self.consolidator,
-            session_ttl_minutes=session_ttl_minutes,
-        )
+        upstream_consolidator = self.consolidator
         self.context = SoulboardContextBuilder(
             self.workspace,
             soul_id=soul_id,
@@ -98,6 +99,24 @@ class SoulAgentLoop(AgentLoop):
             disabled_skills=disabled_skills,
             include_timestamps=include_timestamps,
             include_runtime_context=include_runtime_context,
+        )
+        self.consolidator = SoulConsolidator(
+            store=self.context.memory,
+            provider=upstream_consolidator.provider,
+            model=upstream_consolidator.model,
+            sessions=self.sessions,
+            context_window_tokens=upstream_consolidator.context_window_tokens,
+            build_messages=self.context.build_messages,
+            get_tool_definitions=self.tools.get_definitions,
+            max_completion_tokens=upstream_consolidator.max_completion_tokens,
+            consolidation_ratio=upstream_consolidator.consolidation_ratio,
+            unified_session=upstream_consolidator.unified_session,
+            timezone_name=self.context.timezone,
+        )
+        self.auto_compact = SoulAutoCompact(
+            sessions=self.sessions,
+            consolidator=self.consolidator,
+            session_ttl_minutes=session_ttl_minutes,
         )
 
     async def _state_build(self, ctx: TurnContext) -> str:
@@ -409,7 +428,7 @@ class SoulAgentLoop(AgentLoop):
             unified_session=self._unified_session,
         )
         t_wall = time.time()
-        final_content, _, all_msgs, stop_reason, _ = await self._run_agent_loop(
+        final_content, _, all_msgs, _stop_reason, _ = await self._run_agent_loop(
             messages, session=session, channel=channel, chat_id=chat_id,
             message_id=msg.metadata.get("message_id"),
             metadata=msg.metadata,
@@ -420,9 +439,34 @@ class SoulAgentLoop(AgentLoop):
         latency_ms = max(0, int((wall_done - t_wall) * 1000))
         self._save_turn(session, all_msgs, 1 + len(history), turn_latency_ms=latency_ms)
         self._runtime_events().record_turn_latency(key, latency_ms)
+        messages_before_cap = list(session.messages)
         session.enforce_file_cap(
             on_archive=partial(self.context.memory.raw_archive, session_key=key)
         )
+        if len(session.messages) < len(messages_before_cap):
+            retained_start = next(
+                (
+                    index
+                    for index, message in enumerate(messages_before_cap)
+                    if session.messages and message is session.messages[0]
+                ),
+                None,
+            )
+            is_suffix = (
+                retained_start is not None
+                and all(
+                    left is right
+                    for left, right in zip(
+                        messages_before_cap[retained_start:],
+                        session.messages,
+                        strict=True,
+                    )
+                )
+            )
+            if is_suffix:
+                rebase_consolidation_history(session, retained_start)
+            else:
+                clear_consolidation_history(session)
         self._clear_runtime_checkpoint(session)
         self.sessions.save(session)
         self._schedule_background(

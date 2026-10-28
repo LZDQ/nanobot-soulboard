@@ -1,5 +1,6 @@
 """API and websocket schemas for nanobot-soulboard."""
 
+from datetime import datetime
 from typing import Any, Literal
 
 from nanobot.config.schema import MCPServerConfig
@@ -147,6 +148,28 @@ class CreateSessionRequest(BaseModel):
     )
 
 
+class ForkSessionRequest(BaseModel):
+    """Request body for forking a completed session prefix."""
+
+    target_session_key: str = Field(min_length=1)
+    message_count: int | None = Field(default=None, gt=0)
+
+
+class ConsolidationHistoryEntry(BaseModel):
+    """A recoverable cumulative consolidation checkpoint."""
+
+    message_count: int = Field(ge=0)
+    summary: str = Field(min_length=1)
+    created_at: datetime
+
+
+class SessionForkInfo(BaseModel):
+    """Direct parent information for a forked session."""
+
+    parent_session_key: str
+    forked_message_count: int = Field(gt=0)
+
+
 class StreamChunkResponse(BaseModel):
     """One streamed chunk sent from server to frontend."""
 
@@ -173,7 +196,7 @@ class StreamFinalizedMessageResponse(BaseModel):
     client_message_id: str | None = None
     role: str
     content: Any = None
-    timestamp: str | None = None
+    timestamp: datetime | None = None
     tool_calls: list[dict[str, Any]] | None = None
     tool_call_id: str | None = None
 
@@ -286,9 +309,10 @@ class SessionSummaryResponse(BaseModel):
     """Session summary for one soul workspace."""
 
     key: str
-    created_at: str | None = None
-    updated_at: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
     path: str
+    fork: SessionForkInfo | None = None
 
 
 class SessionListResponse(BaseModel):
@@ -304,8 +328,8 @@ class SessionListResponse(BaseModel):
 class SessionDetailResponse(BaseModel):
     """Expanded session contents."""
 
-    created_at: str
-    updated_at: str
+    created_at: datetime
+    updated_at: datetime
     metadata: dict[str, Any]
     last_consolidated: int
     history_start: int

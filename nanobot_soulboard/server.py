@@ -1,5 +1,6 @@
 """FastAPI server for nanobot-soulboard."""
 
+import asyncio
 import re
 from contextlib import asynccontextmanager
 from html import escape
@@ -13,6 +14,7 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
     WebSocket,
     WebSocketDisconnect,
 )
@@ -57,6 +59,7 @@ from nanobot_soulboard.schemas import (
     CronJobStateResponse,
     DisabledToolsResponse,
     ErrorResponse,
+    ForkSessionRequest,
     HealthResponse,
     MCPServerResponse,
     PathsResponse,
@@ -80,7 +83,7 @@ from nanobot_soulboard.schemas import (
     UpdateSoulPromptFilesRequest,
     UpdateSoulRequest,
 )
-from nanobot_soulboard.session import SoulSessionManager, consolidation_indices
+from nanobot_soulboard.session import SoulSessionManager, consolidation_boundaries
 from nanobot_soulboard.skills import count_text_stats, skill_summary
 
 
@@ -95,6 +98,65 @@ def _build_session_metadata(key: str) -> dict[str, str]:
             metadata["chat_id"] = chat_id
     return metadata
 
+
+def _valid_session_key(key: str) -> bool:
+    return (
+        key == key.strip()
+        and 0 < len(key) <= 512
+        and re.search(r"[\x00-\x1f\x7f]", key) is None
+        and re.search(r"[/\\?#]", key) is None
+        and bool(SessionManager.safe_key(key))
+    )
+
+
+def _fork_locked_session(
+    manager: SoulSessionManager,
+    source_key: str,
+    target_key: str,
+    requested_count: int | None,
+) -> Any:
+    """Validate and copy a source session while its runtime locks are held."""
+    target_path = manager.sessions_dir / f"{manager.safe_key(target_key)}.jsonl"
+    if target_path.exists():
+        raise HTTPException(status_code=409, detail=f"Target session already exists: {target_key}")
+    source = manager.get_or_create(source_key)
+    if (
+        "runtime_checkpoint" in source.metadata
+        or "pending_user_turn" in source.metadata
+    ):
+        raise HTTPException(status_code=409, detail="Source session has an unfinished turn")
+
+    total = len(source.messages)
+    message_count = total if requested_count is None else requested_count
+    if message_count <= 0 or message_count > total:
+        raise HTTPException(
+            status_code=422,
+            detail=f"message_count must be between 1 and {total}",
+        )
+    if message_count < total:
+        if source.messages[message_count].get("role") != "user":
+            raise HTTPException(
+                status_code=422,
+                detail="message_count is not a complete turn boundary",
+            )
+    else:
+        final_message = source.messages[-1]
+        if final_message.get("role") != "assistant" or final_message.get("tool_calls"):
+            raise HTTPException(
+                status_code=409,
+                detail="Source session does not end with a final assistant response",
+            )
+
+    try:
+        return manager.fork_session_at_message_count(
+            source,
+            target_key,
+            message_count,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 def _build_session_detail_response(
     session: Any,
     *,
@@ -107,12 +169,12 @@ def _build_session_detail_response(
         window_start = min(session.last_consolidated, window_end)
     else:
         window_start = max(
-            (index for index in consolidation_indices(session) if index < window_end),
+            (index for index in consolidation_boundaries(session) if index < window_end),
             default=0,
         )
     return SessionDetailResponse(
-        created_at=session.created_at.isoformat(),
-        updated_at=session.updated_at.isoformat(),
+        created_at=session.created_at,
+        updated_at=session.updated_at,
         metadata=session.metadata,
         last_consolidated=session.last_consolidated,
         history_start=window_start,
@@ -1202,6 +1264,98 @@ def create_app() -> FastAPI:
             _raise_not_found(f"Unknown session: {session_key}")
         session = manager.get_or_create(session_key)
         return _build_session_detail_response(session, before=before)
+
+    @api.post(
+        "/souls/{soul_id}/sessions/{source_session_key}/fork",
+        response_model=SessionSummaryResponse,
+        status_code=201,
+        responses={
+            404: {"model": ErrorResponse},
+            409: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+        },
+        summary="Fork Soul Session",
+        description=(
+            "Copy a completed prefix of a source session into a new session. The prefix must end "
+            "immediately before a user message, or at an idle session's final assistant response."
+        ),
+    )
+    async def fork_soul_session(
+        request: Request,
+        response: Response,
+        soul_id: str,
+        source_session_key: str,
+        body: ForkSessionRequest,
+    ) -> SessionSummaryResponse:
+        supervisor = _get_supervisor(request)
+        try:
+            spec = supervisor.get_spec(soul_id)
+        except KeyError as exc:
+            _raise_not_found(_error_detail(exc))
+
+        try:
+            agent_loop = supervisor.get_agent_loop(soul_id)
+        except KeyError:
+            agent_loop = None
+            manager = SoulSessionManager(spec.workspace)
+        else:
+            manager = agent_loop.sessions
+
+        if not isinstance(manager, SoulSessionManager):
+            raise HTTPException(status_code=409, detail="Soul session manager is unavailable")
+        known = {item["key"] for item in manager.list_sessions()}
+        if source_session_key not in known:
+            _raise_not_found(f"Unknown session: {source_session_key}")
+
+        target_key = body.target_session_key
+        if not _valid_session_key(target_key):
+            raise HTTPException(status_code=422, detail="Invalid target session key")
+        if target_key == source_session_key:
+            raise HTTPException(status_code=409, detail="Target session must differ from source")
+        target_path = manager.sessions_dir / f"{manager.safe_key(target_key)}.jsonl"
+        if target_key in known or target_path.exists():
+            raise HTTPException(status_code=409, detail=f"Target session already exists: {target_key}")
+
+        if agent_loop is None:
+            target = _fork_locked_session(manager, source_session_key, target_key, body.message_count)
+        else:
+            session_lock = agent_loop._session_locks.setdefault(
+                source_session_key,
+                asyncio.Lock(),
+            )
+            consolidation_lock = agent_loop.consolidator.get_lock(source_session_key)
+            active = any(
+                not task.done()
+                for task in agent_loop._active_tasks.get(source_session_key, [])
+            )
+            if (
+                session_lock.locked()
+                or consolidation_lock.locked()
+                or active
+                or source_session_key in agent_loop._pending_queues
+            ):
+                raise HTTPException(status_code=409, detail="Source session is currently active")
+            async with session_lock, consolidation_lock:
+                target = _fork_locked_session(
+                    manager,
+                    source_session_key,
+                    target_key,
+                    body.message_count,
+                )
+
+        location = request.url_for(
+            "get_session",
+            soul_id=soul_id,
+            session_key=target.key,
+        )
+        response.headers["Location"] = str(location)
+        return SessionSummaryResponse(
+            key=target.key,
+            created_at=target.created_at,
+            updated_at=target.updated_at,
+            path=str(target_path),
+            fork=target.metadata["fork"],
+        )
 
     @api.delete(
         "/souls/{soul_id}/sessions/{session_key}",

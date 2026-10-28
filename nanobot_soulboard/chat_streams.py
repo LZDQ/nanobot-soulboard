@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import WebSocket
 from loguru import logger
 from nanobot.agent.loop import AgentLoop
+
 from nanobot_soulboard.schemas import (
     ChatRequest,
     StreamChunkResponse,
@@ -205,7 +206,7 @@ class ChatStreamManager:
                     timestamp=message.get("timestamp"),
                     tool_calls=message.get("tool_calls"),
                     tool_call_id=message.get("tool_call_id"),
-                ).model_dump()
+                ).model_dump(mode="json")
                 for index, message in enumerate(session.messages[before_count:], start=before_count)
             ]
             if not payloads:
@@ -215,9 +216,9 @@ class ChatStreamManager:
                         client_message_id=body.client_message_id,
                         role="user",
                         content=body.content,
-                    ).model_dump()
+                    ).model_dump(mode="json")
                 )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - stream failures become finalized messages
             logger.exception("Background websocket stream failed for session {}", body.session_key)
             payloads = [
                 StreamFinalizedMessageResponse(
@@ -228,7 +229,7 @@ class ChatStreamManager:
                     timestamp=message.get("timestamp"),
                     tool_calls=message.get("tool_calls"),
                     tool_call_id=message.get("tool_call_id"),
-                ).model_dump()
+                ).model_dump(mode="json")
                 for index, message in enumerate(session.messages[before_count:], start=before_count)
             ]
             if not payloads:
@@ -238,7 +239,7 @@ class ChatStreamManager:
                         client_message_id=body.client_message_id,
                         role="user",
                         content=body.content,
-                    ).model_dump()
+                    ).model_dump(mode="json")
                 )
             payloads.append(
                 StreamFinalizedMessageResponse(
@@ -247,7 +248,7 @@ class ChatStreamManager:
                     content=f"Sorry, I encountered an error: {exc}",
                     tool_calls=None,
                     tool_call_id=None,
-                ).model_dump()
+                ).model_dump(mode="json")
             )
 
         for payload in payloads:
