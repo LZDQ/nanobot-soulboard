@@ -438,6 +438,8 @@ pre {
   margin-top: 0.55rem;
   font-size: 0.78rem;
   color: var(--muted);
+  /* Session paths have no break opportunities and would widen the whole grid. */
+  overflow-wrap: anywhere;
 }
 
 .session-delete-button {
@@ -1150,6 +1152,27 @@ label span {
   white-space: nowrap;
 }
 
+/* Rides the sticky composer, so returning to the end never costs a scroll.
+   Element-qualified so it overrides button.ghost's translucent background. */
+button.chat-jump-button {
+  position: absolute;
+  bottom: calc(100% + 0.5rem);
+  left: 50%;
+  z-index: 6;
+  min-height: 2.5rem;
+  padding: 0.45rem 1rem;
+  border-radius: 999px;
+  background: rgba(255, 251, 245, 0.97);
+  box-shadow: 0 10px 28px rgba(80, 49, 27, 0.2);
+  transform: translateX(-50%);
+  animation: chat-jump-in 180ms ease-out;
+}
+
+button.chat-jump-button:hover,
+button.chat-jump-button:focus-visible {
+  transform: translateX(-50%);
+}
+
 .chat-jump-button.has-new {
   border-color: rgba(183, 77, 18, 0.45);
   background: var(--accent-soft);
@@ -1211,6 +1234,11 @@ label span {
   transform: none;
 }
 
+@keyframes chat-jump-in {
+  from { opacity: 0; transform: translate(-50%, 0.5rem); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
 @keyframes chat-jump-down {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(0.2rem); }
@@ -1227,6 +1255,7 @@ label span {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  button.chat-jump-button,
   .chat-jump-button:hover .chat-jump-icon,
   .chat-jump-button:focus-visible .chat-jump-icon,
   .chat-status-pill.live,

@@ -186,7 +186,7 @@ export default function App() {
   const [socketState, setSocketState] = useState<"closed" | "connecting" | "open">("closed");
   const [soulGroupFilter, setSoulGroupFilter] = useState<string>("");
   const [sessionsPage, setSessionsPage] = useState<number>(0);
-  const [sessionsPerPage, setSessionsPerPage] = useState<number>(10);
+  const [sessionsPerPage, setSessionsPerPage] = useState<number>(5);
   const [sessionSortOrder, setSessionSortOrder] = useState<"desc" | "asc">("desc");
   const [sessionsTotal, setSessionsTotal] = useState<number>(0);
   const socketRef = useRef<WebSocket | null>(null);
@@ -1626,25 +1626,27 @@ export default function App() {
     return () => observer.disconnect();
   }, [sessionKey]);
 
+  // Follow the end by page height, not by message counts: the transcript keeps
+  // growing after its last state update (markdown, tool blocks, fonts), and the
+  // session list above it loads later and pushes the whole conversation down.
   useEffect(() => {
     if (!sessionKey || !isChatPinnedToBottom) {
       return;
     }
-    window.cancelAnimationFrame(chatScrollFrameRef.current);
-    chatScrollFrameRef.current = window.requestAnimationFrame(() => {
-      chatEndRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
-    });
-    return () => window.cancelAnimationFrame(chatScrollFrameRef.current);
-  }, [
-    sessionKey,
-    isChatPinnedToBottom,
-    transcript.answer,
-    transcript.reasoning,
-    transcript.tools.length,
-    transcript.toolHints.length,
-    chatHistory.length,
-    transcript.pending.length,
-  ]);
+    const scrollToChatEnd = () => {
+      window.cancelAnimationFrame(chatScrollFrameRef.current);
+      chatScrollFrameRef.current = window.requestAnimationFrame(() => {
+        chatEndRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
+      });
+    };
+    scrollToChatEnd();
+    const observer = new ResizeObserver(scrollToChatEnd);
+    observer.observe(document.documentElement);
+    return () => {
+      observer.disconnect();
+      window.cancelAnimationFrame(chatScrollFrameRef.current);
+    };
+  }, [sessionKey, isChatPinnedToBottom]);
 
   useEffect(() => {
     resizeChatInput();
@@ -3228,16 +3230,6 @@ export default function App() {
           <div className="panel-head">
             <h2>Live chat</h2>
             <div className="chat-meta">
-              {isChatPinnedToBottom ? null : (
-                <button
-                  type="button"
-                  className={`ghost chat-jump-button ${isTurnInFlight ? "has-new" : ""}`}
-                  onClick={jumpToChatEnd}
-                >
-                  <span className="chat-jump-icon" aria-hidden="true">↓</span>
-                  {isTurnInFlight ? "Follow reply" : "Jump to end"}
-                </button>
-              )}
               <span className={`pill chat-status-pill ${socketState === "open" ? "live" : "idle"}`}>
                 {socketState === "open" ? "open" : socketState}
               </span>
@@ -3414,6 +3406,16 @@ export default function App() {
           </article>
 
           <form className="chat-form" onSubmit={(event) => void submitChat(event)}>
+            {isChatPinnedToBottom ? null : (
+              <button
+                type="button"
+                className={`ghost chat-jump-button ${isTurnInFlight ? "has-new" : ""}`}
+                onClick={jumpToChatEnd}
+              >
+                <span className="chat-jump-icon" aria-hidden="true">↓</span>
+                {isTurnInFlight ? "Follow reply" : "Jump to end"}
+              </button>
+            )}
             <textarea
               ref={chatInputRef}
               value={chatInput}
