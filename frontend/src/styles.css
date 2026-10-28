@@ -447,6 +447,39 @@ pre {
   align-self: center;
 }
 
+/* Lineage reads as a quiet caption, not a status badge: it is provenance,
+   not state, and the parent key is often long. */
+.session-fork-tag,
+.session-fork-pill {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  color: var(--accent-strong);
+  overflow-wrap: anywhere;
+}
+
+.session-card .session-fork-tag {
+  display: inline-flex;
+  margin-top: 0.45rem;
+  padding: 0.12rem 0.5rem;
+  background: var(--accent-soft);
+}
+
+/* In the chat head the same caption is a shortcut back to the parent. */
+button.session-fork-pill {
+  padding: 0.2rem 0.65rem;
+  border: 1px dashed rgba(183, 77, 18, 0.45);
+  background: transparent;
+  text-align: left;
+}
+
+button.session-fork-pill:hover:not(:disabled) {
+  background: var(--accent-soft);
+  transform: none;
+}
+
 .soul-group-filter {
   margin: 0 auto;
   padding: 0.3rem 0.55rem;
@@ -1369,7 +1402,8 @@ button.chat-jump-button:focus-visible {
   white-space: nowrap;
 }
 
-.message-copy-button {
+.message-copy-button,
+.message-fork-button {
   padding: 0.38rem 0.8rem;
   border-radius: 999px;
   font-size: 0.82rem;
@@ -2073,6 +2107,67 @@ button.tool-call-row.selected {
 
 .registry-modal-body .app-links-editor {
   width: 100%;
+}
+
+.fork-modal {
+  width: min(34rem, calc(100vw - 2.5rem));
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.fork-modal-body {
+  align-content: start;
+  gap: 0.85rem;
+}
+
+.fork-summary {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.85rem 0.95rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.fork-summary > div {
+  display: grid;
+  grid-template-columns: 6.5rem minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: baseline;
+}
+
+.fork-summary dt {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.fork-summary dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.fork-summary q {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.fork-modal-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.85rem;
+}
+
+/* The head keeps no button, so it is one full-width column. */
+.fork-modal .registry-modal-head {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.fork-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  padding: 0.9rem 1rem;
+  border-top: 1px solid var(--panel-border);
 }
 
 .clone-page {

@@ -14,6 +14,7 @@ import { Toaster, toast } from "sonner";
 
 import { CreateSoulDialog } from "./components/CreateSoulDialog";
 import { CloneSoulPage } from "./components/CloneSoulPage";
+import { ForkSessionDialog } from "./components/ForkSessionDialog";
 import { GroupListEditor } from "./components/GroupListEditor";
 import { MarkdownMessage } from "./components/MarkdownMessage";
 import { StreamingTools } from "./components/StreamingTools";
@@ -56,6 +57,13 @@ import {
   renderOverrideValue,
   renderToolList,
 } from "./lib/format";
+import {
+  describeFork,
+  forkPointPreview,
+  readSessionFork,
+  suggestForkKey,
+  validateSessionKey,
+} from "./lib/sessionForks";
 import { getFocusFromUrl, getFocusHref, navigateToFocus, syncFocusToUrl } from "./lib/urlFocus";
 import {
   DEFAULT_CHAT_CHANNEL,
@@ -96,6 +104,16 @@ type FloatingButtonPosition = {
 
 const CHAT_INPUT_MAX_HEIGHT_PX = 200;
 type SessionMetadata = Omit<SessionDetail, "messages">;
+
+/** A fork the user has composed but not yet created. */
+type ForkDraft = {
+  sourceKey: string;
+  /** Prefix length to copy: the branch ends on the reply it was taken from. */
+  messageCount: number;
+  totalCount: number;
+  cutPoint: string;
+  targetKey: string;
+};
 
 function sessionMetadata(detail: SessionDetail): SessionMetadata {
   return {
@@ -143,6 +161,8 @@ export default function App() {
   const [sessionDetail, setSessionDetail] = useState<SessionMetadata | null>(null);
   const [sessionKey, setSessionKey] = useState<string | null>(initialFocusRef.current.sessionKey);
   const [olderMessagesPending, setOlderMessagesPending] = useState(false);
+  const [forkDraft, setForkDraft] = useState<ForkDraft | null>(null);
+  const [forkError, setForkError] = useState("");
   const [socketEpoch, setSocketEpoch] = useState(0);
   const [chatInput, setChatInput] = useState("");
   const [transcript, dispatchTranscript] = useReducer(chatTranscriptReducer, emptyChatTranscript);
@@ -648,13 +668,17 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!isCreatingSoul && !activeRegistryDialog && !activeSoulDialog) {
+    if (!isCreatingSoul && !activeRegistryDialog && !activeSoulDialog && !forkDraft) {
       return;
     }
     const previousOverflow = document.body.style.overflow;
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape" && !pending) {
-        if (isCreatingSoul) {
+        // The fork dialog portals in last, so it is the one on top.
+        if (forkDraft) {
+          setForkDraft(null);
+          setForkError("");
+        } else if (isCreatingSoul) {
           closeCreateSoulDialog();
         } else if (activeRegistryDialog) {
           setActiveRegistryDialog(null);
@@ -669,7 +693,7 @@ export default function App() {
       document.body.style.overflow = previousOverflow;
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [activeRegistryDialog, activeSoulDialog, isCreatingSoul, pending]);
+  }, [activeRegistryDialog, activeSoulDialog, forkDraft, isCreatingSoul, pending]);
 
   useEffect(() => {
     if (!selectedSoul) {
@@ -1223,6 +1247,64 @@ export default function App() {
     });
   }
 
+  /**
+   * Open the fork composer. *messageCount* is the prefix length to copy: one
+   * past the reply the fork was taken from, so the branch opens on a finished
+   * turn and the next prompt is the user's.
+   */
+  function openForkDialog(messageCount: number, cutPoint: string) {
+    if (!sessionKey || !sessionDetail) {
+      return;
+    }
+    setForkError("");
+    setForkDraft({
+      sourceKey: sessionKey,
+      messageCount,
+      totalCount: sessionDetail.total_messages,
+      cutPoint,
+      targetKey: suggestForkKey(sessionKey, sessions.map((session) => session.key)),
+    });
+  }
+
+  async function forkSession() {
+    if (!selectedSoul || !forkDraft) {
+      return;
+    }
+    const { sourceKey, messageCount } = forkDraft;
+    const targetKey = forkDraft.targetKey.trim();
+    const invalid = validateSessionKey(targetKey);
+    if (invalid) {
+      setForkError(invalid);
+      return;
+    }
+    await runAction("fork-session", async () => {
+      // Create first: until this returns the current session is untouched, so a
+      // rejected fork leaves the dialog open over a live chat.
+      const created = await api<SessionSummary>(
+        `/api/souls/${encodeURIComponent(selectedSoul.soul_id)}/sessions/${encodeURIComponent(sourceKey)}/fork`,
+        {
+          method: "POST",
+          body: JSON.stringify({ target_session_key: targetKey, message_count: messageCount }),
+        },
+      );
+      socketRef.current?.close();
+      socketRef.current = null;
+      setSocketState("closed");
+      const detail = await fetchSessionWindow(created.key);
+      setSessionDetail(sessionMetadata(detail));
+      dispatchTranscript({ type: "replace_history", messages: detail.messages });
+      setSessionKey(created.key);
+      setOlderMessagesPending(false);
+      setSessionsPage(0);
+      await refreshSessions(selectedSoul.soul_id, { page: 0 });
+      setSocketEpoch((current) => current + 1);
+      setForkDraft(null);
+      toast.success(`Forked ${sourceKey} into ${created.key}`);
+    }).catch((cause) => {
+      setForkError(getErrorMessage(cause));
+    });
+  }
+
   async function updateMcpServer() {
     if (!selectedMcpServerName) {
       return;
@@ -1601,6 +1683,12 @@ export default function App() {
         : `Message this soul - Enter for a new line, ${chatSendShortcut} sends`;
   const canLoadOlderMessages = !!sessionDetail && sessionDetail.history_start > 0;
 
+  const activeSessionFork = sessionDetail ? readSessionFork(sessionDetail.metadata) : null;
+  // Forking copies the persisted file, so it only makes sense between turns.
+  const canForkSession = !!selectedSoul && !!sessionKey && !!sessionDetail && !isTurnInFlight && !pending;
+  const forkTargetKey = forkDraft?.targetKey.trim() ?? "";
+  const forkMessage = forkError || (forkTargetKey ? validateSessionKey(forkTargetKey) : "");
+
   const skillPoolCount = skillPools.length;
   const cronRegistryCount = cronJobRegistry.length;
   const mcpServerCount = mcpServers.length;
@@ -1873,6 +1961,9 @@ export default function App() {
                   <button key={session.key} className="session-card" onClick={() => void loadSession(session.key)}>
                     <strong>{session.key}</strong>
                     <span>updated {formatDate(session.updated_at)}</span>
+                    {session.fork ? (
+                      <span className="session-fork-tag">{describeFork(session.fork)}</span>
+                    ) : null}
                     <code>{session.path}</code>
                   </button>
                 ))}
@@ -3243,6 +3334,17 @@ export default function App() {
                 </button>
               ) : null}
               <code>{sessionKey}</code>
+              {activeSessionFork ? (
+                <button
+                  type="button"
+                  className="session-fork-pill"
+                  title={`Open ${activeSessionFork.parent_session_key}`}
+                  onClick={() => void loadSession(activeSessionFork.parent_session_key)}
+                  disabled={!!pending}
+                >
+                  {describeFork(activeSessionFork)}
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="danger session-delete-button"
@@ -3291,6 +3393,15 @@ export default function App() {
                 const timestamp = typeof message.timestamp === "string" ? message.timestamp : null;
                 const messageTime = timestamp ? formatMessageTime(timestamp) : "";
                 const historyIndex = typeof message.history_index === "number" ? message.history_index : index;
+                const forkIndex = typeof message.history_index === "number" ? message.history_index : null;
+                const nextRole = chatHistory[index + 1]?.role;
+                // A branch has to open on a finished turn, so it can only be cut
+                // after a reply that made no tool calls and was answered by the
+                // user next (or ended the session).
+                const isForkPoint = role === "assistant"
+                  && !toolCalls?.length
+                  && forkIndex !== null
+                  && (nextRole === undefined || nextRole === "user");
                 return (
                 <div key={`history-${historyIndex}`} className="message-card">
                   <div className="message-head">
@@ -3315,6 +3426,22 @@ export default function App() {
                           }}
                         >
                           Copy
+                        </button>
+                      ) : null}
+                      {isForkPoint && forkIndex !== null ? (
+                        <button
+                          type="button"
+                          className="ghost message-fork-button"
+                          aria-label="Fork from this reply"
+                          title={
+                            canForkSession
+                              ? `Branch into a new session ending with this reply (${forkIndex + 1} messages)`
+                              : "Wait for this turn to finish"
+                          }
+                          onClick={() => openForkDialog(forkIndex + 1, forkPointPreview(renderedContent))}
+                          disabled={!canForkSession}
+                        >
+                          Fork
                         </button>
                       ) : null}
                     </div>
@@ -3481,6 +3608,27 @@ export default function App() {
           onUpdateSkillTarget={updateCreateSoulSkillTarget}
           onCreate={() => void createSoul()}
         />
+      ) : null}
+      {forkDraft ? createPortal(
+        <ForkSessionDialog
+          pending={pending}
+          sourceKey={forkDraft.sourceKey}
+          carriedCount={forkDraft.messageCount}
+          totalCount={forkDraft.totalCount}
+          cutPoint={forkDraft.cutPoint}
+          targetKey={forkDraft.targetKey}
+          error={forkMessage}
+          onTargetKeyChange={(value) => {
+            setForkError("");
+            setForkDraft((current) => current ? { ...current, targetKey: value } : current);
+          }}
+          onCancel={() => {
+            setForkDraft(null);
+            setForkError("");
+          }}
+          onSubmit={() => void forkSession()}
+        />,
+        document.body,
       ) : null}
     </div>
   );

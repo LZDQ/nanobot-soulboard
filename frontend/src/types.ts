@@ -81,11 +81,17 @@ export type DisabledToolsResponse = {
 
 export type ToolPolicyState = "inherit" | "enabled" | "disabled";
 
+export type SessionFork = {
+  parent_session_key: string;
+  forked_message_count: number;
+};
+
 export type SessionSummary = {
   key: string;
   created_at: string | null;
   updated_at: string | null;
   path: string;
+  fork: SessionFork | null;
 };
 
 export type SessionListResponse = {
