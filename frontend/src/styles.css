@@ -395,6 +395,7 @@ pre {
 
 .soul-card:hover {
   transform: translateY(-1px);
+  border-color: rgba(183, 77, 18, 0.3);
 }
 
 .soul-card strong {
@@ -456,7 +457,7 @@ pre {
   max-width: 100%;
   border-radius: 999px;
   font-size: 0.76rem;
-  color: var(--accent-strong);
+  color: var(--muted);
   overflow-wrap: anywhere;
 }
 
@@ -464,19 +465,19 @@ pre {
   display: inline-flex;
   margin-top: 0.45rem;
   padding: 0.12rem 0.5rem;
-  background: var(--accent-soft);
+  background: rgba(85, 52, 25, 0.07);
 }
 
 /* In the chat head the same caption is a shortcut back to the parent. */
 button.session-fork-pill {
   padding: 0.2rem 0.65rem;
-  border: 1px dashed rgba(183, 77, 18, 0.45);
+  border: 1px solid var(--panel-border);
   background: transparent;
   text-align: left;
 }
 
 button.session-fork-pill:hover:not(:disabled) {
-  background: var(--accent-soft);
+  background: rgba(255, 255, 255, 0.7);
   transform: none;
 }
 
@@ -2327,6 +2328,10 @@ button.tool-call-row.selected {
 
   .group-chip-remove:hover {
     color: inherit;
+  }
+
+  .soul-card:hover {
+    border-color: transparent;
   }
 }
 
