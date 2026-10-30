@@ -490,10 +490,16 @@ export function CloneSoulPage({
                         <input
                           type="checkbox"
                           checked={promptCloneModes[name] === "hard_link"}
-                          onChange={(event) => setPromptCloneModes((current) => ({
-                            ...current,
-                            [name]: event.target.checked ? "hard_link" : "copy",
-                          }))}
+                          onChange={(event) => {
+                            const hardLink = event.target.checked;
+                            setPromptCloneModes((current) => ({
+                              ...current,
+                              [name]: hardLink ? "hard_link" : "copy",
+                            }));
+                            if (hardLink) {
+                              setPromptSelection((current) => ({ ...current, [name]: true }));
+                            }
+                          }}
                         />
                         <span>Hard link</span>
                       </label>
