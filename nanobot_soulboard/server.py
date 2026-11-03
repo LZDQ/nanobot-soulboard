@@ -19,7 +19,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 from nanobot.config.loader import load_config
@@ -1458,6 +1458,15 @@ def create_app() -> FastAPI:
         StaticFiles(directory=static_dir / "assets", check_dir=False),
         name="assets",
     )
+
+    if normalized_url_prefix:
+
+        @app.get("/", include_in_schema=False)
+        def redirect_to_frontend(request: Request) -> RedirectResponse:
+            target = frontend_prefix
+            if request.url.query:
+                target = f"{target}?{request.url.query}"
+            return RedirectResponse(target)
 
     @app.get(frontend_prefix, include_in_schema=False)
     @app.get(f"{normalized_url_prefix}/{{frontend_path:path}}", include_in_schema=False)
