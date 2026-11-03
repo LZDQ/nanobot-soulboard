@@ -139,6 +139,12 @@ export function CloneSoulPage({
       setPromptFiles(response.files);
       setPromptDraft(promptFilesToDraft(response.files));
       setPromptSelection(selection);
+      setPromptCloneModes((current) => (
+        Object.fromEntries(SOUL_PROMPT_FILE_NAMES.map((name) => [
+          name,
+          selection[name] ? current[name] : "copy",
+        ])) as Record<SoulPromptFileName, PromptFileCloneMode>
+      ));
     } catch (cause) {
       setPromptError("Could not load prompt files from the source soul.");
       notifyError(cause);
@@ -172,7 +178,11 @@ export function CloneSoulPage({
   }, [source.soul_id]);
 
   function togglePromptFile(name: SoulPromptFileName): void {
-    setPromptSelection((current) => ({ ...current, [name]: !current[name] }));
+    const selected = !promptSelection[name];
+    setPromptSelection((current) => ({ ...current, [name]: selected }));
+    if (!selected) {
+      setPromptCloneModes((current) => ({ ...current, [name]: "copy" }));
+    }
   }
 
   function toggleSkill(name: string): void {
@@ -490,16 +500,11 @@ export function CloneSoulPage({
                         <input
                           type="checkbox"
                           checked={promptCloneModes[name] === "hard_link"}
-                          onChange={(event) => {
-                            const hardLink = event.target.checked;
-                            setPromptCloneModes((current) => ({
-                              ...current,
-                              [name]: hardLink ? "hard_link" : "copy",
-                            }));
-                            if (hardLink) {
-                              setPromptSelection((current) => ({ ...current, [name]: true }));
-                            }
-                          }}
+                          disabled={!selected}
+                          onChange={(event) => setPromptCloneModes((current) => ({
+                            ...current,
+                            [name]: event.target.checked ? "hard_link" : "copy",
+                          }))}
                         />
                         <span>Hard link</span>
                       </label>
